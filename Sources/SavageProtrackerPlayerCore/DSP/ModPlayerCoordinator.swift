@@ -144,7 +144,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
     
     public func play() {
-        guard let mod = activeMod else { return }
+        guard let mod = activeMod, mod.length > 0 else { return }
         if isPlaying { return }
         
         // Ensure channels are fresh
@@ -397,7 +397,6 @@ public final class ModPlayerCoordinator: ObservableObject {
         return { (isSilence, timestamp, frameCount, outputData) -> OSStatus in
             let buffers = UnsafeMutableAudioBufferListPointer(outputData)
             
-            // Defensive check to prevent out-of-bounds buffer crashes (e.g. mono / interleaved layouts)
             guard buffers.count >= 2,
                   let leftPtr = buffers[0].mData,
                   let rightPtr = buffers[1].mData else {
@@ -407,8 +406,9 @@ public final class ModPlayerCoordinator: ObservableObject {
             let left = leftPtr.assumingMemoryBound(to: Float.self)
             let right = rightPtr.assumingMemoryBound(to: Float.self)
             
-            for frame in 0..<Int(frameCount) {
-                // Taktgeber & Tick-Schleife
+            let safeFrameCount = Int(frameCount)
+
+            for frame in 0..<safeFrameCount {
                 if state.outputsUntilNextTick <= 0 {
                     // Ticks erhöhen
                     state.tick += 1
@@ -451,61 +451,62 @@ public final class ModPlayerCoordinator: ObservableObject {
                             state.position = targetPosition
                             state.rowIndex = targetRow
                             
-                            if state.position >= mod.length {
-                                state.position = 0
-                            }
-                            
-                            // Defensive bounds check for pattern and table indices
-                            let posIndex = max(0, min(mod.length - 1, state.position))
-                            let patternIndex = mod.patternTable[posIndex]
-                            
-                            if patternIndex < mod.patterns.count {
-                                let pattern = mod.patterns[patternIndex]
-                                if state.rowIndex < pattern.rows.count {
-                                    let row = pattern.rows[state.rowIndex]
-                                    
-                                    for i in 0..<4 {
-                                        let note = row.notes[i]
-                                        let ch = dspChannels[i]
+                                    if state.position >= mod.length {
+                                        state.position = 0
+                                    } else {
+                                        // Defensive bounds check for pattern and table indices
+                                        let posIndex = max(0, min(mod.patternTable.count - 1, state.position))
+                                        let patternIndex = mod.patternTable[posIndex]
                                         
-                                        // Jumps and breaks check
-                                        if note.hasEffect && note.effectId == 0x0B {
-                                            state.positionJump = note.effectData
-                                        } else if note.hasEffect && note.effectId == 0x0D {
-                                            let r = note.effectHigh * 10 + note.effectLow
-                                            state.patternBreak = r
-                                        } else if note.hasEffect && note.effectId == 0xE6 {
-                                            if note.effectLow == 0 {
-                                                ch.patternLoopStartRow = state.rowIndex
-                                            } else {
-                                                if ch.patternLoopCount < 0 {
-                                                    ch.patternLoopCount = note.effectLow
+                                        if patternIndex >= 0 && patternIndex < mod.patterns.count {
+                                            let pattern = mod.patterns[patternIndex]
+                                            if state.rowIndex >= 0 && state.rowIndex < pattern.rows.count {
+                                                let row = pattern.rows[state.rowIndex]
+                                                if row.notes.count >= 4 {
+                                                    for i in 0..<4 {
+                                                        let note = row.notes[i]
+                                                        let ch = dspChannels[i]
+                                                        
+                                                        // Jumps and breaks check
+                                                        if note.hasEffect && note.effectId == 0x0B {
+                                                            state.positionJump = note.effectData
+                                                        } else if note.hasEffect && note.effectId == 0x0D {
+                                                            let r = note.effectHigh * 10 + note.effectLow
+                                                            state.patternBreak = r
+                                                        } else if note.hasEffect && note.effectId == 0xE6 {
+                                                            if note.effectLow == 0 {
+                                                                ch.patternLoopStartRow = state.rowIndex
+                                                            } else {
+                                                                if ch.patternLoopCount < 0 {
+                                                                    ch.patternLoopCount = note.effectLow
+                                                                }
+                                                                if ch.patternLoopCount > 0 {
+                                                                    ch.patternLoopCount -= 1
+                                                                    state.patternLoopRow = ch.patternLoopStartRow
+                                                                } else {
+                                                                    ch.patternLoopCount = -1
+                                                                }
+                                                            }
+                                                        } else if note.hasEffect && note.effectId == 0xEE {
+                                                            if state.patternDelayCounter == 0 {
+                                                                state.patternDelay = note.effectLow
+                                                            }
+                                                        } else if note.hasEffect && note.effectId == 0x0F {
+                                                            if note.effectData >= 1 && note.effectData <= 31 {
+                                                                state.ticksPerRow = note.effectData
+                                                            } else if note.effectData > 0 {
+                                                                state.bpm = note.effectData
+                                                                // Update output clock speed
+                                                                state.outputsPerTick = sampleRate * 60.0 / (Double(note.effectData) * 24.0)
+                                                            }
+                                                        }
+                                                        
+                                                        ch.playNote(note, instruments: mod.instruments)
+                                                    }
                                                 }
-                                                if ch.patternLoopCount > 0 {
-                                                    ch.patternLoopCount -= 1
-                                                    state.patternLoopRow = ch.patternLoopStartRow
-                                                } else {
-                                                    ch.patternLoopCount = -1
-                                                }
-                                            }
-                                        } else if note.hasEffect && note.effectId == 0xEE {
-                                            if state.patternDelayCounter == 0 {
-                                                state.patternDelay = note.effectLow
-                                            }
-                                        } else if note.hasEffect && note.effectId == 0x0F {
-                                            if note.effectData >= 1 && note.effectData <= 31 {
-                                                state.ticksPerRow = note.effectData
-                                            } else if note.effectData > 0 {
-                                                state.bpm = note.effectData
-                                                // Update output clock speed
-                                                state.outputsPerTick = sampleRate * 60.0 / (Double(note.effectData) * 24.0)
                                             }
                                         }
-                                        
-                                        ch.playNote(note, instruments: mod.instruments)
                                     }
-                                }
-                            }
                         }
                     }
                     
