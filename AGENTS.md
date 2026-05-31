@@ -67,13 +67,13 @@ p_savage_protracker/
 
 ---
 
-## Aktuelle Todos (Release 1.2.3-dev)
+## Aktuelle Todos (Release 1.2.5-dev)
 
 - [x] **Todo 1**: Git-Repository initialisieren & Stammdateien anlegen (`VERSION`, `LICENSE`, `.gitignore`, `AGENTS.md`)
 - [x] **Todo 2**: HTML5-Dateien verschieben & `build.py` anpassen (Ausgabe zu `savage-protracker-player.html`)
 - [x] **Todo 3**: Swift-Dateien verschieben & Paket- und Quelltext-Umbenennung zu `SavageProtrackerPlayer` durchführen
-- [ ] **Todo 4**: macOS Hilfsskripte (`build_app.sh`, `build_dmg.sh`, `publish_github.sh`) integrieren
-- [ ] **Todo 5**: Grafische Assets (`AppIcon.png` & `DmgBackground.png`) für App und DMG generieren
+- [x] **Todo 4**: macOS Hilfsskripte (`build_app.sh`, `build_dmg.sh`, `publish_github.sh`) integrieren
+- [x] **Todo 5**: Grafische Assets (`AppIcon.png` & `DmgBackground.png`) für App und DMG generieren
 - [ ] **Todo 6**: Echtzeit-Oszilloskope im Swift-Player implementieren:
   - [ ] Master-Mix-Wellenform über `installTap` auf `audioEngine.mainMixerNode` abgreifen
   - [ ] Echte 4-Kanal-Audio-Wellenformen über safe Puffer im `AVAudioSourceNode` Render-Block mitschreiben
