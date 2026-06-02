@@ -11,7 +11,7 @@ Beide Varianten enthalten standardmäßig keine MOD-Dateien. Musikstücke werden
 
 ## Download
 
-Fertige Builds der macOS-App stehen als DMG auf der [Releases-Seite](https://github.com/DanielMuellerIR/savage-protracker-player/releases) bereit. DMG herunterladen, öffnen und die App in den Programme-Ordner ziehen.
+Fertige Builds der macOS-App stehen als notarisierte DMGs auf der [Releases-Seite](https://github.com/DanielMuellerIR/savage-protracker-player/releases) bereit. DMG herunterladen, öffnen und die App in den Programme-Ordner ziehen.
 
 Der HTML5-Player benötigt keinen Download über die Releases hinaus: Die Datei `savage-protracker-player.html` lässt sich direkt im Browser öffnen.
 
