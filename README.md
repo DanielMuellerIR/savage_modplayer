@@ -85,7 +85,7 @@ Schlüsselbund verfügbar ist. Lokale unsignierte Builds sind mit
 
 ```bash
 bash build_dmg.sh                 # → build/Savage Protracker Player.dmg
-bash build_dmg.sh --notarize      # DMG zusätzlich notarisieren und stapeln
+bash build_dmg.sh --notarize      # DMG signieren, notarisieren und stapeln
 ```
 
 Das DMG enthält ein Retina-kompatibles Hintergrundbild (1x/2x TIFF via `tiffutil`).

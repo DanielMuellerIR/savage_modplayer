@@ -11,6 +11,8 @@ MOUNT_DIR="/Volumes/${VOL_NAME}"
 NOTARIZE=0
 FINDER_LAYOUT=1
 NOTARY_PROFILE="${NOTARY_PROFILE:-SavageProtrackerNotary}"
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-Developer ID Application: Daniel Mueller (9QSWKSR4NQ)}"
+SIGN_DMG="${SIGN_DMG:-auto}"
 
 usage() {
     cat <<EOF
@@ -21,6 +23,7 @@ Usage: bash build_dmg.sh [--notarize] [--no-finder-layout]
 
 Environment:
   NOTARY_PROFILE      Keychain profile for notarytool (default: SavageProtrackerNotary).
+  SIGN_DMG            auto/1/0, controls Developer ID signing of the DMG.
 EOF
 }
 
@@ -125,6 +128,19 @@ hdiutil detach "$MOUNT_DIR" || hdiutil detach -force "$MOUNT_DIR"
 echo "=== Converting DMG to read-only ==="
 hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$FINAL_DMG"
 hdiutil verify "$FINAL_DMG"
+
+if [[ "$SIGN_DMG" != "0" ]]; then
+    echo "=== Signing DMG ==="
+    if security find-identity -v -p codesigning | grep -Fq "$CODESIGN_IDENTITY"; then
+        codesign --force --timestamp --sign "$CODESIGN_IDENTITY" "$FINAL_DMG"
+        codesign --verify --verbose=2 "$FINAL_DMG"
+    elif [[ "$SIGN_DMG" == "1" ]]; then
+        echo "ABBRUCH: Codesign-Identity nicht gefunden: $CODESIGN_IDENTITY" >&2
+        exit 1
+    else
+        echo "WARNUNG: Codesign-Identity nicht sichtbar. DMG bleibt unsigniert."
+    fi
+fi
 
 if [[ "$NOTARIZE" == "1" ]]; then
     echo "=== Notarizing DMG ==="
