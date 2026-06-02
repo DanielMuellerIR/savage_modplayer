@@ -1,4 +1,12 @@
-# Savage Protracker Player
+<p align="center">
+  <img src="src/AppIcon.png" width="128" alt="Savage Protracker Player Icon">
+</p>
+
+<h1 align="center">Savage Protracker Player</h1>
+
+<p align="center">
+  <strong>Amiga-ProTracker-MOD-Player als Single-File-HTML5-Version und native SwiftUI-macOS-App.</strong>
+</p>
 
 Ein plattformübergreifender, eigenständiger 4-Kanal-Amiga-ProTracker-MOD-Player in zwei Varianten:
 
