@@ -38,8 +38,11 @@ public final class RealtimeVUBuffer: @unchecked Sendable {
 
 public final class RealtimeWaveBuffer: @unchecked Sendable {
     public let channelWavesPointer: UnsafeMutablePointer<Float>
-    public init(channelWaves: UnsafeMutablePointer<Float>) {
+    public let masterWavesPointer: UnsafeMutablePointer<Float>
+
+    public init(channelWaves: UnsafeMutablePointer<Float>, masterWaves: UnsafeMutablePointer<Float>) {
         self.channelWavesPointer = channelWaves
+        self.masterWavesPointer = masterWaves
     }
 }
 
@@ -190,7 +193,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         
         let dspChannels = channels
         let vuBuffer = RealtimeVUBuffer(pointer: peakLevelsPointer)
-        let waveBuffer = RealtimeWaveBuffer(channelWaves: channelWavesPointer)
+        let waveBuffer = RealtimeWaveBuffer(channelWaves: channelWavesPointer, masterWaves: masterWavesPointer)
         
         let renderBlock = Self.createRenderBlock(
             state: state,
@@ -218,21 +221,6 @@ public final class ModPlayerCoordinator: ObservableObject {
         engine.connect(sourceNode, to: lowPass, format: stereoFormat)
         engine.connect(lowPass, to: mixer, format: stereoFormat)
         
-        // Setup tap for real-time oscilloscope of the master output
-        let tapFormat = mixer.outputFormat(forBus: 0)
-        let mWaves = self.masterWavesPointer
-        mixer.installTap(onBus: 0, bufferSize: 1024, format: tapFormat) { buffer, time in
-            guard let channelData = buffer.floatChannelData?[0] else { return }
-            let frameLength = Int(buffer.frameLength)
-            let step = max(1, frameLength / 128)
-            for i in 0..<128 {
-                let idx = i * step
-                if idx < frameLength {
-                    mWaves[i] = channelData[idx]
-                }
-            }
-        }
-        
         // iOS spezifisch: AudioSession aktivieren (Dummy-Aufruf auf macOS, funktioniert überall)
         #if os(iOS)
         do {
@@ -255,7 +243,6 @@ public final class ModPlayerCoordinator: ObservableObject {
     
     public func stop() {
         if let engine = audioEngine {
-            engine.mainMixerNode.removeTap(onBus: 0)
             engine.stop()
         }
         audioEngine = nil
@@ -607,8 +594,11 @@ public final class ModPlayerCoordinator: ObservableObject {
                 }
                 
                 // Soft Limiter (Hyperbolic Tangent) gegen Clipping
-                left[frame] = tanh(outL)
-                right[frame] = tanh(outR)
+                let limitedL = tanh(outL)
+                let limitedR = tanh(outR)
+                left[frame] = limitedL
+                right[frame] = limitedR
+                waveBuffer.masterWavesPointer[frame & 127] = (limitedL + limitedR) * 0.5
             }
             
             return noErr
@@ -670,7 +660,10 @@ public final class ModPlayerCoordinator: ObservableObject {
         let dummyWaves = UnsafeMutablePointer<Float>.allocate(capacity: 128)
         defer { dummyWaves.deallocate() }
         for j in 0..<128 { dummyWaves[j] = 0.0 }
-        let waveBuffer = RealtimeWaveBuffer(channelWaves: dummyWaves)
+        let dummyMasterWaves = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+        defer { dummyMasterWaves.deallocate() }
+        for j in 0..<128 { dummyMasterWaves[j] = 0.0 }
+        let waveBuffer = RealtimeWaveBuffer(channelWaves: dummyWaves, masterWaves: dummyMasterWaves)
         
         let block = Self.createRenderBlock(
             state: state,

@@ -83,6 +83,18 @@ const themeBtn = $('theme-btn');
 // ─── 3. State ────────────────────────────────────────────────────────────────
 
 const player = new ModPlayer();
+window.__savageDebug = {
+  getState() {
+    return {
+      currentMod: !!currentMod,
+      playerPlaying: player.playing,
+      audioState: player.audio?.state || null,
+      hasWorklet: !!player.worklet,
+      setupPending: !!player.setupPromise,
+      callbacksConfigured: playerCallbacksConfigured
+    };
+  }
+};
 let currentMod = null;
 let currentFilename = '';
 let currentPosition = 0;
@@ -97,6 +109,7 @@ let containerHeight = 200;
 // Der rAF-Loop bewegt vuLevels zeitlich gedämpft Richtung vuTargets.
 const vuLevels = [0, 0, 0, 0];
 const vuTargets = [0, 0, 0, 0];
+let playerCallbacksConfigured = false;
 
 // Initial-Volume aus dem Slider lesen (Default in body.html ist 1 = max).
 player.setVolume(Number(volumeSlider.value));
@@ -104,7 +117,9 @@ player.setVolume(Number(volumeSlider.value));
 // ─── 4. Event-Wiring ─────────────────────────────────────────────────────────
 
 fileInput.addEventListener('change', (e) => {
-  player.resumeContext();
+  player.prepareAudioForGesture(WORKLET_BLOB_URL).catch((err) => {
+    console.warn('Audio-Vorbereitung fehlgeschlagen:', err);
+  });
   const file = e.target.files[0];
   if (file) {
     addMods([file]);
@@ -116,7 +131,9 @@ fileInput.addEventListener('change', (e) => {
 // erste laden, Rest landet im Dropdown. Browser darf nicht von sich aus
 // scannen — die User-Geste durch den Picker ist Pflicht.
 folderInput.addEventListener('change', (e) => {
-  player.resumeContext();
+  player.prepareAudioForGesture(WORKLET_BLOB_URL).catch((err) => {
+    console.warn('Audio-Vorbereitung fehlgeschlagen:', err);
+  });
   const all = Array.from(e.target.files || []);
   const mods = all.filter(f => isModName(f.name));
   if (!mods.length) {
@@ -313,9 +330,9 @@ window.addEventListener('dragleave', (e) => {
 });
 window.addEventListener('drop', async (e) => {
   e.preventDefault();
-  // AudioContext direkt während der Drop-User-Geste entsperren. Ordner-
-  // Traversal ist async; danach kann Browser-Autoplay sonst blockieren.
-  player.resumeContext();
+  // AudioContext + Worklet direkt während der Drop-User-Geste vorbereiten.
+  // Ordner-Traversal ist async; danach kann Browser-Autoplay sonst blockieren.
+  const audioReady = player.prepareAudioForGesture(WORKLET_BLOB_URL);
   dragDepth = 0;
   playerEl.classList.remove('drag-over');
   try {
@@ -326,7 +343,7 @@ window.addEventListener('drop', async (e) => {
       return;
     }
     addMods(mods);
-    await loadFile(mods[0], { autoplay: true });
+    await loadFile(mods[0], { autoplay: true, audioReady });
   } catch (err) {
     console.error('Drop-Verarbeitung fehlgeschlagen:', err);
     // Fallback: nur direkt gedroppte Files nehmen (z. B. wenn
@@ -334,7 +351,7 @@ window.addEventListener('drop', async (e) => {
     const file = e.dataTransfer.files && e.dataTransfer.files[0];
     if (file) {
       addMods([file]);
-      await loadFile(file, { autoplay: true });
+      await loadFile(file, { autoplay: true, audioReady });
     }
   }
 });
@@ -380,6 +397,7 @@ async function walkEntry(entry, out) {
 
 async function loadFile(file, options = {}) {
   const autoplay = options.autoplay !== false;
+  const audioReady = options.audioReady || null;
   try {
     const buf = await file.arrayBuffer();
     const mod = parseModBuffer(buf, file.name);
@@ -408,8 +426,9 @@ async function loadFile(file, options = {}) {
     
     if (autoplay) {
       // Direkt abspielen: File-Picker, Dropdown oder Drop liefern die
-      // nötige User-Geste; bei Ordner-Drops wurde Audio oben schon entsperrt.
-      player.resumeContext();
+      // nötige User-Geste; bei Ordner-Drops wurde Audio oben schon vorbereitet.
+      if (audioReady) await audioReady;
+      else await player.prepareAudioForGesture(WORKLET_BLOB_URL);
       await player.play();
       setPlayingUI(true);
     } else {
@@ -443,6 +462,8 @@ function setPlayingUI(isPlaying) {
 //   watchLevels → echtes VU-Pegel-Array je Kanal aus dem Worklet.
 //   watchStop   → UI in STOPPED-Status zurück.
 function setUpPlayerCallbacks() {
+  if (playerCallbacksConfigured) return;
+  playerCallbacksConfigured = true;
   player.watchRows((pos, row, bpm, speed) => {
     const totalPatterns = currentMod?.length || 1;
     // Heuristik: wenn die Position rückwärts springt oder ein
@@ -621,4 +642,105 @@ if (themeBtn) {
     playerEl.classList.add('theme-dark');
     themeBtn.textContent = 'LIGHT';
   }
+}
+
+// ─── Browser-Regressionstest: Ordner-Drop muss Autoplay auslösen ─────────────
+// Nur aktiv mit ?testDropAutoplay=1. Der Button liefert die echte User-Geste
+// im selben Dokument; danach wird ein Ordner-Drop mit webkitGetAsEntry()
+// simuliert und der sichtbare Player-Status geprüft.
+if (new URLSearchParams(window.location.search).has('testDropAutoplay')) {
+  const testButton = document.createElement('button');
+  testButton.id = 'run-drop-autoplay-test';
+  testButton.textContent = 'RUN DROP AUTOPLAY TEST';
+  testButton.disabled = true;
+  testButton.style.position = 'fixed';
+  testButton.style.zIndex = '1000';
+  testButton.style.top = '8px';
+  testButton.style.left = '8px';
+
+  const testResult = document.createElement('pre');
+  testResult.id = 'drop-autoplay-test-result';
+  testResult.style.position = 'fixed';
+  testResult.style.zIndex = '1000';
+  testResult.style.top = '40px';
+  testResult.style.left = '8px';
+  testResult.style.maxWidth = '520px';
+  testResult.style.padding = '8px';
+  testResult.style.background = 'white';
+  testResult.style.color = 'black';
+  testResult.textContent = 'idle';
+
+  document.body.appendChild(testButton);
+  document.body.appendChild(testResult);
+
+  let testModBlob = null;
+  fetch('/audio/TURRICAN.MOD').then(response => {
+    if (!response.ok) throw new Error(`MOD fetch failed: ${response.status}`);
+    return response.blob();
+  }).then(blob => {
+    testModBlob = blob;
+    testButton.disabled = false;
+  }).catch(error => {
+    testResult.textContent = `FAILED: ${error.message}`;
+  });
+
+  testButton.addEventListener('click', async () => {
+    try {
+      if (!testModBlob) throw new Error('Test-MOD noch nicht geladen');
+      testResult.textContent = 'running';
+      const file = new File([testModBlob], 'TURRICAN.MOD', { type: 'audio/mod' });
+      const fileEntry = {
+        isFile: true,
+        isDirectory: false,
+        file(success) { setTimeout(() => success(file), 0); }
+      };
+      const directoryEntry = {
+        isFile: false,
+        isDirectory: true,
+        createReader() {
+          let sent = false;
+          return {
+            readEntries(success) {
+              setTimeout(() => {
+                if (sent) success([]);
+                else {
+                  sent = true;
+                  success([fileEntry]);
+                }
+              }, 0);
+            }
+          };
+        }
+      };
+      const event = new Event('drop', { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'dataTransfer', {
+        value: {
+          items: [{ webkitGetAsEntry: () => directoryEntry }],
+          files: [],
+          dropEffect: 'copy'
+        }
+      });
+      window.dispatchEvent(event);
+      await new Promise(resolve => setTimeout(resolve, 2500));
+
+      const state = {
+        status: statusState.textContent,
+        playText: playBtn.textContent,
+        footer: footerState.textContent,
+        file: statusFile.textContent,
+        row: statusRow.textContent,
+        debug: window.__savageDebug.getState(),
+        vu: vuBars.map(el => el?.style.height || '')
+      };
+      const ok = state.status === 'PLAYING' &&
+        state.playText === 'STOP' &&
+        state.file === 'TURRICAN.MOD' &&
+        state.debug.playerPlaying &&
+        state.debug.hasWorklet;
+      testResult.textContent = JSON.stringify({ ok, state }, null, 2);
+    } catch (error) {
+      testResult.textContent = `FAILED: ${error.message}`;
+      console.error(error);
+    }
+  });
 }

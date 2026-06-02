@@ -184,9 +184,8 @@ final class ModParserTests: XCTestCase {
         }
     }
     
-    /* Disabling testPlaybackState as it spawns AVAudioEngine which crashes on headless terminal environments without audio output.
     @MainActor
-    func testPlaybackState() async throws {
+    func testRealtimePlaybackSurvivesFiveSeconds() async throws {
         let audioDirPath = "audio"
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: audioDirPath) else {
@@ -206,15 +205,15 @@ final class ModParserTests: XCTestCase {
         
         coordinator.play()
         XCTAssertTrue(coordinator.isPlaying)
-        
-        // Let it play for a bit (0.5s)
-        try await Task.sleep(nanoseconds: 500_000_000)
-        
+
+        // Regressionstest für Startcrashes: echte Wiedergabe muss länger
+        // laufen als der frühere Absturz nach ungefähr einer Sekunde.
+        try await Task.sleep(nanoseconds: 5_000_000_000)
+
         XCTAssertTrue(coordinator.isPlaying)
         coordinator.stop()
         XCTAssertFalse(coordinator.isPlaying)
     }
-    */
     
     func testPrintPatternNotes() throws {
         let audioDirPath = "audio"

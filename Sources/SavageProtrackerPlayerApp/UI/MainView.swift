@@ -421,8 +421,8 @@ struct MainView: View {
     
     private func cleanFilename(_ url: URL) -> String {
         let name = url.lastPathComponent
-        if name.count > 37 {
-            let index = name.index(name.startIndex, offsetBy: 37)
+        if name.count > 36 {
+            let index = name.index(name.startIndex, offsetBy: 36)
             if name[index] == "_" {
                 return String(name[name.index(after: index)...])
             }
@@ -630,11 +630,11 @@ struct MainView: View {
                 
                 ScrollView {
                     VStack(spacing: 2) {
-                        ForEach(0..<filteredPlaylist.count, id: \.self) { idx in
-                            let fileURL = filteredPlaylist[idx]
-                            let isPlayingSong = idx == currentPlaylistIndex
+                        ForEach(filteredPlaylist, id: \.self) { fileURL in
+                            let playlistIndex = playlist.firstIndex(of: fileURL) ?? -1
+                            let isPlayingSong = playlistIndex == currentPlaylistIndex
                             
-                            Button(action: { selectPlaylistSong(at: idx) }) {
+                            Button(action: { selectPlaylistSong(at: playlistIndex) }) {
                                 HStack(spacing: 8) {
                                     Image(systemName: isPlayingSong ? "speaker.wave.2.fill" : "music.note")
                                         .font(.system(size: 11))
@@ -659,7 +659,7 @@ struct MainView: View {
                             }
                             .buttonStyle(PremiumHoverButtonStyle(theme: theme))
                             .simultaneousGesture(TapGesture(count: 2).onEnded {
-                                selectPlaylistSong(at: idx)
+                                selectPlaylistSong(at: playlistIndex)
                             })
                         }
                     }

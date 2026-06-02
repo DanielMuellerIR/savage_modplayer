@@ -155,6 +155,7 @@ export class ModPlayer {
     this.audio = null;
     this.gain = null;
     this.worklet = null;
+    this.setupPromise = null;
     this.volume = 0.3;
     this.workletUrl = 'mod-player-worklet.js';
     this.rowCallbacks = [];
@@ -177,13 +178,32 @@ export class ModPlayer {
 
   // Setzt ein bereits geparstes Mod direkt (für File-Upload).
   setMod(mod, workletUrl = 'mod-player-worklet.js') {
-    this.unload();
+    this.stop();
     this.workletUrl = workletUrl;
     this.mod = mod;
   }
 
   // Setup für AudioContext + Worklet. Wird beim ersten play() ausgeführt.
   async setupAudio() {
+    if (this.worklet) return;
+    if (this.setupPromise) return this.setupPromise;
+    this.setupPromise = this.createAudioGraph();
+    try {
+      await this.setupPromise;
+    } finally {
+      this.setupPromise = null;
+    }
+  }
+
+  // Startet AudioContext + Worklet während der User-Geste. Das ist für
+  // Drag & Drop wichtig, weil Ordner-Traversal danach asynchron läuft.
+  prepareAudioForGesture(workletUrl = 'mod-player-worklet.js') {
+    this.workletUrl = workletUrl;
+    this.resumeContext();
+    return this.setupAudio();
+  }
+
+  async createAudioGraph() {
     if (this.worklet) return;
 
     if (!this.audio) {
@@ -192,9 +212,7 @@ export class ModPlayer {
     }
     const ctx = this.audio;
 
-    if (ctx.state === 'suspended') {
-      try { await ctx.resume(); } catch (_) {}
-    }
+    await this.tryResumeContext(250);
 
     // Stumme Dummy-Source für iOS-Audio-Unlock.
     try {
@@ -291,6 +309,7 @@ export class ModPlayer {
     }
     this.mod = null;
     this.worklet = null;
+    this.setupPromise = null;
     this.playing = false;
     this.rowCallbacks = [];
     this.stopCallbacks = [];
@@ -316,11 +335,22 @@ export class ModPlayer {
     } catch (_) {}
   }
 
+  async tryResumeContext(timeoutMs = 1000) {
+    if (!this.audio || this.audio.state !== 'suspended') return;
+    try {
+      await Promise.race([
+        this.audio.resume(),
+        new Promise(resolve => setTimeout(resolve, timeoutMs))
+      ]);
+    } catch (_) {}
+  }
+
   async play() {
     if (this.playing) return;
     await this.setupAudio();
     if (!this.worklet) return;
     this.resumeContext();
+    await this.tryResumeContext(500);
     this.worklet.port.postMessage({
       type: 'play',
       mod: this.mod,

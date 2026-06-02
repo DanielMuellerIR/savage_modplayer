@@ -3,6 +3,7 @@ set -e
 
 echo "=== Building Savage Protracker Player App in Release Mode ==="
 swift build -c release
+APP_VERSION="$(cat VERSION)"
 
 echo "=== Creating macOS App Bundle structure ==="
 APP_DIR="Savage Protracker Player.app"
@@ -54,9 +55,9 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>$APP_VERSION</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>$APP_VERSION</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>
