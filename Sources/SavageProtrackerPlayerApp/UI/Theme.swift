@@ -1,35 +1,35 @@
 import SwiftUI
 
 public enum PlayerTheme: String, CaseIterable, Identifiable {
-    case workbench = "Retro Workbench 1.3"
-    case cyber = "Cyber Charcoal (Modern)"
+    case workbench = "Light"
+    case cyber = "Dark"
     
     public var id: String { self.rawValue }
 }
 
 public extension Color {
-    // Amiga Workbench 1.3 Colors
-    static let amigaBlue = Color(red: 0.0, green: 0.333, blue: 0.667)       // #0055AA
-    static let amigaWhite = Color(red: 0.949, green: 0.949, blue: 0.949)    // #F2F2F2
-    static let amigaOrange = Color(red: 1.0, green: 0.333, blue: 0.0)       // #FF5500
-    static let amigaDarkBlue = Color(red: 0.0, green: 0.133, blue: 0.267)   // #002244
-    static let amigaGrey = Color(red: 0.667, green: 0.667, blue: 0.667)     // #AAAAAA
+    // Light Theme: macOS-nah, ruhig, hoher Textkontrast.
+    static let amigaBlue = Color(red: 0.965, green: 0.970, blue: 0.980)       // #F6F7FA
+    static let amigaWhite = Color(red: 0.075, green: 0.090, blue: 0.115)      // #13171D
+    static let amigaOrange = Color(red: 0.000, green: 0.333, blue: 0.710)     // #0055B5
+    static let amigaDarkBlue = Color(red: 0.930, green: 0.940, blue: 0.955)   // #EDF0F4
+    static let amigaGrey = Color(red: 0.340, green: 0.380, blue: 0.440)       // #576170
     
-    // Premium Cyber Charcoal Colors (No Purple/Lila!)
-    static let spaceBackground = Color(red: 0.05, green: 0.05, blue: 0.06)   // #0D0D10 Deep obsidian black
-    static let spaceSurface = Color(red: 0.09, green: 0.10, blue: 0.12)      // #171A1F Sleek steel charcoal
-    static let spaceSurfaceHover = Color(red: 0.14, green: 0.16, blue: 0.19) // #242930
-    static let spaceAccent = Color(red: 0.00, green: 0.85, blue: 1.00)       // #00D8FF Neon Cyber Cyan
-    static let spaceAccentGlow = Color(red: 0.00, green: 0.60, blue: 0.90)   // #0096E6 Cool Ocean Blue
+    // Dark Theme: Schwarz/Graphit mit gedämpften Akzenten, keine Neonfarben.
+    static let spaceBackground = Color(red: 0.020, green: 0.024, blue: 0.030)   // #050608
+    static let spaceSurface = Color(red: 0.075, green: 0.082, blue: 0.095)      // #131518
+    static let spaceSurfaceHover = Color(red: 0.125, green: 0.137, blue: 0.155) // #202328
+    static let spaceAccent = Color(red: 0.360, green: 0.700, blue: 0.760)       // #5CB3C2
+    static let spaceAccentGlow = Color(red: 0.620, green: 0.700, blue: 0.760)   // #9EB3C2
     
-    // Note Color Coding
-    static let codeNote = Color(red: 0.063, green: 0.725, blue: 0.506)       // #10B981 Emerald Green
-    static let codeInstrument = Color(red: 0.024, green: 0.714, blue: 0.831) // #06B6D4 Cyan
-    static let codeEffect = Color(red: 0.851, green: 0.275, blue: 0.937)     // #D946EF Magenta
-    static let codeDim = Color(red: 0.247, green: 0.247, blue: 0.275)        // #3F3F46 Muted Grey
+    // Tracker-Spalten: lesbar, klassisch codiert, bewusst gedämpft.
+    static let codeNote = Color(red: 0.660, green: 0.820, blue: 0.720)       // #A8D1B8
+    static let codeInstrument = Color(red: 0.890, green: 0.760, blue: 0.420) // #E3C26B
+    static let codeEffect = Color(red: 0.520, green: 0.700, blue: 0.840)     // #85B3D6
+    static let codeDim = Color(red: 0.245, green: 0.290, blue: 0.300)        // #3E4A4D
     
-    static let spaceTextPrimary = Color.white
-    static let spaceTextSecondary = Color(red: 0.612, green: 0.639, blue: 0.722) // #9C9FB8
+    static let spaceTextPrimary = Color(red: 0.925, green: 0.930, blue: 0.940) // #ECEEF0
+    static let spaceTextSecondary = Color(red: 0.620, green: 0.660, blue: 0.690) // #9EA8B0
 }
 
 // MARK: - Premium Glassmorphic & Retro Visual Assets
@@ -113,5 +113,4 @@ public struct PremiumHoverButtonStyle: ButtonStyle {
         }
     }
 }
-
 

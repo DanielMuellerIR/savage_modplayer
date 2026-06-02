@@ -67,7 +67,7 @@ p_savage_protracker/
 
 ---
 
-## Aktuelle Todos (Release 1.2.12-dev)
+## Aktuelle Todos (Release 1.2.13-dev)
 
 - [x] **Todo 1**: Git-Repository initialisieren & Stammdateien anlegen (`VERSION`, `LICENSE`, `.gitignore`, `AGENTS.md`)
 - [x] **Todo 2**: HTML5-Dateien verschieben & `build.py` anpassen (Ausgabe zu `savage-protracker-player.html`)
@@ -86,6 +86,7 @@ p_savage_protracker/
 - [x] **Todo 13**: Swift-Finetune wieder an HTML-Worklet-Näherung angleichen und langen One-Shot-Sample-Fortschritt per Test absichern
 - [x] **Todo 14**: Swift-DSP-Fix für leere Rows nach langen Samples: `delayNote` darf laufende Noten nicht auf Tick 0 löschen; mit `Rtype.mod` Row 16 Kanal 4 absichern
 - [x] **Todo 15**: Swift-5-Sekunden-Lauftest auf zufällige `.mod`-Datei aus `audio/` umstellen, damit pro Lauf mehr echte Module abgedeckt werden
+- [x] **Todo 16**: Swift-App-Playlist sichtbar alphabetisch sortieren, Playlist-Einzelklick direkt abspielen und Dark-/Light-Farbpalette auf bessere Lesbarkeit umstellen
 
 ## Pflicht-Regressionstests
 

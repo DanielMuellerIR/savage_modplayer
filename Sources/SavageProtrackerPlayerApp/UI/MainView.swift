@@ -6,7 +6,7 @@ import UserNotifications
 final class DropURLsContainer: @unchecked Sendable {
     private let lock = NSLock()
     var urls: [URL] = []
-    
+
     func append(_ url: URL) {
         lock.lock()
         urls.append(url)
@@ -104,17 +104,7 @@ struct MainView: View {
                 }
                 .frame(width: 260)
                 .background(
-                    Group {
-                        #if os(macOS)
-                        if theme == .cyber {
-                            VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
-                        } else {
-                            Color.amigaBlue
-                        }
-                        #else
-                        theme == .workbench ? Color.amigaBlue : Color.spaceSurface
-                        #endif
-                    }
+                    theme == .workbench ? Color.amigaBlue : Color.spaceSurface
                 )
                 
                 Divider()
@@ -183,17 +173,7 @@ struct MainView: View {
                         .background(theme == .workbench ? Color.amigaBlue : Color.spaceSurface.opacity(0.4))
                 }
                 .background(
-                    Group {
-                        #if os(macOS)
-                        if theme == .cyber {
-                            VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow)
-                        } else {
-                            Color.amigaDarkBlue
-                        }
-                        #else
-                        theme == .workbench ? Color.amigaDarkBlue : Color.spaceBackground
-                        #endif
-                    }
+                    theme == .workbench ? Color.amigaDarkBlue : Color.spaceBackground
                 )
             }
             .frame(minWidth: 1080, minHeight: 720)
@@ -378,7 +358,7 @@ struct MainView: View {
             return
         }
         
-        modFiles.sort(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending })
+        modFiles = sortedByDisplayName(modFiles)
         
         self.playlist = modFiles
         self.selectedSidebarTab = 0 // Playlist fokussieren
@@ -393,7 +373,9 @@ struct MainView: View {
         guard index >= 0 && index < playlist.count else { return }
         self.currentPlaylistIndex = index
         let songUrl = playlist[index]
-        loadModFile(from: songUrl)
+        if loadModFile(from: songUrl) {
+            coordinator.play()
+        }
         
         // Add to history
         if !recentSongs.contains(songUrl) {
@@ -404,7 +386,8 @@ struct MainView: View {
         }
     }
     
-    private func loadModFile(from url: URL) {
+    @discardableResult
+    private func loadModFile(from url: URL) -> Bool {
         self.errorMessage = nil
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
@@ -413,9 +396,11 @@ struct MainView: View {
             let fileData = try Data(contentsOf: url)
             let mod = try ModParser.parse(data: fileData)
             coordinator.setMod(mod)
+            return true
         } catch {
             self.errorMessage = "Parser-Fehler bei '\(cleanFilename(url))': \(error.localizedDescription)"
             print("Parser-Fehler: \(error)")
+            return false
         }
     }
     
@@ -430,6 +415,12 @@ struct MainView: View {
         return name
     }
     
+    private func sortedByDisplayName(_ urls: [URL]) -> [URL] {
+        urls.sorted {
+            cleanFilename($0).localizedStandardCompare(cleanFilename($1)) == .orderedAscending
+        }
+    }
+
     private func isModFile(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         let name = url.lastPathComponent.lowercased()
@@ -448,8 +439,7 @@ struct MainView: View {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
             guard let contents = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { continue }
-            let mods = contents.filter { isModFile($0) }
-                .sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending })
+            let mods = sortedByDisplayName(contents.filter { isModFile($0) })
             if mods.isEmpty { continue }
             handleDroppedURLs(mods)
             return
@@ -597,7 +587,7 @@ struct MainView: View {
                         .foregroundColor(.spaceTextSecondary)
                         .padding(.horizontal, 12)
                     
-                    Button("Retro Demo abspielen") {
+                    Button("Demo abspielen") {
                         triggerDemoPlay()
                     }
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -679,7 +669,10 @@ struct MainView: View {
                                     selectPlaylistSong(at: idx)
                                 } else {
                                     playlist.append(url)
-                                    selectPlaylistSong(at: playlist.count - 1)
+                                    playlist = sortedByDisplayName(playlist)
+                                    if let idx = playlist.firstIndex(of: url) {
+                                        selectPlaylistSong(at: idx)
+                                    }
                                 }
                             }) {
                                 Text(cleanFilename(url))
@@ -785,7 +778,6 @@ struct MainView: View {
                         .foregroundColor(theme == .workbench ? .amigaOrange : .white)
                         .lineLimit(1)
                     
-                    // Cyber Neon badge
                     if theme == .cyber {
                         Text("PROTRACKER")
                             .font(.system(size: 8, weight: .black, design: .monospaced))
@@ -876,13 +868,13 @@ struct MainView: View {
             HStack(spacing: 4) {
                 ForEach(PlayerTheme.allCases) { t in
                     Button(action: { theme = t }) {
-                        Text(t == .workbench ? "RETRO" : "CYBER")
+                        Text(t == .workbench ? "LIGHT" : "DARK")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)
                             .background(
                                 theme == t
-                                ? (theme == .workbench ? Color.amigaOrange : Color.spaceAccent)
+                                ? (t == .workbench ? Color.amigaOrange : Color.spaceAccent)
                                 : (theme == .workbench ? Color.amigaDarkBlue : Color.spaceSurface.opacity(0.5))
                             )
                             .foregroundColor(theme == t ? Color.white : (theme == .workbench ? Color.amigaWhite : Color.spaceTextSecondary))
@@ -1419,7 +1411,7 @@ struct MainView: View {
                     Text("• Engine: AVAudioEngine + lock-free AVAudioSourceNode")
                     Text("• Clock Rate: Configurable PAL PAL (7.09MHz) / NTSC (7.16MHz)")
                     Text("• Mixing model: Authentic Nearest or linear Interpolated (Hifi)")
-                    Text("• Design: Custom Amiga 1.3 Workbench & Obsidian Dark Themes")
+                    Text("• Design: Classic Light & Graphite Dark Themes")
                     Text("• Features: WAV audio renderer exporter, notifications & keyboard HUD")
                 }
                 .font(.system(size: 11, design: .monospaced))
