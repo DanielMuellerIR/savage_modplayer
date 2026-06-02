@@ -175,6 +175,32 @@ final class ModParserTests: XCTestCase {
         XCTAssertGreaterThan(channel.sampleIndex, 0)
         XCTAssertLessThan(Int(channel.sampleIndex), instrument.length)
     }
+
+    @MainActor
+    func testRTypeFourthChannelSampleSurvivesPastRow16() throws {
+        let fileURL = URL(fileURLWithPath: "audio/Rtype.mod")
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            print("RType test file not found, skipping.")
+            return
+        }
+
+        let data = try Data(contentsOf: fileURL)
+        let mod = try ModParser.parse(data: data)
+        let coordinator = ModPlayerCoordinator()
+        let samples = coordinator.renderProbe(mod: mod, durationSeconds: 4.0)
+
+        // RType Pattern 0, Row 16, Kanal 4 startet Instrument 2. Danach
+        // kommen lange keine neuen Kanal-4-Noten; der Loop muss weiterlaufen.
+        let tailSamples = samples.filter { sample in
+            sample.position == 0 && sample.row >= 24 && sample.row <= 36
+        }
+        let fourthChannelPeaks = tailSamples.map { abs($0.channelOutputs[3]) }
+        let maxFourthChannelPeak = fourthChannelPeaks.max() ?? 0
+        let audibleProbeCount = fourthChannelPeaks.filter { $0 > 0.001 }.count
+
+        XCTAssertGreaterThan(maxFourthChannelPeak, 0.001)
+        XCTAssertGreaterThan(audibleProbeCount, 8)
+    }
     
     func testParserErrorResilience() {
         // Test parsing too small data

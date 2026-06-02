@@ -46,6 +46,20 @@ public final class RealtimeWaveBuffer: @unchecked Sendable {
     }
 }
 
+struct RenderProbeSample: Sendable {
+    let frame: Int
+    let position: Int
+    let row: Int
+    let channelOutputs: [Float]
+
+    init(frame: Int, position: Int, row: Int, channelOutputs: [Float]) {
+        self.frame = frame
+        self.position = position
+        self.row = row
+        self.channelOutputs = channelOutputs
+    }
+}
+
 @MainActor
 public final class ModPlayerCoordinator: ObservableObject {
     @Published public var isPlaying = false
@@ -521,43 +535,10 @@ public final class ModPlayerCoordinator: ObservableObject {
                 
                 for i in 0..<4 {
                     let ch = dspChannels[i]
-                    guard let inst = ch.instrument, inst.bytes.count > 0 else {
-                        waveBuffer.channelWavesPointer[i * 32 + wIdx] = 0.0
-                        continue
-                    }
-                    
-                    var sampleVal: Float = 0.0
-                    let idx = Int(ch.sampleIndex)
-                    
-                    if inst.isLooped {
-                        if idx >= 0 && idx < inst.bytes.count {
-                            if state.useInterpolation {
-                                sampleVal = ch.getInterpolatedSampleLooped(
-                                    from: inst.bytes,
-                                    index: ch.sampleIndex,
-                                    repeatOffset: inst.repeatOffset,
-                                    repeatLength: inst.repeatLength
-                                )
-                            } else {
-                                sampleVal = ch.getNearestSample(from: inst.bytes, index: ch.sampleIndex)
-                            }
-                            
-                            ch.sampleIndex += ch.sampleSpeed
-                            let loopEnd = Double(inst.repeatOffset + inst.repeatLength)
-                            if ch.sampleIndex >= loopEnd {
-                                ch.sampleIndex = Double(inst.repeatOffset)
-                            }
-                        }
-                    } else {
-                        if idx >= 0 && idx < inst.length {
-                            if state.useInterpolation {
-                                sampleVal = ch.getInterpolatedSample(from: inst.bytes, index: ch.sampleIndex)
-                            } else {
-                                sampleVal = ch.getNearestSample(from: inst.bytes, index: ch.sampleIndex)
-                            }
-                            ch.sampleIndex += ch.sampleSpeed
-                        }
-                    }
+                    let outputSample = Self.renderChannelSample(
+                        channel: ch,
+                        useInterpolation: state.useInterpolation
+                    )
                     
                     // Mute / Solo logic
                     var isChannelMuted = ch.isMuted
@@ -569,9 +550,6 @@ public final class ModPlayerCoordinator: ObservableObject {
                         waveBuffer.channelWavesPointer[i * 32 + wIdx] = 0.0
                         continue
                     }
-                    
-                    let volumeFactor = ch.currentVolume / 64.0
-                    let outputSample = sampleVal * volumeFactor
                     
                     // Write to channel waves buffer (Thread-safe, preallocated)
                     waveBuffer.channelWavesPointer[i * 32 + wIdx] = outputSample
@@ -700,6 +678,203 @@ public final class ModPlayerCoordinator: ObservableObject {
             if state.position >= mod.length - 1 && state.rowIndex >= 63 && state.tick >= state.ticksPerRow - 1 {
                 break
             }
+        }
+    }
+
+    nonisolated func renderProbe(
+        mod: Mod,
+        durationSeconds: Double,
+        sampleRate: Double = 44100.0
+    ) -> [RenderProbeSample] {
+        let renderChannels = [DSPChannel(index: 1), DSPChannel(index: 2), DSPChannel(index: 3), DSPChannel(index: 4)]
+        let state = RealtimePlaybackState()
+        state.position = -1
+        state.rowIndex = 63
+        state.tick = 5
+        state.ticksPerRow = 6
+        state.bpm = 125
+        state.outputsPerTick = sampleRate * 60.0 / (125.0 * 24.0)
+        state.outputsUntilNextTick = 0.0
+        state.stereoSeparation = 0.8
+        state.useInterpolation = true
+        state.palClock = true
+
+        let totalFrames = Int(sampleRate * durationSeconds)
+        var samples: [RenderProbeSample] = []
+        samples.reserveCapacity(totalFrames / 256)
+
+        for frame in 0..<totalFrames {
+            if state.outputsUntilNextTick <= 0 {
+                state.tick += 1
+                if state.tick >= state.ticksPerRow {
+                    if state.patternDelayCounter > 0 {
+                        state.patternDelayCounter -= 1
+                        state.tick = 0
+                    } else if state.patternDelay > 0 {
+                        state.patternDelayCounter = state.patternDelay
+                        state.patternDelay = 0
+                        state.tick = 0
+                    } else {
+                        state.tick = 0
+                        Self.advanceRowForProbe(state: state, channels: renderChannels, mod: mod, sampleRate: sampleRate)
+                    }
+                }
+
+                let clockRate = state.palClock ? 3546894.6 : 3579545.25
+                for i in 0..<4 {
+                    renderChannels[i].performTick(tick: state.tick, sampleRate: sampleRate, clockRate: clockRate)
+                }
+                state.outputsUntilNextTick += state.outputsPerTick
+            }
+
+            state.outputsUntilNextTick -= 1.0
+            state.elapsedFrames += 1
+
+            var channelOutputs = [Float](repeating: 0, count: 4)
+            for i in 0..<4 {
+                channelOutputs[i] = Self.renderChannelSample(channel: renderChannels[i], useInterpolation: state.useInterpolation)
+            }
+
+            if frame % 256 == 0 {
+                samples.append(RenderProbeSample(frame: frame, position: state.position, row: state.rowIndex, channelOutputs: channelOutputs))
+            }
+        }
+
+        return samples
+    }
+
+    nonisolated private static func advanceRowForProbe(
+        state: RealtimePlaybackState,
+        channels: [DSPChannel],
+        mod: Mod,
+        sampleRate: Double
+    ) {
+        var targetPosition = state.position
+        var targetRow = state.rowIndex + 1
+
+        if state.patternLoopRow >= 0 {
+            targetRow = state.patternLoopRow
+            state.patternLoopRow = -1
+        } else {
+            if state.positionJump >= 0 {
+                targetPosition = state.positionJump
+                targetRow = 0
+                state.positionJump = -1
+            }
+            if state.patternBreak >= 0 {
+                if targetPosition == state.position {
+                    targetPosition = state.position + 1
+                }
+                targetRow = state.patternBreak
+                state.patternBreak = -1
+            } else if targetRow == 64 {
+                targetRow = 0
+                targetPosition = state.position + 1
+            }
+        }
+
+        state.position = targetPosition
+        state.rowIndex = targetRow
+
+        guard state.position < mod.length else {
+            state.position = 0
+            return
+        }
+
+        let posIndex = max(0, min(mod.patternTable.count - 1, state.position))
+        let patternIndex = mod.patternTable[posIndex]
+        guard patternIndex >= 0 && patternIndex < mod.patterns.count else { return }
+        let pattern = mod.patterns[patternIndex]
+        guard state.rowIndex >= 0 && state.rowIndex < pattern.rows.count else { return }
+        let row = pattern.rows[state.rowIndex]
+        guard row.notes.count >= 4 else { return }
+
+        for i in 0..<4 {
+            let note = row.notes[i]
+            let ch = channels[i]
+
+            if note.hasEffect && note.effectId == 0x0B {
+                state.positionJump = note.effectData
+            } else if note.hasEffect && note.effectId == 0x0D {
+                state.patternBreak = note.effectHigh * 10 + note.effectLow
+            } else if note.hasEffect && note.effectId == 0xE6 {
+                if note.effectLow == 0 {
+                    ch.patternLoopStartRow = state.rowIndex
+                } else {
+                    if ch.patternLoopCount < 0 {
+                        ch.patternLoopCount = note.effectLow
+                    }
+                    if ch.patternLoopCount > 0 {
+                        ch.patternLoopCount -= 1
+                        state.patternLoopRow = ch.patternLoopStartRow
+                    } else {
+                        ch.patternLoopCount = -1
+                    }
+                }
+            } else if note.hasEffect && note.effectId == 0xEE {
+                if state.patternDelayCounter == 0 {
+                    state.patternDelay = note.effectLow
+                }
+            } else if note.hasEffect && note.effectId == 0x0F {
+                if note.effectData >= 1 && note.effectData <= 31 {
+                    state.ticksPerRow = note.effectData
+                } else if note.effectData > 0 {
+                    state.bpm = note.effectData
+                    state.outputsPerTick = sampleRate * 60.0 / (Double(note.effectData) * 24.0)
+                }
+            }
+
+            ch.playNote(note, instruments: mod.instruments)
+        }
+    }
+
+    nonisolated private static func renderChannelSample(channel ch: DSPChannel, useInterpolation: Bool) -> Float {
+        guard let inst = ch.instrument, inst.bytes.count > 0, ch.currentPeriod > 0 else { return 0.0 }
+        guard ch.sampleIndex.isFinite, !ch.sampleIndex.isNaN else { return 0.0 }
+
+        if inst.isLooped {
+            wrapLoopedSampleIndexIfNeeded(channel: ch, instrument: inst)
+        }
+
+        let idx = Int(ch.sampleIndex)
+        guard idx >= 0, idx < min(inst.length, inst.bytes.count) else { return 0.0 }
+
+        let sampleVal: Float
+        if inst.isLooped && useInterpolation {
+            sampleVal = ch.getInterpolatedSampleLooped(
+                from: inst.bytes,
+                index: ch.sampleIndex,
+                repeatOffset: inst.repeatOffset,
+                repeatLength: inst.repeatLength
+            )
+        } else if useInterpolation {
+            sampleVal = ch.getInterpolatedSample(from: inst.bytes, index: ch.sampleIndex)
+        } else {
+            sampleVal = ch.getNearestSample(from: inst.bytes, index: ch.sampleIndex)
+        }
+
+        ch.sampleIndex += ch.sampleSpeed
+        if inst.isLooped {
+            wrapLoopedSampleIndexIfNeeded(channel: ch, instrument: inst)
+        }
+
+        return sampleVal * ch.currentVolume / 64.0
+    }
+
+    nonisolated private static func wrapLoopedSampleIndexIfNeeded(channel ch: DSPChannel, instrument inst: Instrument) {
+        let byteCount = inst.bytes.count
+        let loopStart = max(0, min(inst.repeatOffset, byteCount - 1))
+        let declaredLoopEnd = inst.repeatOffset + inst.repeatLength
+        let loopEnd = max(loopStart + 1, min(declaredLoopEnd, byteCount))
+        guard loopEnd > loopStart else { return }
+
+        let start = Double(loopStart)
+        let length = Double(loopEnd - loopStart)
+        if ch.sampleIndex >= Double(loopEnd) {
+            // Paula laeuft in den Repeat-Bereich weiter. Der alte Swift-Code
+            // setzte hart auf repeatOffset und konnte bei genauem Loop-Ende
+            // kurzzeitig ausserhalb der gueltigen Sampledaten landen.
+            ch.sampleIndex = start + (ch.sampleIndex - start).truncatingRemainder(dividingBy: length)
         }
     }
     

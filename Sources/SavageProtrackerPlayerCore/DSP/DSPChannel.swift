@@ -40,7 +40,9 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var patternLoopCount: Int = -1
     nonisolated(unsafe) public var cutNoteTick: Int = -1
     nonisolated(unsafe) public var retrigger: Int = 0
-    nonisolated(unsafe) public var delayNote: Int = 0
+    // -1 bedeutet: kein EDx-Delay aktiv. 0 ist ein echter Tick und darf
+    // leere Rows nicht versehentlich wie eine verzögerte Note auslösen.
+    nonisolated(unsafe) public var delayNote: Int = -1
     nonisolated(unsafe) public var arpeggio: [Int]?
     
     // Mute, Solo and Interpolation
@@ -87,7 +89,7 @@ public final class DSPChannel: Sendable {
         patternLoopCount = -1
         cutNoteTick = -1
         retrigger = 0
-        delayNote = 0
+        delayNote = -1
         arpeggio = nil
         isMuted = false
         isSoloed = false
@@ -160,7 +162,7 @@ public final class DSPChannel: Sendable {
         self.setInstrument = nil
         self.setVolume = nil
         self.setPeriod = nil
-        self.delayNote = 0
+        self.delayNote = -1
         self.cutNoteTick = -1
         
         var hasSetInstrument = false
@@ -225,7 +227,7 @@ public final class DSPChannel: Sendable {
         self.tremolo = false
         self.arpeggio = nil
         self.retrigger = 0
-        self.delayNote = 0
+        self.delayNote = -1
         
         guard note.hasEffect else { return }
         
@@ -378,7 +380,7 @@ public final class DSPChannel: Sendable {
         else if self.retrigger > 0 && (tick % self.retrigger) == 0 {
             self.sampleIndex = 0.0
         }
-        else if self.delayNote == tick {
+        else if self.delayNote >= 0 && self.delayNote == tick {
             self.instrument = self.setInstrument
             if let vol = self.setVolume {
                 self.volume = vol
@@ -390,7 +392,7 @@ public final class DSPChannel: Sendable {
             }
             self.sampleIndex = 0.0
             self.playing = true
-            self.delayNote = 0
+            self.delayNote = -1
         }
         
         if self.currentPeriod < 113 { self.currentPeriod = 113 }
