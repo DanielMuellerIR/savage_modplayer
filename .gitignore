@@ -6,7 +6,6 @@ DerivedData/
 *.app/
 Savage Protracker Player.app/
 build/
-savage-protracker-player.html
 *.mod
 *.sid
 *.wav

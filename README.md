@@ -64,6 +64,10 @@ python3 build.py                  # → savage-protracker-player.html (~48 KB)
 python3 build.py --no-min         # ohne Minifizierung
 ```
 
+Die erzeugte Single-File-Variante `savage-protracker-player.html` ist Teil des
+Repositories, damit der Player auch ohne lokalen Build direkt genutzt werden
+kann.
+
 ### macOS App
 
 ```bash
@@ -72,13 +76,25 @@ bash build_app.sh                 # → "Savage Protracker Player.app"
 
 Die App sucht beim Start nach einem `audio/`-Verzeichnis neben der Anwendung und lädt dort gefundene `.mod`-Dateien (oder `mod.*`-Dateien) automatisch in die Playlist. Diese Dateien sind nur lokale Testdaten und gehören nicht ins Git-Repository.
 
+Für Release-Builds signiert `build_app.sh` automatisch mit der Developer-ID
+`Developer ID Application: Daniel Mueller (9QSWKSR4NQ)`, sofern sie im
+Schlüsselbund verfügbar ist. Lokale unsignierte Builds sind mit
+`SIGN_APP=0 bash build_app.sh` möglich.
+
 ### DMG (für Releases)
 
 ```bash
 bash build_dmg.sh                 # → build/Savage Protracker Player.dmg
+bash build_dmg.sh --notarize      # DMG zusätzlich notarisieren und stapeln
 ```
 
 Das DMG enthält ein Retina-kompatibles Hintergrundbild (1x/2x TIFF via `tiffutil`).
+Für die Notarisierung wird ein Keychain-Profil erwartet, standardmäßig
+`SavageProtrackerNotary`. Es kann einmalig interaktiv angelegt werden:
+
+```bash
+xcrun notarytool store-credentials SavageProtrackerNotary
+```
 
 ### Tests
 
@@ -92,9 +108,32 @@ Der 5-Sekunden-Lauftest wählt zufällig ein echtes MOD aus `audio/`, startet di
 
 ---
 
+## GitHub-Veröffentlichung
+
+```bash
+bash publish_github.sh --dry-run --release
+bash publish_github.sh --release
+```
+
+Das Veröffentlichungsskript setzt `origin` auf
+`https://github.com/DanielMuellerIR/savage-protracker-player.git`, blockt
+versehentlich getrackte Audio- und Release-Artefakte und erzeugt bei
+`--release` den passenden GitHub-Release-Eintrag mit DMG-Asset.
+
 ## Herkunft
 
-Portiert und erweitert aus einer minimalistischen JavaScript-AudioWorklet-Vorlage und einer SwiftUI-Referenz-Architektur.
+Die ProTracker-Engine entstand zuerst im Schwesterprojekt
+[FraktalLab](https://github.com/DanielMuellerIR/FraktalLab) als eigene
+TypeScript-/AudioWorklet-Implementierung (`AmiModPanel` / `utils/modplayer`,
+kein `libopenmpt`). Für dieses Projekt wurde sie als eigenständiger
+Single-File-HTML-Player herausgelöst und zusätzlich als native Swift-Engine mit
+`AVAudioSourceNode` portiert. Mitgelieferte MOD-Dateien sind nicht Teil dieses
+Repositories.
+
+## KI-Unterstützung
+
+Bei Umsetzung, Portierung und Fehlersuche wurde KI-gestütztes Pair-Programming
+als Werkzeug genutzt. Autor und Maintainer ist Daniel Müller.
 
 ## Lizenz
 

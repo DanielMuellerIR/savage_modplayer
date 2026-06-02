@@ -1,47 +1,99 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 DMG_NAME="Savage Protracker Player"
 APP_NAME="Savage Protracker Player.app"
 VOL_NAME="Savage Protracker Player"
+BUILD_DIR="build"
+RW_DMG="${BUILD_DIR}/dmg_rw.dmg"
+FINAL_DMG="${BUILD_DIR}/${DMG_NAME}.dmg"
+MOUNT_DIR="/Volumes/${VOL_NAME}"
+NOTARIZE=0
+FINDER_LAYOUT=1
+NOTARY_PROFILE="${NOTARY_PROFILE:-SavageProtrackerNotary}"
+
+usage() {
+    cat <<EOF
+Usage: bash build_dmg.sh [--notarize] [--no-finder-layout]
+
+  --notarize          Submit DMG with xcrun notarytool and staple ticket.
+  --no-finder-layout  Skip Finder/AppleScript icon layout, useful on headless runs.
+
+Environment:
+  NOTARY_PROFILE      Keychain profile for notarytool (default: SavageProtrackerNotary).
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --notarize)
+            NOTARIZE=1
+            shift
+            ;;
+        --no-finder-layout)
+            FINDER_LAYOUT=0
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+cleanup() {
+    if hdiutil info | grep -Fq "$MOUNT_DIR"; then
+        hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1 || hdiutil detach -force "$MOUNT_DIR" >/dev/null 2>&1 || true
+    fi
+    rm -f "$RW_DMG" "${BUILD_DIR}/DmgBg_1x.png" "${BUILD_DIR}/DmgBg_2x.png" "${BUILD_DIR}/DmgBackground.tiff"
+    rm -rf "${BUILD_DIR}/dmg_temp"
+}
+trap cleanup EXIT
 
 echo "=== Preparing DMG Build ==="
-# 1. Clean old files
-mkdir -p build
-rm -f "build/${DMG_NAME}.dmg" build/dmg_rw.dmg
-rm -rf build/dmg_temp
-mkdir -p build/dmg_temp
+mkdir -p "$BUILD_DIR"
+rm -f "$FINAL_DMG" "$RW_DMG"
+rm -rf "${BUILD_DIR}/dmg_temp"
+mkdir -p "${BUILD_DIR}/dmg_temp"
 
-# 2. Copy the App bundle
-cp -R "${APP_NAME}" build/dmg_temp/
+if [[ ! -d "$APP_NAME" ]]; then
+    echo "ABBRUCH: ${APP_NAME} fehlt. Erst bash build_app.sh ausfuehren." >&2
+    exit 1
+fi
 
-# 3. Create Applications symlink
-ln -s /Applications build/dmg_temp/Applications
+if codesign --verify --deep --strict "$APP_NAME" >/dev/null 2>&1; then
+    echo "=== App signature valid ==="
+else
+    echo "WARNUNG: App ist nicht gueltig signiert. Notarisierung wird fehlschlagen."
+fi
 
-# 4. Create Retina-compatible background (2x TIFF: 1x 600x600 + 2x 1200x1200)
-sips -s format png -s dpiWidth 72 -s dpiHeight 72 -z 600 600 src/DmgBackground.png --out build/DmgBg_1x.png
-sips -s format png -s dpiWidth 144 -s dpiHeight 144 -z 1200 1200 src/DmgBackground.png --out build/DmgBg_2x.png
-tiffutil -cathidpicheck build/DmgBg_1x.png build/DmgBg_2x.png -out build/DmgBackground.tiff
+cp -R "${APP_NAME}" "${BUILD_DIR}/dmg_temp/"
+ln -s /Applications "${BUILD_DIR}/dmg_temp/Applications"
 
-# 5. Create raw DMG of size 25MB
-hdiutil create -size 25m -fs HFS+ -volname "${VOL_NAME}" -ov build/dmg_rw.dmg
+sips -s format png -s dpiWidth 72 -s dpiHeight 72 -z 600 600 src/DmgBackground.png --out "${BUILD_DIR}/DmgBg_1x.png"
+sips -s format png -s dpiWidth 144 -s dpiHeight 144 -z 1200 1200 src/DmgBackground.png --out "${BUILD_DIR}/DmgBg_2x.png"
+tiffutil -cathidpicheck "${BUILD_DIR}/DmgBg_1x.png" "${BUILD_DIR}/DmgBg_2x.png" -out "${BUILD_DIR}/DmgBackground.tiff"
 
-# 6. Mount DMG
+hdiutil create -size 80m -fs HFS+ -volname "${VOL_NAME}" -ov "$RW_DMG"
+
 echo "=== Mounting DMG ==="
-hdiutil attach -readwrite -noverify -noautoopen -mountpoint "/Volumes/${VOL_NAME}" build/dmg_rw.dmg
+hdiutil attach -readwrite -noverify -noautoopen -mountpoint "$MOUNT_DIR" "$RW_DMG"
 
-# 7. Copy files to DMG
 echo "=== Copying files to DMG ==="
-cp -R "build/dmg_temp/${APP_NAME}" "/Volumes/${VOL_NAME}/"
-ln -s /Applications "/Volumes/${VOL_NAME}/Applications"
+cp -R "${BUILD_DIR}/dmg_temp/${APP_NAME}" "$MOUNT_DIR/"
+ln -s /Applications "$MOUNT_DIR/Applications"
 
-# 8. Create hidden background directory and copy background
-mkdir -p "/Volumes/${VOL_NAME}/.background"
-cp build/DmgBackground.tiff "/Volumes/${VOL_NAME}/.background/DmgBackground.tiff"
+mkdir -p "$MOUNT_DIR/.background"
+cp "${BUILD_DIR}/DmgBackground.tiff" "$MOUNT_DIR/.background/DmgBackground.tiff"
 
-# 9. Run AppleScript to set layout
-echo "=== Configuring DMG layout with AppleScript ==="
-osascript <<EOF
+if [[ "$FINDER_LAYOUT" == "1" ]]; then
+    echo "=== Configuring DMG layout with AppleScript ==="
+    osascript <<EOF
 tell application "Finder"
     tell disk "${VOL_NAME}"
         open
@@ -62,17 +114,29 @@ tell application "Finder"
     end tell
 end tell
 EOF
+else
+    echo "=== Skipping Finder layout ==="
+fi
 
-# 10. Unmount DMG
 echo "=== Unmounting DMG ==="
 sleep 2
-hdiutil detach "/Volumes/${VOL_NAME}" || hdiutil detach -force "/Volumes/${VOL_NAME}"
+hdiutil detach "$MOUNT_DIR" || hdiutil detach -force "$MOUNT_DIR"
 
-# 11. Convert raw DMG to compressed read-only DMG
 echo "=== Converting DMG to read-only ==="
-hdiutil convert build/dmg_rw.dmg -format UDZO -imagekey zlib-level=9 -o "build/${DMG_NAME}.dmg"
+hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$FINAL_DMG"
+hdiutil verify "$FINAL_DMG"
 
-# 12. Cleanup
-rm -f build/dmg_rw.dmg build/DmgBg_1x.png build/DmgBg_2x.png build/DmgBackground.tiff
-rm -rf build/dmg_temp
-echo "=== DMG build successful: build/${DMG_NAME}.dmg ==="
+if [[ "$NOTARIZE" == "1" ]]; then
+    echo "=== Notarizing DMG ==="
+    if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+        echo "ABBRUCH: Notary-Keychain-Profil nicht gefunden oder nicht nutzbar: $NOTARY_PROFILE" >&2
+        echo "Einmal interaktiv anlegen:" >&2
+        echo "  xcrun notarytool store-credentials $NOTARY_PROFILE" >&2
+        exit 1
+    fi
+    xcrun notarytool submit "$FINAL_DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$FINAL_DMG"
+    xcrun stapler validate "$FINAL_DMG"
+fi
+
+echo "=== DMG build successful: $FINAL_DMG ==="
