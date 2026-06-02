@@ -245,10 +245,13 @@ final class ModParserTests: XCTestCase {
             return
         }
         let contents = try fileManager.contentsOfDirectory(atPath: audioDirPath)
-        guard let firstModName = contents.first(where: { $0.lowercased().hasSuffix(".mod") }) else {
+        let modFiles = contents
+            .filter { $0.lowercased().hasSuffix(".mod") }
+            .sorted()
+        guard let randomModName = modFiles.randomElement() else {
             return
         }
-        let filePath = (audioDirPath as NSString).appendingPathComponent(firstModName)
+        let filePath = (audioDirPath as NSString).appendingPathComponent(randomModName)
         let fileURL = URL(fileURLWithPath: filePath)
         let data = try Data(contentsOf: fileURL)
         let mod = try ModParser.parse(data: data)
@@ -263,7 +266,7 @@ final class ModParserTests: XCTestCase {
         // laufen als der frühere Absturz nach ungefähr einer Sekunde.
         try await Task.sleep(nanoseconds: 5_000_000_000)
 
-        XCTAssertTrue(coordinator.isPlaying)
+        XCTAssertTrue(coordinator.isPlaying, "Playback stopped early for \(randomModName)")
         coordinator.stop()
         XCTAssertFalse(coordinator.isPlaying)
     }
