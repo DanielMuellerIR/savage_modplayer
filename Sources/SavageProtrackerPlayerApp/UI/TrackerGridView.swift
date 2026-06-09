@@ -115,7 +115,10 @@ struct TrackerGridView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 0) {
+                // VStack statt LazyVStack: 64 Zeilen × 24 pt = 1536 pt — zu klein
+                // für lazy rendering. LazyVStack kennt die Zeilen-Positionen erst
+                // beim Render, was scrollTo-Sprünge und Jitter verursacht.
+                VStack(spacing: 0) {
                     ForEach(0..<64, id: \.self) { rIdx in
                         if pattern.rows[rIdx].notes.count >= 4 {
                             TrackerRowView(
@@ -136,9 +139,10 @@ struct TrackerGridView: View {
             .border(theme == .workbench ? Color.amigaWhite : Color.spaceAccent.opacity(0.15), width: theme == .workbench ? 2 : 1)
             .cornerRadius(theme == .workbench ? 0 : 8)
             .onChange(of: currentRow) { newRow in
-                withAnimation(.linear(duration: 0.05)) {
-                    proxy.scrollTo(newRow, anchor: .center)
-                }
+                // Kein withAnimation: jede Animation bricht die vorherige ab und
+                // erzeugt die "auf-ab"-Oszillation. SwiftUI ist frame-synchron —
+                // direktes scrollTo landet sauber im nächsten Paint-Zyklus.
+                proxy.scrollTo(newRow, anchor: .center)
             }
         }
     }

@@ -357,6 +357,7 @@ let rowHeight=15;
 let containerHeight=200;
 const vuLevels=[0,0,0,0];
 const vuTargets=[0,0,0,0];
+let targetScrollTop=0;
 let playerCallbacksConfigured=false;
 player.setVolume(Number(volumeSlider.value));
 fileInput.addEventListener('change',(e)=>{
@@ -738,12 +739,15 @@ scrollToActiveRow();
 }
 function scrollToActiveRow(){
 if(!activeRowEl)return;
-const containerH=rowsContainer.clientHeight||200;
-const rowTop=currentRow*rowHeight;
-rowsContainer.scrollTop=rowTop-(containerH/2)+(rowHeight/2);
+const containerH=rowsContainer.clientHeight;
+if(!containerH)return;
+const rowTop=activeRowEl.offsetTop;
+const rowH=activeRowEl.offsetHeight||rowHeight;
+targetScrollTop=Math.max(0,rowTop-containerH/2+rowH/2);
 }
 const VU_ATTACK=0.35;
 const VU_RELEASE=0.08;
+const SCROLL_LERP=0.25;
 function tickVU(){
 for(let i=0;i<4;i++){
 const target=vuTargets[i];
@@ -756,6 +760,12 @@ if(bar){
 const h=`${pct}%`;
 if(bar.style.height!==h)bar.style.height=h;
 }
+}
+const scrollDist=targetScrollTop-rowsContainer.scrollTop;
+if(Math.abs(scrollDist)>=0.5){
+rowsContainer.scrollTop+=scrollDist*SCROLL_LERP;
+}else if(scrollDist!==0){
+rowsContainer.scrollTop=targetScrollTop;
 }
 requestAnimationFrame(tickVU);
 }

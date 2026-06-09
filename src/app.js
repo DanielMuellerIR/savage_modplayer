@@ -109,6 +109,10 @@ let containerHeight = 200;
 // Der rAF-Loop bewegt vuLevels zeitlich gedämpft Richtung vuTargets.
 const vuLevels = [0, 0, 0, 0];
 const vuTargets = [0, 0, 0, 0];
+// Scroll-Zielwert: wird von scrollToActiveRow() gesetzt, geschrieben
+// nur im rAF-Loop — verhindert mehrere scrollTop-Writes pro Frame und
+// damit das Jitter der Abspiellinie.
+let targetScrollTop = 0;
 let playerCallbacksConfigured = false;
 
 // Initial-Volume aus dem Slider lesen (Default in body.html ist 1 = max).
@@ -589,9 +593,13 @@ function updateActiveRow(row) {
 
 function scrollToActiveRow() {
   if (!activeRowEl) return;
-  const containerH = rowsContainer.clientHeight || 200;
-  const rowTop = currentRow * rowHeight;
-  rowsContainer.scrollTop = rowTop - (containerH / 2) + (rowHeight / 2);
+  const containerH = rowsContainer.clientHeight;
+  if (!containerH) return;
+  // offsetTop/offsetHeight statt currentRow*rowHeight: exakt, kein sub-pixel-Jitter.
+  // scrollTop wird NICHT direkt gesetzt — der rAF-Loop übernimmt das.
+  const rowTop = activeRowEl.offsetTop;
+  const rowH = activeRowEl.offsetHeight || rowHeight;
+  targetScrollTop = Math.max(0, rowTop - containerH / 2 + rowH / 2);
 }
 
 // ─── 7. VU-Meter-Loop ────────────────────────────────────────────────────────
@@ -609,6 +617,12 @@ function scrollToActiveRow() {
 const VU_ATTACK = 0.35;
 const VU_RELEASE = 0.08;
 
+// Scroll-Lerp-Faktor: pro Frame bewegen wir uns 25 % der Restdistanz.
+// Bei ~60 fps: nach 2 Frames ~44 %, nach 4 Frames ~68 %, nach 8 Frames ~90 %.
+// Kleine Restdistanzen (< 0.5 px) rasten direkt ein — kein Jitter durch
+// Floating-Point-Reste.
+const SCROLL_LERP = 0.25;
+
 function tickVU() {
   for (let i = 0; i < 4; i++) {
     const target = vuTargets[i];
@@ -625,6 +639,16 @@ function tickVU() {
       if (bar.style.height !== h) bar.style.height = h;
     }
   }
+
+  // Scroll-Tracking: einmal pro Frame, synchron mit dem Paint-Zyklus.
+  // Lerp für weiche Bewegung; Snap bei < 0.5 px verhindert Endlos-Drift.
+  const scrollDist = targetScrollTop - rowsContainer.scrollTop;
+  if (Math.abs(scrollDist) >= 0.5) {
+    rowsContainer.scrollTop += scrollDist * SCROLL_LERP;
+  } else if (scrollDist !== 0) {
+    rowsContainer.scrollTop = targetScrollTop;
+  }
+
   requestAnimationFrame(tickVU);
 }
 requestAnimationFrame(tickVU);
