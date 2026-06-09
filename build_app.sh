@@ -10,7 +10,8 @@ APP_DIR="Savage Protracker Player.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
-CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-Developer ID Application: Daniel Mueller (9QSWKSR4NQ)}"
+APPLE_TEAM_ID="${APPLE_TEAM_ID:-9QSWKSR4NQ}"
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-Developer ID Application: Daniel Mueller ($APPLE_TEAM_ID)}"
 SIGN_APP="${SIGN_APP:-auto}"
 
 # Recreate the folders
