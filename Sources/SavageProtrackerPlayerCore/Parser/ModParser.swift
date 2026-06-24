@@ -101,7 +101,11 @@ public class ModParser {
         // 2. Signatur prüfen (Offset 1080, 4 Bytes)
         let sigBytes = data.subdata(in: 1080..<1084)
         let sig = String(decoding: sigBytes, as: UTF8.self)
-        let validSigs = ["M.K.", "M!K!", "FLT4", "FLT8", "4CHN", "6CHN", "8CHN"]
+        // Nur echte 4-Kanal-Signaturen. 6CHN/8CHN/FLT8 haben groessere Row-/
+        // Pattern-Strides (channels*4 Bytes pro Row) — sie hier zu akzeptieren
+        // wuerde Notizen UND Sampledaten aus falschen Offsets lesen (Garbage).
+        // Bis echtes Multichannel-Parsing existiert, werden sie sauber abgelehnt.
+        let validSigs = ["M.K.", "M!K!", "FLT4", "4CHN"]
         guard validSigs.contains(sig) else {
             throw ParserError.invalidSignature(sig)
         }

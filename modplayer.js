@@ -94,8 +94,12 @@ export class Mod {
     this.length = new Uint8Array(modfile, 950, 1)[0];
     this.patternTable = new Uint8Array(modfile, 952, this.length);
 
-    // Höchste verwendete Pattern-Nummer bestimmt die Größe.
-    const maxPatternIndex = Math.max(...Array.from(this.patternTable));
+    // Höchste verwendete Pattern-Nummer bestimmt die Größe. Bei leerer
+    // Playlist (length === 0) liefert Math.max(...[]) -Infinity und wuerde
+    // alle Folgeoffsets vergiften — deshalb auf 0 absichern.
+    const maxPatternIndex = this.patternTable.length > 0
+      ? Math.max(...Array.from(this.patternTable))
+      : 0;
 
     // Index 0 ist leer (Instrumente werden ab 1 referenziert).
     this.instruments = [null];
@@ -132,7 +136,10 @@ export function parseModBuffer(arrayBuffer, label = 'buffer') {
   }
   const sig = new Uint8Array(arrayBuffer, 1080, 4);
   const sigStr = String.fromCharCode(sig[0], sig[1], sig[2], sig[3]);
-  const validSigs = ['M.K.', 'M!K!', 'FLT4', 'FLT8', '4CHN', '6CHN', '8CHN'];
+  // Nur echte 4-Kanal-Signaturen. 6CHN/8CHN/FLT8 haben groessere Row-/Pattern-
+  // Strides; als 4ch geparst lesen sie Noten und Sampledaten aus falschen
+  // Offsets (Garbage). Bis echtes Multichannel-Parsing existiert: ablehnen.
+  const validSigs = ['M.K.', 'M!K!', 'FLT4', '4CHN'];
   if (!validSigs.includes(sigStr)) {
     throw new Error(`Ungültige MOD-Signatur "${sigStr}": ${label}`);
   }

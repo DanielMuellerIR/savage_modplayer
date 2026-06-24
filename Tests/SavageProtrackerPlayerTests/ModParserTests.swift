@@ -235,6 +235,20 @@ final class ModParserTests: XCTestCase {
                 XCTFail("Expected .invalidSignature, got \(parserError)")
             }
         }
+
+        // Mehrkanal-Signaturen (6CHN/8CHN/FLT8) muessen abgelehnt werden, weil
+        // der Parser strikt 4-kanalig ist und sie sonst als Garbage einliest.
+        for unsupported in ["8CHN", "6CHN", "FLT8"] {
+            var multiData = Data(repeating: 0, count: 1200)
+            multiData.replaceSubrange(1080..<1084, with: unsupported.data(using: .utf8)!)
+            XCTAssertThrowsError(try ModParser.parse(data: multiData), "\(unsupported) sollte abgelehnt werden") { error in
+                guard case ModParser.ParserError.invalidSignature(let sig)? = error as? ModParser.ParserError else {
+                    XCTFail("Expected .invalidSignature for \(unsupported)")
+                    return
+                }
+                XCTAssertEqual(sig, unsupported)
+            }
+        }
     }
     
     @MainActor
