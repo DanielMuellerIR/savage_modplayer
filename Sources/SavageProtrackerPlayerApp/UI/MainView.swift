@@ -32,13 +32,14 @@ enum LoopMode: String, CaseIterable, Identifiable {
 
 struct MainView: View {
     @StateObject private var coordinator = ModPlayerCoordinator()
-    @State private var theme: PlayerTheme = .cyber
-    @State private var volume: Float = 0.6
+    // Theme, Lautstaerke und loopMode ueber Neustarts hinweg merken (@AppStorage).
+    @AppStorage("savage.theme") private var theme: PlayerTheme = .cyber
+    @AppStorage("savage.volume") private var volume: Double = 0.6
     // Default Playlist-Wiederholung: Der Player laedt beim Start den ganzen
     // audio-Ordner; am Songende automatisch zum naechsten Titel zu springen ist
     // fuer einen Playlist-Player das erwartete Verhalten (frueher lief der loopMode
     // ins Leere und der Renderblock wiederholte denselben Song endlos).
-    @State private var loopMode: LoopMode = .playlist
+    @AppStorage("savage.loopMode") private var loopMode: LoopMode = .playlist
     
     // Sidebar tabs
     @State private var selectedSidebarTab: Int = 0 // 0 = Playlist, 1 = Instrumente
@@ -249,6 +250,9 @@ struct MainView: View {
                 setupNotifications()
                 installKeyMonitor()
                 startOrStopDiskSpin()
+                // Gespeicherte Lautstaerke in den Coordinator spiegeln, damit der
+                // erste play()-Aufruf sie auf den Mixer anwenden kann.
+                coordinator.setVolume(Float(volume))
                 loadLocalAudioFolder()
             }
             .onDisappear {
@@ -355,8 +359,12 @@ struct MainView: View {
         var modFiles: [URL] = []
         let fm = FileManager.default
         
-        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ModPlayerTemp", isDirectory: true)
-        try? fm.removeItem(at: tempDir)
+        // Pro Drop ein eigenes Unterverzeichnis statt das gemeinsame zu loeschen:
+        // sonst entwertet ein neuer Drop die Temp-URLs frueherer Baetche (und damit
+        // die 'Zuletzt gespielt'-Eintraege). Die Unterordner raeumt das OS auf.
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ModPlayerTemp", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
         
         for url in urls {
@@ -773,6 +781,12 @@ struct MainView: View {
                         
                         ForEach(recentSongs.prefix(4), id: \.self) { url in
                             Button(action: {
+                                // Veraltete Temp-URL (Datei weg)? Eintrag verwerfen statt
+                                // eine tote URL in die Playlist zu haengen.
+                                guard FileManager.default.fileExists(atPath: url.path) else {
+                                    recentSongs.removeAll { $0 == url }
+                                    return
+                                }
                                 if let idx = playlist.firstIndex(of: url) {
                                     selectPlaylistSong(at: idx)
                                 } else {
@@ -1463,12 +1477,12 @@ struct MainView: View {
                         .foregroundColor(theme == .workbench ? .amigaWhite : .spaceTextSecondary)
                     
                     Slider(value: Binding(
-                        get: { Double(volume) },
-                        set: { volume = Float($0); coordinator.setVolume(volume) }
+                        get: { volume },
+                        set: { volume = $0; coordinator.setVolume(Float($0)) }
                     ), in: 0...1.0)
                     .accentColor(theme == .workbench ? .amigaOrange : .spaceAccent)
                     .frame(width: 90)
-                    .shadow(color: theme == .cyber ? Color.spaceAccent.opacity(Double(volume) * 0.8) : Color.clear, radius: 4)
+                    .shadow(color: theme == .cyber ? Color.spaceAccent.opacity(volume * 0.8) : Color.clear, radius: 4)
                 }
             }
         }

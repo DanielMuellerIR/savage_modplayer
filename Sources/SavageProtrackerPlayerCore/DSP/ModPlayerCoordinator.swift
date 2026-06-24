@@ -260,6 +260,9 @@ public final class ModPlayerCoordinator: ObservableObject {
         
         do {
             try engine.start()
+            // Gespeicherte Lautstaerke auf den neuen Mixer anwenden, damit die
+            // Ausgabe sofort zum UI-Slider passt (nicht erst nach Slider-Bewegung).
+            mixer.outputVolume = lastVolume * lastVolume
             isPlaying = true
             startVUUpdates()
         } catch {
@@ -283,7 +286,13 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
     }
     
+    // Zuletzt gesetzte Lautstaerke (0..1). Wird beim naechsten play() auf den
+    // frisch erzeugten Mixer angewandt, damit die tatsaechliche Ausgabe von Anfang
+    // an zum Slider passt (vorher lief die erste Wiedergabe auf Default 1.0).
+    private var lastVolume: Float = 0.6
+
     public func setVolume(_ v: Float) {
+        lastVolume = v
         audioEngine?.mainMixerNode.outputVolume = v * v // Psychoacoustic scaling
     }
     

@@ -83,10 +83,22 @@ public struct Mod: Sendable, Codable {
 }
 
 public class ModParser {
-    public enum ParserError: Error {
+    public enum ParserError: Error, LocalizedError {
         case fileTooSmall
         case invalidSignature(String)
         case emptySong
+
+        public var errorDescription: String? {
+            switch self {
+            case .fileTooSmall:
+                return "Datei zu klein für ein gültiges MOD-Modul (mindestens 1084 Bytes)."
+            case .invalidSignature(let sig):
+                let clean = sig.trimmingCharacters(in: .whitespacesAndNewlines)
+                return "Unbekannte oder nicht unterstützte Signatur '\(clean)' (kein 4-Kanal-MOD)."
+            case .emptySong:
+                return "Leeres Modul: keine Songpositionen (Länge 0)."
+            }
+        }
     }
 
     public static func parse(data: Data) throws -> Mod {
