@@ -444,8 +444,21 @@ async function loadFile(file, options = {}) {
   }
 }
 
+// HTML-Escaping fuer Strings, die aus geladenen (nicht vertrauenswuerdigen)
+// MOD-Dateien stammen und per innerHTML eingesetzt werden — z.B. Instrumentnamen
+// oder Fehlertexte mit Dateiinhalt. Bewusst OHNE Regex-Literale (build.py-Minifier
+// kann keine Regexe), daher replaceAll mit String-Argumenten.
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 function showError(msg) {
-  rowsContainer.innerHTML = `<div class="error">${msg}</div>`;
+  rowsContainer.innerHTML = `<div class="error">${escapeHtml(msg)}</div>`;
 }
 
 function setPlayingUI(isPlaying) {
@@ -539,10 +552,13 @@ function renderInstruments() {
   currentMod.instruments.slice(1).forEach((inst, idx) => {
     const num = (idx + 1).toString(16).toUpperCase().padStart(2, '0');
     const name = inst ? inst.name : '';
+    // Instrumentname kommt aus der MOD-Datei (nicht vertrauenswuerdig) -> escapen,
+    // sonst kann ein praeparierter Name HTML/JS in die Seite injizieren.
+    const safeName = escapeHtml(name);
     const div = document.createElement('div');
     div.className = 'inst-row';
     if (!name) div.classList.add('empty');
-    div.innerHTML = `<span class="inst-num">${num}</span><span class="inst-name" title="${name}">${name || '---'}</span>`;
+    div.innerHTML = `<span class="inst-num">${num}</span><span class="inst-name" title="${safeName}">${safeName || '---'}</span>`;
     instList.appendChild(div);
   });
 }
