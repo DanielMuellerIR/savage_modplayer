@@ -99,6 +99,26 @@ final class DSPChannelTimingTests: XCTestCase {
                        "Auf Tick 0 darf der Vibrato-Index nicht weiterdrehen")
     }
 
+    /// Arpeggio (jetzt allokationsfrei via Skalare statt [Int]) muss weiterhin
+    /// den Zyklus [0, x, y] ueber tick % 3 liefern.
+    func testArpeggioCyclesWithoutArray() {
+        let ch = DSPChannel(index: 1)
+        ch.period = 400
+        ch.currentPeriod = 400
+        ch.arpActive = true
+        ch.arpX = 4
+        ch.arpY = 7
+
+        ch.performTick(tick: 0, sampleRate: sampleRate, clockRate: clockRate)
+        XCTAssertEqual(ch.currentPeriod, 400, accuracy: 0.01, "Tick 0: Grundton")
+
+        ch.performTick(tick: 1, sampleRate: sampleRate, clockRate: clockRate)
+        XCTAssertEqual(ch.currentPeriod, 400.0 / Float(pow(2.0, 4.0/12.0)), accuracy: 0.01, "Tick 1: +4 Halbtoene")
+
+        ch.performTick(tick: 2, sampleRate: sampleRate, clockRate: clockRate)
+        XCTAssertEqual(ch.currentPeriod, 400.0 / Float(pow(2.0, 7.0/12.0)), accuracy: 0.01, "Tick 2: +7 Halbtoene")
+    }
+
     /// Vibrato-Amplitude muss der ProTracker-Tabelle entsprechen: Peak =
     /// depth*255/128 Period-Einheiten (frueher mit sin() nur ~depth, halb so tief).
     func testVibratoDepthMatchesProTrackerAmplitude() {

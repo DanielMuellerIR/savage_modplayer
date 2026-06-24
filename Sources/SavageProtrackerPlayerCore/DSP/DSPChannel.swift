@@ -52,7 +52,11 @@ public final class DSPChannel: Sendable {
     // -1 bedeutet: kein EDx-Delay aktiv. 0 ist ein echter Tick und darf
     // leere Rows nicht versehentlich wie eine verzögerte Note auslösen.
     nonisolated(unsafe) public var delayNote: Int = -1
-    nonisolated(unsafe) public var arpeggio: [Int]?
+    // Arpeggio als Skalare statt [Int]? — eine Array-Allokation pro 0xy-Note lief
+    // sonst direkt im Echtzeit-Audio-Thread (verboten laut AGENTS.md).
+    nonisolated(unsafe) public var arpActive: Bool = false
+    nonisolated(unsafe) public var arpX: Int = 0
+    nonisolated(unsafe) public var arpY: Int = 0
     
     // Mute, Solo and Interpolation
     nonisolated(unsafe) public var isMuted: Bool = false
@@ -99,7 +103,9 @@ public final class DSPChannel: Sendable {
         cutNoteTick = -1
         retrigger = 0
         delayNote = -1
-        arpeggio = nil
+        arpActive = false
+        arpX = 0
+        arpY = 0
         isMuted = false
         isSoloed = false
         useInterpolation = true
@@ -234,10 +240,10 @@ public final class DSPChannel: Sendable {
         self.portamento = false
         self.vibrato = false
         self.tremolo = false
-        self.arpeggio = nil
+        self.arpActive = false
         self.retrigger = 0
         self.delayNote = -1
-        
+
         guard note.hasEffect else { return }
         
         let effectId = note.effectId
@@ -248,7 +254,9 @@ public final class DSPChannel: Sendable {
         switch effectId {
         case 0x00: // ARPEGGIO
             if effectData > 0 {
-                self.arpeggio = [0, effectHigh, effectLow]
+                self.arpActive = true
+                self.arpX = effectHigh
+                self.arpY = effectLow
             }
         case 0x01: // SLIDE_UP
             self.periodDelta = -Float(effectData)
@@ -401,10 +409,15 @@ public final class DSPChannel: Sendable {
                 }
             }
         }
-        else if let arp = self.arpeggio, arp.count > 0 {
-            let index = tick % arp.count
-            let halfNotes = Float(arp[index])
-            self.currentPeriod = self.period / Float(pow(2.0, Double(halfNotes / 12.0)))
+        else if self.arpActive {
+            // Zyklus [0, x, y] ueber tick % 3 — ohne Array-Allokation.
+            let semis: Int
+            switch tick % 3 {
+            case 0: semis = 0
+            case 1: semis = self.arpX
+            default: semis = self.arpY
+            }
+            self.currentPeriod = self.period / Float(pow(2.0, Double(Float(semis) / 12.0)))
         }
         else if self.retrigger > 0 && (tick % self.retrigger) == 0 {
             self.sampleIndex = 0.0
