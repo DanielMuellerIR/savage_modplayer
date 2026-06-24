@@ -69,6 +69,10 @@ struct MainView: View {
     
     // Active Preview hover card
     @State private var hoveredInstrumentIndex: Int? = nil
+
+    // Lokaler Tastatur-Monitor (Leertaste/Pfeile/ESC). Token wird in
+    // .onDisappear wieder entfernt, damit nichts leakt.
+    @State private var keyMonitor: Any? = nil
     
     private var filteredPlaylist: [URL] {
         if playlistSearchQuery.isEmpty {
@@ -141,12 +145,21 @@ struct MainView: View {
                     
                     // Scrolling Tracker Grid or Empty State Drop Zone
                     VStack(spacing: 0) {
-                        if let mod = coordinator.activeMod {
-                            let patternIndex = mod.patternTable[min(mod.length - 1, max(0, coordinator.currentPosition))]
-                            let pattern = mod.patterns[patternIndex]
-                            
-                            TrackerGridView(pattern: pattern, currentRow: coordinator.currentRow, theme: theme)
-                                .padding()
+                        // Defensiv gegen leere/korrupte Mods: length, patternTable und
+                        // der daraus gelesene patternIndex werden vor dem Zugriff geprueft
+                        // (sonst patternTable[-1] / patterns[ausserhalb] -> Crash).
+                        if let mod = coordinator.activeMod,
+                           mod.length > 0,
+                           !mod.patternTable.isEmpty {
+                            let tableIdx = max(0, min(mod.length - 1, coordinator.currentPosition))
+                            let patternIndex = mod.patternTable[max(0, min(mod.patternTable.count - 1, tableIdx))]
+                            if patternIndex >= 0, patternIndex < mod.patterns.count {
+                                TrackerGridView(pattern: mod.patterns[patternIndex], currentRow: coordinator.currentRow, theme: theme)
+                                    .padding()
+                            } else {
+                                dropZonePrompt
+                                    .padding()
+                            }
                         } else {
                             dropZonePrompt
                                 .padding()
@@ -230,15 +243,32 @@ struct MainView: View {
             .onAppear {
                 isDiskAnimating = coordinator.isPlaying
                 setupNotifications()
+                installKeyMonitor()
+                startOrStopDiskSpin()
                 loadLocalAudioFolder()
+            }
+            .onDisappear {
+                removeKeyMonitor()
             }
             .onChange(of: coordinator.isPlaying) { isPlaying in
                 isDiskAnimating = isPlaying
+                startOrStopDiskSpin()
             }
             .onChange(of: coordinator.trackName) { newTrackName in
                 if coordinator.isPlaying {
                     fireNotification(for: newTrackName)
                 }
+            }
+            // Menue-Befehle (Cmd+P / Cmd+Pfeile) aus AppMain wieder anschliessen —
+            // sie posteten bisher NSNotifications, die niemand beobachtet hat.
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuPlayStop"))) { _ in
+                togglePlayback()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuNextTrack"))) { _ in
+                nextTrack()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuPrevTrack"))) { _ in
+                prevTrack()
             }
             
             // Retro Amiga Failure Guru Meditation popup Modal
@@ -444,6 +474,65 @@ struct MainView: View {
         coordinator.play()
     }
     
+    // MARK: - Disk spin (deklarativ statt Timer)
+    // Treibt die Drehung des Disk-Icons rein ueber eine SwiftUI-Animation —
+    // kein run-loop-Timer, der leakt und im Idle CPU/Akku frisst.
+    private func startOrStopDiskSpin() {
+        #if os(macOS)
+        if coordinator.isPlaying {
+            diskRotation = 0
+            withAnimation(.linear(duration: 2.7).repeatForever(autoreverses: false)) {
+                diskRotation = 360
+            }
+        } else {
+            withAnimation(.easeOut(duration: 0.3)) {
+                diskRotation = 0
+            }
+        }
+        #endif
+    }
+
+    // MARK: - Keyboard handling (Leertaste/Pfeile/ESC aus dem HUD)
+    private func installKeyMonitor() {
+        #if os(macOS)
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Nicht in Textfelder (Suche/Export) eingreifen.
+            if NSApp.keyWindow?.firstResponder is NSText { return event }
+            switch event.keyCode {
+            case 49: // Leertaste
+                togglePlayback()
+                return nil
+            case 124: // Pfeil rechts
+                nextTrack()
+                return nil
+            case 123: // Pfeil links
+                prevTrack()
+                return nil
+            case 53: // ESC
+                if showAboutModal || showKeyboardHUD || showExportDialog {
+                    showAboutModal = false
+                    showKeyboardHUD = false
+                    showExportDialog = false
+                    return nil
+                }
+                return event
+            default:
+                return event
+            }
+        }
+        #endif
+    }
+
+    private func removeKeyMonitor() {
+        #if os(macOS)
+        if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyMonitor = nil
+        }
+        #endif
+    }
+
     // MARK: - Notification helper
     private func setupNotifications() {
         #if os(macOS)
@@ -908,16 +997,6 @@ struct MainView: View {
                     .font(.system(size: 42))
                     .foregroundColor(theme == .workbench ? .amigaOrange : .spaceAccent)
                     .rotationEffect(.degrees(diskRotation))
-                    .onAppear {
-                        // Increment rotation
-                        Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { _ in
-                            Task { @MainActor in
-                                if isDiskAnimating {
-                                    diskRotation += 4.0
-                                }
-                            }
-                        }
-                    }
                 
                 Circle()
                     .fill(theme == .workbench ? Color.amigaDarkBlue : Color.spaceBackground)

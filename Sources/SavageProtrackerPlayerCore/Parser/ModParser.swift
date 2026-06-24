@@ -86,6 +86,7 @@ public class ModParser {
     public enum ParserError: Error {
         case fileTooSmall
         case invalidSignature(String)
+        case emptySong
     }
 
     public static func parse(data: Data) throws -> Mod {
@@ -112,6 +113,11 @@ public class ModParser {
 
         // 3. Playlist / PatternTable parsen (Offset 950)
         let songLength = Int(data[950])
+        // Eine leere Playlist (length 0) ergibt ein nicht abspielbares Mod und
+        // wuerde in der UI patternTable[-1] indizieren -> Crash. Sauber ablehnen.
+        guard songLength > 0 else {
+            throw ParserError.emptySong
+        }
         var patternTable = [Int]()
         for i in 0..<songLength {
             if 952 + i < data.count {

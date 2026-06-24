@@ -236,6 +236,18 @@ final class ModParserTests: XCTestCase {
             }
         }
 
+        // Gueltige Signatur, aber Songlaenge 0 -> nicht abspielbar, muss als
+        // .emptySong abgelehnt werden (sonst patternTable[-1]-Crash in der UI).
+        var emptySong = Data(repeating: 0, count: 1200)
+        emptySong.replaceSubrange(1080..<1084, with: Data("M.K.".utf8))
+        emptySong[950] = 0
+        XCTAssertThrowsError(try ModParser.parse(data: emptySong)) { error in
+            guard case ModParser.ParserError.emptySong? = error as? ModParser.ParserError else {
+                XCTFail("Expected .emptySong")
+                return
+            }
+        }
+
         // Mehrkanal-Signaturen (6CHN/8CHN/FLT8) muessen abgelehnt werden, weil
         // der Parser strikt 4-kanalig ist und sie sonst als Garbage einliest.
         for unsupported in ["8CHN", "6CHN", "FLT8"] {
