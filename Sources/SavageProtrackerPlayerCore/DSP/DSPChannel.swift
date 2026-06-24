@@ -350,26 +350,39 @@ public final class DSPChannel: Sendable {
         }
         
         if self.vibrato {
-            self.vibratoIndex = (self.vibratoIndex + self.vibratoSpeed).truncatingRemainder(dividingBy: 64)
-            let sineVal = sin(self.vibratoIndex / 64.0 * .pi * 2.0)
-            self.currentPeriod = self.period + Float(sineVal) * self.vibratoDepth
+            // ProTracker: Vibrato-Sinusindex erst ab Tick 1 weiterdrehen, nie auf
+            // Tick 0. Sonst driftet der Index jede Row um einen Schritt (vgl. der
+            // gleiche tick>0-Guard beim Volume-Slide oben und im HTML-Worklet).
+            if tick > 0 {
+                self.vibratoIndex = (self.vibratoIndex + self.vibratoSpeed).truncatingRemainder(dividingBy: 64)
+                let sineVal = sin(self.vibratoIndex / 64.0 * .pi * 2.0)
+                self.currentPeriod = self.period + Float(sineVal) * self.vibratoDepth
+            }
         }
         else if self.tremolo {
-            self.tremoloIndex = (self.tremoloIndex + self.tremoloSpeed).truncatingRemainder(dividingBy: 64)
-            let sineVal = sin(self.tremoloIndex / 64.0 * .pi * 2.0)
-            let volDelta = Float(sineVal) * self.tremoloDepth
-            self.currentVolume = max(0.0, min(64.0, self.volume + volDelta))
+            // Wie Vibrato: Tremolo-Index nur auf Tick > 0 fortschreiben.
+            if tick > 0 {
+                self.tremoloIndex = (self.tremoloIndex + self.tremoloSpeed).truncatingRemainder(dividingBy: 64)
+                let sineVal = sin(self.tremoloIndex / 64.0 * .pi * 2.0)
+                let volDelta = Float(sineVal) * self.tremoloDepth
+                self.currentVolume = max(0.0, min(64.0, self.volume + volDelta))
+            }
         }
         else if self.periodDelta != 0 {
-            if self.portamento {
-                if self.currentPeriod != self.period {
-                    let sign: Float = self.period > self.currentPeriod ? 1.0 : -1.0
-                    let distance = abs(self.currentPeriod - self.period)
-                    let diff = min(distance, abs(self.periodDelta))
-                    self.currentPeriod += sign * diff
+            // ProTracker: 1xx/2xx/3xx (Porta-Up/Down/Tone-Porta) sliden nur auf
+            // Ticks > 0, NICHT auf Tick 0. Sonst macht jede Row einen Schritt zu
+            // viel (6 statt 5 bei Speed 6). Spiegelt den Volume-Slide-Guard.
+            if tick > 0 {
+                if self.portamento {
+                    if self.currentPeriod != self.period {
+                        let sign: Float = self.period > self.currentPeriod ? 1.0 : -1.0
+                        let distance = abs(self.currentPeriod - self.period)
+                        let diff = min(distance, abs(self.periodDelta))
+                        self.currentPeriod += sign * diff
+                    }
+                } else {
+                    self.currentPeriod += self.periodDelta
                 }
-            } else {
-                self.currentPeriod += self.periodDelta
             }
         }
         else if let arp = self.arpeggio, arp.count > 0 {

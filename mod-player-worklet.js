@@ -91,25 +91,38 @@ class Channel {
         }
 
         if (this.vibrato) {
-            this.vibratoIndex = (this.vibratoIndex + this.vibratoSpeed) % 64;
-            this.currentPeriod = this.period + Math.sin(this.vibratoIndex / 64 * Math.PI * 2) * this.vibratoDepth;
+            // ProTracker: Vibrato-Sinusindex erst ab Tick 1 weiterdrehen, nie auf
+            // Tick 0. Sonst driftet der Index jede Row um einen Schritt (vgl. der
+            // gleiche tick>0-Guard beim Volume-Slide oben und in DSPChannel.swift).
+            if (this.worklet.tick > 0) {
+                this.vibratoIndex = (this.vibratoIndex + this.vibratoSpeed) % 64;
+                this.currentPeriod = this.period + Math.sin(this.vibratoIndex / 64 * Math.PI * 2) * this.vibratoDepth;
+            }
         }
         else if (this.tremolo) {
-            this.tremoloIndex = (this.tremoloIndex + this.tremoloSpeed) % 64;
-            const volDelta = Math.sin(this.tremoloIndex / 64 * Math.PI * 2) * this.tremoloDepth;
-            this.currentVolume = Math.max(0, Math.min(64, this.volume + volDelta));
+            // Wie Vibrato: Tremolo-Index nur auf Tick > 0 fortschreiben.
+            if (this.worklet.tick > 0) {
+                this.tremoloIndex = (this.tremoloIndex + this.tremoloSpeed) % 64;
+                const volDelta = Math.sin(this.tremoloIndex / 64 * Math.PI * 2) * this.tremoloDepth;
+                this.currentVolume = Math.max(0, Math.min(64, this.volume + volDelta));
+            }
         }
         else if (this.periodDelta) {
-            if (this.portamento) {
-                if (this.currentPeriod != this.period) {
-                    const sign = Math.sign(this.period - this.currentPeriod);
-                    const distance = Math.abs(this.currentPeriod - this.period);
-                    const diff = Math.min(distance, this.periodDelta);
-                    this.currentPeriod += sign * diff;
+            // ProTracker: 1xx/2xx/3xx (Porta-Up/Down/Tone-Porta) sliden nur auf
+            // Ticks > 0, NICHT auf Tick 0. Sonst macht jede Row einen Schritt zu
+            // viel (6 statt 5 bei Speed 6). Spiegelt den Volume-Slide-Guard.
+            if (this.worklet.tick > 0) {
+                if (this.portamento) {
+                    if (this.currentPeriod != this.period) {
+                        const sign = Math.sign(this.period - this.currentPeriod);
+                        const distance = Math.abs(this.currentPeriod - this.period);
+                        const diff = Math.min(distance, this.periodDelta);
+                        this.currentPeriod += sign * diff;
+                    }
                 }
-            }
-            else {
-                this.currentPeriod += this.periodDelta;
+                else {
+                    this.currentPeriod += this.periodDelta;
+                }
             }
         }
         else if (this.arpeggio) {
