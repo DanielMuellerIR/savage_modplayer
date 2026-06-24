@@ -25,6 +25,10 @@ public final class RealtimePlaybackState: Sendable {
     // Elapsed frames for timing calculation
     nonisolated(unsafe) public var elapsedFrames: UInt64 = 0
     nonisolated(unsafe) public var waveWriteIndex: Int = 0
+    // Eigener, ueber Callback-Grenzen rollender Index fuer das Master-Oszilloskop.
+    // (Frueher mit dem Callback-lokalen frame & 127 indiziert — bei Buffern < 128
+    // Frames blieb das Ende des Scopes stehen und es ruckelte zwischen Callbacks.)
+    nonisolated(unsafe) public var masterWaveWriteIndex: Int = 0
     
     public init() {}
 }
@@ -443,22 +447,26 @@ public final class ModPlayerCoordinator: ObservableObject {
                                     }
                                     targetRow = state.patternBreak
                                     state.patternBreak = -1
-                                } else if targetRow == 64 {
+                                } else if targetRow >= 64 {
                                     targetRow = 0
                                     targetPosition = state.position + 1
                                 }
                             }
-                            
+
                             state.position = targetPosition
                             state.rowIndex = targetRow
-                            
+
+                                    // Song-Ende: zurueck an den Anfang wrappen UND danach
+                                    // dieselbe Lade-Logik durchlaufen, damit die erste Zeile
+                                    // nach dem Loop frisch getriggert wird (sonst war sie stumm).
                                     if state.position >= mod.length {
                                         state.position = 0
-                                    } else {
+                                    }
+                                    do {
                                         // Defensive bounds check for pattern and table indices
                                         let posIndex = max(0, min(mod.patternTable.count - 1, state.position))
                                         let patternIndex = mod.patternTable[posIndex]
-                                        
+
                                         if patternIndex >= 0 && patternIndex < mod.patterns.count {
                                             let pattern = mod.patterns[patternIndex]
                                             if state.rowIndex >= 0 && state.rowIndex < pattern.rows.count {
@@ -472,8 +480,12 @@ public final class ModPlayerCoordinator: ObservableObject {
                                                         if note.hasEffect && note.effectId == 0x0B {
                                                             state.positionJump = note.effectData
                                                         } else if note.hasEffect && note.effectId == 0x0D {
+                                                            // Dxx: BCD-Zielzeile. Werte > 63 (korruptes/
+                                                            // ueberlanges Break) auf 0 umlenken statt die
+                                                            // rowIndex unbegrenzt klettern zu lassen — sonst
+                                                            // haengt der Song auf einer Phantom-Zeile fest.
                                                             let r = note.effectHigh * 10 + note.effectLow
-                                                            state.patternBreak = r
+                                                            state.patternBreak = r > 63 ? 0 : r
                                                         } else if note.hasEffect && note.effectId == 0xE6 {
                                                             if note.effectLow == 0 {
                                                                 ch.patternLoopStartRow = state.rowIndex
@@ -576,7 +588,11 @@ public final class ModPlayerCoordinator: ObservableObject {
                 let limitedR = tanh(outR)
                 left[frame] = limitedL
                 right[frame] = limitedR
-                waveBuffer.masterWavesPointer[frame & 127] = (limitedL + limitedR) * 0.5
+                // Master-Scope als echter, ueber Callbacks rollender Ringpuffer
+                // (wie waveWriteIndex oben), damit alle 128 Slots stetig gefuellt
+                // werden — kein stehender/ruckelnder Tail bei kleinen Buffern.
+                state.masterWaveWriteIndex = (state.masterWaveWriteIndex + 1) & 127
+                waveBuffer.masterWavesPointer[state.masterWaveWriteIndex] = (limitedL + limitedR) * 0.5
             }
             
             return noErr
@@ -767,7 +783,7 @@ public final class ModPlayerCoordinator: ObservableObject {
                 }
                 targetRow = state.patternBreak
                 state.patternBreak = -1
-            } else if targetRow == 64 {
+            } else if targetRow >= 64 {
                 targetRow = 0
                 targetPosition = state.position + 1
             }
@@ -776,9 +792,10 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.position = targetPosition
         state.rowIndex = targetRow
 
-        guard state.position < mod.length else {
+        // Song-Ende: wrappen und danach Zeile 0 trotzdem laden (Parallele zum
+        // Live-Renderblock), damit die erste Loop-Zeile frisch getriggert wird.
+        if state.position >= mod.length {
             state.position = 0
-            return
         }
 
         let posIndex = max(0, min(mod.patternTable.count - 1, state.position))
@@ -796,7 +813,8 @@ public final class ModPlayerCoordinator: ObservableObject {
             if note.hasEffect && note.effectId == 0x0B {
                 state.positionJump = note.effectData
             } else if note.hasEffect && note.effectId == 0x0D {
-                state.patternBreak = note.effectHigh * 10 + note.effectLow
+                let r = note.effectHigh * 10 + note.effectLow
+                state.patternBreak = r > 63 ? 0 : r
             } else if note.hasEffect && note.effectId == 0xE6 {
                 if note.effectLow == 0 {
                     ch.patternLoopStartRow = state.rowIndex
