@@ -1,0 +1,42 @@
+name: CI
+
+# Baut die native Swift-App, laeuft die Tests, prueft die JS-Parität und
+# stellt sicher, dass die gebaute Single-File-HTML aktuell ist.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift Version
+        run: swift --version
+
+      - name: Swift build (release)
+        run: swift build -c release
+
+      # In CI ist der gitignorierte audio/-Ordner nicht vorhanden, daher skippen
+      # die Audio-/Hardware-abhaengigen Tests von selbst; die synthetischen
+      # DSP-/Parser-/Sequenzierungs-Tests laufen vollstaendig.
+      - name: Swift tests
+        run: swift test
+
+      - name: JS Syntax-Check
+        run: |
+          node --check modplayer.js
+          node --check mod-player-worklet.js
+
+      - name: JS↔Swift Worklet-Parität (headless)
+        run: node Tests/js/worklet-timing.mjs
+
+      - name: Single-File-HTML ist aktuell (build.py)
+        run: |
+          python3 build.py
+          if ! git diff --exit-code savage-protracker-player.html; then
+            echo "::error::savage-protracker-player.html ist veraltet. 'python3 build.py' ausfuehren und committen."
+            exit 1
+          fi
