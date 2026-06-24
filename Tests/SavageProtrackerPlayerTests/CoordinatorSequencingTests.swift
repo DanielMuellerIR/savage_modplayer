@@ -56,6 +56,20 @@ final class CoordinatorSequencingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(samples.map { $0.row }.min() ?? -1, 0)
     }
 
+    /// Hardware-freier Render-Smoke-Test: Das eingebaute Demo-Mod muss ueber
+    /// renderProbe hoerbares Audio erzeugen. Laeuft OHNE audio/-Ordner und OHNE
+    /// Audio-Geraet (reine Berechnung) — die DSP-Regression skippt also nie still,
+    /// auch auf CI / frischem Checkout.
+    @MainActor
+    func testDemoModRenderProducesAudio() {
+        let mod = ModParser.generateDemoMod()
+        let coordinator = ModPlayerCoordinator()
+        let samples = coordinator.renderProbe(mod: mod, durationSeconds: 2.0)
+        XCTAssertFalse(samples.isEmpty)
+        let peak = samples.flatMap { $0.channelOutputs }.map { abs($0) }.max() ?? 0
+        XCTAssertGreaterThan(peak, 0.001, "Demo-Mod muss hoerbares Audio rendern")
+    }
+
     /// Ein wohlgeformtes Break (D32 = Zeile 32) muss exakt diese Zielzeile
     /// erreichen und NICHT umgelenkt werden.
     @MainActor

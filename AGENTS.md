@@ -67,7 +67,7 @@ p_savage_protracker/
 
 ---
 
-## Aktuelle Todos (Release 1.2.21-dev)
+## Aktuelle Todos (Release 1.2.33)
 
 - [x] **Todo 1**: Git-Repository initialisieren & Stammdateien anlegen (`VERSION`, `LICENSE`, `.gitignore`, `AGENTS.md`)
 - [x] **Todo 2**: HTML5-Dateien verschieben & `build.py` anpassen (Ausgabe zu `savage-protracker-player.html`)
@@ -100,6 +100,20 @@ p_savage_protracker/
 - **HTML-Drop-Autoplay**: Nach Änderungen an der HTML5-Variante `python3 -m http.server 8765` starten, `http://127.0.0.1:8765/savage-protracker-player.html?testDropAutoplay=1` im Browser laden, den Test-Button klicken und prüfen, dass der simulierte Ordner-Drop `PLAYING` meldet.
 - **Swift-Audio-Crash**: Nach Swift-Fixes immer `swift test --filter testRealtimePlaybackSurvivesFiveSeconds` ausführen. Der Test lädt ein zufälliges echtes MOD aus `audio/`, startet Wiedergabe und muss 5 Sekunden ohne Crash laufen.
 - **Swift-RType-Langsample**: Nach DSP-Änderungen `swift test --filter ModParserTests/testRTypeFourthChannelSampleSurvivesPastRow16` ausführen. Der Test lädt `audio/Rtype.mod`; Pattern 0 Row 16 Kanal 4 muss auch viele Rows später noch hörbar rendern.
+- **DSP-Timing & Amplitude**: `swift test --filter DSPChannelTimingTests` — Porta/Vibrato/Tremolo nur auf Tick > 0, ProTracker-Sinustabelle-Amplitude (depth*255/128 bzw. /64), Arpeggio-Zyklus, 9xx-Offset-Memory. Hardware-frei.
+- **Sequenzierung**: `swift test --filter CoordinatorSequencingTests` — Pattern-Break-Hang (Dxx > 63), In-Range-Break-Ziel, hardware-freier Demo-Render-Smoke. Läuft ohne `audio/` und ohne Audio-Gerät.
+- **JS↔Swift-Parität (headless)**: `node Tests/js/worklet-timing.mjs` — prüft, dass die Browser-Worklet-DSP dieselben Tick-/Amplituden-/Offset-Werte liefert wie `DSPChannel.swift`. Nach jeder DSP-Änderung in EINER Variante beide angleichen (siehe Synchronisierungsregel oben).
 - **Native App-Build**: Nach jedem Swift-Fix zusätzlich `./build_app.sh` ausführen, nicht nur `swift build`.
 
 - [x] **Todo 24**: GitHub-Auftritt mit README-Icon und Social-Preview-Bild aus dem App-Icon aufwerten
+
+## Audit-Durchlauf 2026-06-25 (Stand: 2026-06-25)
+
+Intensiver Bug-/Verbesserungs-Audit beider Varianten. Umgesetzt (je mit Test):
+- **Parser**: 6CHN/8CHN/FLT8 werden abgelehnt (Player ist strikt 4-kanalig; sonst Garbage); leere Songs (length 0) abgelehnt; lesbare `LocalizedError`-Meldungen; JS leere Pattern-Order abgesichert.
+- **Engine**: Pattern-Break (Dxx > 63) hing den Song auf — geklemmt; Loop-Restart triggert erste Zeile; Master-Oszilloskop als rollender Ringpuffer; Songende-Signal (`songEndPulse`) wertet `loopMode` aus.
+- **DSP-Genauigkeit** (Swift + JS identisch): Porta/Vibrato/Tremolo nur Tick > 0; Vibrato/Tremolo mit ProTracker-Sinustabelle und korrekter Tiefe; Arpeggio allokationsfrei (kein Heap im Audio-Thread); 9xx-Offset-Memory; JS-Loop-Wrap/One-Shot-Ende an Swift angeglichen; F00 ignoriert wie Swift; `notePerPeriod` an 856 verankert.
+- **UI**: tote Menü-/Tastaturbefehle angeschlossen; Leer-Mod-Crash-Guard; Timer-Leak ersetzt; Lautstärke ab Start korrekt; Theme/loopMode/volume persistent; Recent-Songs-Temp-URLs stabil; Datei-I/O vom Main-Thread genommen; loopMode-Default jetzt `.playlist`.
+- **Build**: Minifier verschmilzt `+ +` nicht mehr zu `++`.
+
+Bewusst NICHT umgesetzt: „Vibrato/Tremolo-Offset bei Effekt-Ende zurücksetzen" (hätte Slide-Persistenz und ECx-Note-Cut zerschossen). Offen/optional: echte Multichannel-Unterstützung (6/8 Kanäle), Anti-Click-Hüllkurve, JS-Sample-Interpolation als Hi-Fi-Option, VU-Tick-Allokationen reduzieren.
