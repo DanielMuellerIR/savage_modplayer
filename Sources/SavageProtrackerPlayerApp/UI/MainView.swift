@@ -34,7 +34,11 @@ struct MainView: View {
     @StateObject private var coordinator = ModPlayerCoordinator()
     @State private var theme: PlayerTheme = .cyber
     @State private var volume: Float = 0.6
-    @State private var loopMode: LoopMode = .none
+    // Default Playlist-Wiederholung: Der Player laedt beim Start den ganzen
+    // audio-Ordner; am Songende automatisch zum naechsten Titel zu springen ist
+    // fuer einen Playlist-Player das erwartete Verhalten (frueher lief der loopMode
+    // ins Leere und der Renderblock wiederholte denselben Song endlos).
+    @State private var loopMode: LoopMode = .playlist
     
     // Sidebar tabs
     @State private var selectedSidebarTab: Int = 0 // 0 = Playlist, 1 = Instrumente
@@ -259,6 +263,10 @@ struct MainView: View {
                     fireNotification(for: newTrackName)
                 }
             }
+            // Songende: loopMode auswerten (stop / wiederholen / naechster Titel).
+            .onChange(of: coordinator.songEndPulse) { _ in
+                handleSongEnd()
+            }
             // Menue-Befehle (Cmd+P / Cmd+Pfeile) aus AppMain wieder anschliessen —
             // sie posteten bisher NSNotifications, die niemand beobachtet hat.
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuPlayStop"))) { _ in
@@ -304,21 +312,39 @@ struct MainView: View {
     
     private func nextTrack() {
         guard !playlist.isEmpty else { return }
+        // Transportzustand erhalten: setMod() in loadModFile ruft stop(), daher
+        // VOR dem Wechsel merken, ob gerade gespielt wurde.
+        let wasPlaying = coordinator.isPlaying
         let nextIndex = currentPlaylistIndex + 1
         if nextIndex < playlist.count {
-            selectPlaylistSong(at: nextIndex)
+            selectPlaylistSong(at: nextIndex, autoPlay: wasPlaying)
         } else if loopMode == .playlist {
-            selectPlaylistSong(at: 0)
+            selectPlaylistSong(at: 0, autoPlay: wasPlaying)
         }
     }
-    
+
     private func prevTrack() {
         guard !playlist.isEmpty else { return }
+        let wasPlaying = coordinator.isPlaying
         let prevIndex = currentPlaylistIndex - 1
         if prevIndex >= 0 {
-            selectPlaylistSong(at: prevIndex)
+            selectPlaylistSong(at: prevIndex, autoPlay: wasPlaying)
         } else if loopMode == .playlist {
-            selectPlaylistSong(at: playlist.count - 1)
+            selectPlaylistSong(at: playlist.count - 1, autoPlay: wasPlaying)
+        }
+    }
+
+    // Wird ausgeloest, wenn der Renderblock das Songende erreicht (Wrap auf 0).
+    // Wertet den loopMode aus: einmal abspielen -> stoppen; Song wiederholen ->
+    // die Engine laeuft bereits in Schleife (nichts tun); Playlist -> naechster Titel.
+    private func handleSongEnd() {
+        switch loopMode {
+        case .none:
+            coordinator.stop()
+        case .track:
+            break // Engine wrappt bereits auf Position 0 und spielt weiter.
+        case .playlist:
+            nextTrack()
         }
     }
     
@@ -391,12 +417,14 @@ struct MainView: View {
         }
     }
     
-    private func selectPlaylistSong(at index: Int) {
+    private func selectPlaylistSong(at index: Int, autoPlay: Bool = true) {
         guard index >= 0 && index < playlist.count else { return }
         self.currentPlaylistIndex = index
         let songUrl = playlist[index]
         if loadModFile(from: songUrl) {
-            coordinator.play()
+            // Nur abspielen, wenn gewuenscht — sonst startet z.B. Weiterblaettern
+            // im pausierten Zustand ungewollt die Wiedergabe.
+            if autoPlay { coordinator.play() }
         }
         
         // Add to history

@@ -29,7 +29,11 @@ public final class RealtimePlaybackState: Sendable {
     // (Frueher mit dem Callback-lokalen frame & 127 indiziert — bei Buffern < 128
     // Frames blieb das Ende des Scopes stehen und es ruckelte zwischen Callbacks.)
     nonisolated(unsafe) public var masterWaveWriteIndex: Int = 0
-    
+    // Wird im Renderblock gesetzt, wenn der Song hinter die letzte Position laeuft
+    // (Wrap auf 0). Der MainActor-Poller liest das Flag und meldet das Songende,
+    // damit die UI den loopMode (none/track/playlist) auswerten kann.
+    nonisolated(unsafe) public var endReached: Bool = false
+
     public init() {}
 }
 
@@ -98,6 +102,10 @@ public final class ModPlayerCoordinator: ObservableObject {
     
     @Published public var elapsedTime: Double = 0.0
     @Published public var totalDuration: Double = 0.0
+
+    // Zaehlt bei jedem erreichten Songende hoch. Die UI beobachtet das per
+    // onChange und wertet dort den loopMode aus (stop / Song wiederholen / naechster).
+    @Published public var songEndPulse: Int = 0
     
     private var audioEngine: AVAudioEngine?
     private var sourceNode: AVAudioSourceNode?
@@ -353,6 +361,12 @@ public final class ModPlayerCoordinator: ObservableObject {
         
         // Read progress directly from shared state (100% lock-free, allocation-free)
         if let state = self.playbackState {
+            // Songende-Signal aus dem Renderblock auf den MainActor heben.
+            if state.endReached {
+                state.endReached = false
+                self.songEndPulse &+= 1
+            }
+
             let pos = state.position
             let row = state.rowIndex
             let b = state.bpm
@@ -459,7 +473,10 @@ public final class ModPlayerCoordinator: ObservableObject {
                                     // Song-Ende: zurueck an den Anfang wrappen UND danach
                                     // dieselbe Lade-Logik durchlaufen, damit die erste Zeile
                                     // nach dem Loop frisch getriggert wird (sonst war sie stumm).
+                                    // endReached signalisiert dem MainActor den Wrap (loopMode-Auswertung);
+                                    // das Audio laeuft glitch-frei weiter, bis der Hauptthread reagiert.
                                     if state.position >= mod.length {
+                                        state.endReached = true
                                         state.position = 0
                                     }
                                     do {
