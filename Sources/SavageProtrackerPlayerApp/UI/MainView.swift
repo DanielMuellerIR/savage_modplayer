@@ -356,73 +356,69 @@ struct MainView: View {
     
     private func handleDroppedURLs(_ urls: [URL]) {
         self.errorMessage = nil
+        // Dateisystem-Traversal + Kopieren laufen im Hintergrund — ein grosser
+        // Ordner-Drop blockierte sonst den Main-Thread (Beachball). Nur die
+        // @State-Mutation und das Laden der ersten Datei kehren auf den Main-Thread
+        // zurueck.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let modFiles = MainView.copyModFilesToTemp(urls)
+            DispatchQueue.main.async {
+                guard !modFiles.isEmpty else {
+                    self.errorMessage = "Keine passenden .mod Dateien gefunden."
+                    return
+                }
+                let sorted = self.sortedByDisplayName(modFiles)
+                self.playlist = sorted
+                self.selectedSidebarTab = 0 // Playlist fokussieren
+                self.currentPlaylistIndex = 0
+                self.loadModFile(from: sorted[0])
+            }
+        }
+    }
+
+    // Hintergrund-Worker: kopiert alle .mod-Dateien aus den gedroppten URLs (inkl.
+    // Ordner-Rekursion) in ein frisches Temp-Unterverzeichnis und liefert die Liste.
+    // Beruehrt KEINEN @State — laeuft sicher abseits des Main-Threads.
+    nonisolated private static func copyModFilesToTemp(_ urls: [URL]) -> [URL] {
         var modFiles: [URL] = []
         let fm = FileManager.default
-        
         // Pro Drop ein eigenes Unterverzeichnis statt das gemeinsame zu loeschen:
-        // sonst entwertet ein neuer Drop die Temp-URLs frueherer Baetche (und damit
-        // die 'Zuletzt gespielt'-Eintraege). Die Unterordner raeumt das OS auf.
+        // sonst entwertet ein neuer Drop die Temp-URLs frueherer Baetche.
         let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("ModPlayerTemp", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
-        
+
+        func copyIfMod(_ fileURL: URL) {
+            guard isModFile(fileURL) else { return }
+            let destURL = tempDir.appendingPathComponent("\(UUID().uuidString)_\(fileURL.lastPathComponent)")
+            do {
+                try fm.copyItem(at: fileURL, to: destURL)
+                modFiles.append(destURL)
+            } catch {
+                print("Fehler beim Kopieren: \(error)")
+            }
+        }
+
         for url in urls {
             let accessed = url.startAccessingSecurityScopedResource()
             var isDir: ObjCBool = false
             if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
                 if isDir.boolValue {
-                    let keys: [URLResourceKey] = [.isRegularFileKey]
-                    if let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) {
+                    if let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
                         while let fileURL = enumerator.nextObject() as? URL {
                             let fileAccessed = fileURL.startAccessingSecurityScopedResource()
-                            if isModFile(fileURL) {
-                                let uniquePrefix = UUID().uuidString
-                                let destURL = tempDir.appendingPathComponent("\(uniquePrefix)_\(fileURL.lastPathComponent)")
-                                try? fm.removeItem(at: destURL)
-                                do {
-                                    try fm.copyItem(at: fileURL, to: destURL)
-                                    modFiles.append(destURL)
-                                } catch {
-                                    print("Fehler beim Kopieren: \(error)")
-                                }
-                            }
-                            if fileAccessed {
-                                fileURL.stopAccessingSecurityScopedResource()
-                            }
+                            copyIfMod(fileURL)
+                            if fileAccessed { fileURL.stopAccessingSecurityScopedResource() }
                         }
                     }
-                } else if isModFile(url) {
-                    let uniquePrefix = UUID().uuidString
-                    let destURL = tempDir.appendingPathComponent("\(uniquePrefix)_\(url.lastPathComponent)")
-                    try? fm.removeItem(at: destURL)
-                    do {
-                        try fm.copyItem(at: url, to: destURL)
-                        modFiles.append(destURL)
-                    } catch {
-                        print("Fehler beim Kopieren: \(error)")
-                    }
+                } else {
+                    copyIfMod(url)
                 }
             }
-            if accessed {
-                url.stopAccessingSecurityScopedResource()
-            }
+            if accessed { url.stopAccessingSecurityScopedResource() }
         }
-        
-        if modFiles.isEmpty {
-            self.errorMessage = "Keine passenden .mod Dateien gefunden."
-            return
-        }
-        
-        modFiles = sortedByDisplayName(modFiles)
-        
-        self.playlist = modFiles
-        self.selectedSidebarTab = 0 // Playlist fokussieren
-        
-        if let first = modFiles.first {
-            self.currentPlaylistIndex = 0
-            loadModFile(from: first)
-        }
+        return modFiles
     }
     
     private func selectPlaylistSong(at index: Int, autoPlay: Bool = true) {
@@ -479,7 +475,7 @@ struct MainView: View {
         }
     }
 
-    private func isModFile(_ url: URL) -> Bool {
+    nonisolated private static func isModFile(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         let name = url.lastPathComponent.lowercased()
         return ext == "mod" || name.hasPrefix("mod.")
@@ -497,7 +493,7 @@ struct MainView: View {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
             guard let contents = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { continue }
-            let mods = sortedByDisplayName(contents.filter { isModFile($0) })
+            let mods = sortedByDisplayName(contents.filter { Self.isModFile($0) })
             if mods.isEmpty { continue }
             handleDroppedURLs(mods)
             return
