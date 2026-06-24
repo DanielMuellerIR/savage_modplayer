@@ -167,7 +167,12 @@ def tighten_js_punctuation(src: str) -> str:
     """
     # Spaces (kein Newline) um diese Zeichen sind redundant.
     # Achtung: NUR Spaces matchen, keine Newlines (\n).
-    punct = r'[{}()\[\];,:?=<>+\-*/%&|^!~]'
+    # WICHTIG: + und - sind bewusst NICHT dabei. Wuerde man sie straffen, koennte
+    # aus "a + +b" faelschlich "a++b" (Post-Increment) oder aus "a - -b" "a--b"
+    # werden — eine Semantik-Aenderung. Spaces um +/- bleiben daher erhalten
+    # (winziger Groessen-Aufschlag, dafuer korrekt). Lookarounds helfen hier nicht,
+    # weil sie die Original-Nachbarn pruefen, nicht das Ergebnis nach dem Entfernen.
+    punct = r'[{}()\[\];,:?=<>*/%&|^!~]'
     src = re.sub(rf' *({punct}) *', r'\1', src)
     # Mehrfache Leerzeilen → eine.
     src = re.sub(r'\n{2,}', '\n', src)
