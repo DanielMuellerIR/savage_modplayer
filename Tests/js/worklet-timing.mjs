@@ -121,6 +121,42 @@ function check(name, actual, expected, eps = 1e-4) {
     check('tremolo-index: 5 Advances/Row', ch.tremoloIndex, 20);
 }
 
+// Vibrato-Amplitude: Peak = depth*255/128 (PT-Sinustabelle, nicht halb so tief).
+{
+    const ch = makeChannel();
+    ch.period = 400;
+    ch.currentPeriod = 400;
+    ch.vibrato = true;
+    ch.vibratoSpeed = 1;
+    ch.vibratoDepth = 8;
+    ch.vibratoIndex = 0;
+    let maxDelta = 0;
+    worklet.tick = 1;
+    for (let i = 0; i < 128; ++i) {
+        ch.performTick();
+        maxDelta = Math.max(maxDelta, Math.abs(ch.currentPeriod - 400));
+    }
+    check('vibrato-amplitude: depth*255/128', maxDelta, 8 * 255 / 128, 1e-2);
+}
+
+// Tremolo-Amplitude: Peak = depth*255/64.
+{
+    const ch = makeChannel();
+    ch.volume = 32;
+    ch.currentVolume = 32;
+    ch.tremolo = true;
+    ch.tremoloSpeed = 1;
+    ch.tremoloDepth = 4;
+    ch.tremoloIndex = 0;
+    let maxDelta = 0;
+    worklet.tick = 1;
+    for (let i = 0; i < 128; ++i) {
+        ch.performTick();
+        maxDelta = Math.max(maxDelta, Math.abs(ch.currentVolume - 32));
+    }
+    check('tremolo-amplitude: depth*255/64', maxDelta, 4 * 255 / 64, 1e-2);
+}
+
 if (failures > 0) {
     console.error(`\n${failures} Fehler — Worklet-Timing weicht ab.`);
     process.exit(1);

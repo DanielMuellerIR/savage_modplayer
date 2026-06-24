@@ -2,6 +2,15 @@ import Foundation
 
 public final class DSPChannel: Sendable {
     public let channelIndex: Int
+
+    // ProTracker-Sinustabelle (32 Eintraege, Betrag der ersten Halbwelle, Peak 255).
+    // Vibrato/Tremolo nutzen sie wie das Original: Index 0..63, untere 5 Bit
+    // adressieren die Tabelle, ab Index 32 wird das Vorzeichen invertiert.
+    // Vibrato-Delta = tabelle*depth/128 (Period), Tremolo = tabelle*depth/64 (Volume).
+    static let ptSineTable: [Float] = [
+        0, 24, 49, 74, 97, 120, 141, 161, 180, 197, 212, 224, 235, 244, 250, 253,
+        255, 253, 250, 244, 235, 224, 212, 197, 180, 161, 141, 120, 97, 74, 49, 24
+    ]
     
     // Nonisolated unsafe to bypass strict concurrency warnings inside lock-free real-time audio thread
     nonisolated(unsafe) public var instrument: Instrument?
@@ -355,16 +364,23 @@ public final class DSPChannel: Sendable {
             // gleiche tick>0-Guard beim Volume-Slide oben und im HTML-Worklet).
             if tick > 0 {
                 self.vibratoIndex = (self.vibratoIndex + self.vibratoSpeed).truncatingRemainder(dividingBy: 64)
-                let sineVal = sin(self.vibratoIndex / 64.0 * .pi * 2.0)
-                self.currentPeriod = self.period + Float(sineVal) * self.vibratoDepth
+                // PT-Sinustabelle statt sin(): korrekte Amplitude (depth*255/128,
+                // ~doppelt so tief wie das alte sin()*depth) und Original-Wellenform.
+                let p = Int(self.vibratoIndex) & 63
+                let amp = DSPChannel.ptSineTable[p & 31]
+                let delta = (p < 32 ? amp : -amp) * self.vibratoDepth / 128.0
+                self.currentPeriod = self.period + delta
             }
         }
         else if self.tremolo {
             // Wie Vibrato: Tremolo-Index nur auf Tick > 0 fortschreiben.
             if tick > 0 {
                 self.tremoloIndex = (self.tremoloIndex + self.tremoloSpeed).truncatingRemainder(dividingBy: 64)
-                let sineVal = sin(self.tremoloIndex / 64.0 * .pi * 2.0)
-                let volDelta = Float(sineVal) * self.tremoloDepth
+                // PT-Sinustabelle: Amplitude depth*255/64 (~viermal so stark wie
+                // das alte sin()*depth) und Original-Wellenform.
+                let p = Int(self.tremoloIndex) & 63
+                let amp = DSPChannel.ptSineTable[p & 31]
+                let volDelta = (p < 32 ? amp : -amp) * self.tremoloDepth / 64.0
                 self.currentVolume = max(0.0, min(64.0, self.volume + volDelta))
             }
         }

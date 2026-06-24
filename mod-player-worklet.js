@@ -1,5 +1,13 @@
 const PAULA_FREQUENCY = 3546894.6;
 
+// ProTracker-Sinustabelle (32 Eintraege, Betrag der ersten Halbwelle, Peak 255).
+// Index 0..63, untere 5 Bit adressieren die Tabelle, ab 32 Vorzeichen invertiert.
+// Identisch zu DSPChannel.ptSineTable, damit Swift und Browser gleich klingen.
+const PT_SINE_TABLE = [
+    0, 24, 49, 74, 97, 120, 141, 161, 180, 197, 212, 224, 235, 244, 250, 253,
+    255, 253, 250, 244, 235, 224, 212, 197, 180, 161, 141, 120, 97, 74, 49, 24
+];
+
 const ARPEGGIO = 0x00;
 const SLIDE_UP = 0x01;
 const SLIDE_DOWN = 0x02;
@@ -96,14 +104,22 @@ class Channel {
             // gleiche tick>0-Guard beim Volume-Slide oben und in DSPChannel.swift).
             if (this.worklet.tick > 0) {
                 this.vibratoIndex = (this.vibratoIndex + this.vibratoSpeed) % 64;
-                this.currentPeriod = this.period + Math.sin(this.vibratoIndex / 64 * Math.PI * 2) * this.vibratoDepth;
+                // PT-Sinustabelle statt Math.sin(): korrekte Amplitude
+                // (depth*255/128, ~doppelt so tief) und Original-Wellenform.
+                const p = this.vibratoIndex & 63;
+                const amp = PT_SINE_TABLE[p & 31];
+                const delta = (p < 32 ? amp : -amp) * this.vibratoDepth / 128;
+                this.currentPeriod = this.period + delta;
             }
         }
         else if (this.tremolo) {
             // Wie Vibrato: Tremolo-Index nur auf Tick > 0 fortschreiben.
             if (this.worklet.tick > 0) {
                 this.tremoloIndex = (this.tremoloIndex + this.tremoloSpeed) % 64;
-                const volDelta = Math.sin(this.tremoloIndex / 64 * Math.PI * 2) * this.tremoloDepth;
+                // PT-Sinustabelle: Amplitude depth*255/64 (~viermal so stark).
+                const p = this.tremoloIndex & 63;
+                const amp = PT_SINE_TABLE[p & 31];
+                const volDelta = (p < 32 ? amp : -amp) * this.tremoloDepth / 64;
                 this.currentVolume = Math.max(0, Math.min(64, this.volume + volDelta));
             }
         }

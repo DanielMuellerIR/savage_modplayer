@@ -99,6 +99,42 @@ final class DSPChannelTimingTests: XCTestCase {
                        "Auf Tick 0 darf der Vibrato-Index nicht weiterdrehen")
     }
 
+    /// Vibrato-Amplitude muss der ProTracker-Tabelle entsprechen: Peak =
+    /// depth*255/128 Period-Einheiten (frueher mit sin() nur ~depth, halb so tief).
+    func testVibratoDepthMatchesProTrackerAmplitude() {
+        let ch = DSPChannel(index: 1)
+        ch.period = 400
+        ch.currentPeriod = 400
+        ch.vibrato = true
+        ch.vibratoSpeed = 1
+        ch.vibratoDepth = 8
+        var maxDelta: Float = 0
+        for _ in 0..<128 { // > 64, deckt eine volle Sinusperiode ab
+            ch.performTick(tick: 1, sampleRate: sampleRate, clockRate: clockRate)
+            maxDelta = max(maxDelta, abs(ch.currentPeriod - 400))
+        }
+        XCTAssertEqual(maxDelta, 8.0 * 255.0 / 128.0, accuracy: 0.01,
+                       "Vibrato-Peak muss depth*255/128 sein")
+    }
+
+    /// Tremolo-Amplitude: Peak = depth*255/64 Volume-Einheiten (frueher ~depth,
+    /// also ein Viertel so stark).
+    func testTremoloDepthMatchesProTrackerAmplitude() {
+        let ch = DSPChannel(index: 1)
+        ch.volume = 32
+        ch.currentVolume = 32
+        ch.tremolo = true
+        ch.tremoloSpeed = 1
+        ch.tremoloDepth = 4
+        var maxDelta: Float = 0
+        for _ in 0..<128 {
+            ch.performTick(tick: 1, sampleRate: sampleRate, clockRate: clockRate)
+            maxDelta = max(maxDelta, abs(ch.currentVolume - 32))
+        }
+        XCTAssertEqual(maxDelta, 4.0 * 255.0 / 64.0, accuracy: 0.01,
+                       "Tremolo-Peak muss depth*255/64 sein")
+    }
+
     /// Tremolo-Index: gleiche Regel wie Vibrato.
     func testTremoloIndexAdvancesFiveStepsPerRow() {
         let ch = DSPChannel(index: 1)
