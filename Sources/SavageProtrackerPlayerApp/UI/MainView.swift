@@ -198,7 +198,7 @@ struct MainView: View {
             .font(theme == .workbench ? .system(.body, design: .monospaced) : .body)
             .fileImporter(
                 isPresented: $showFileImporter,
-                allowedContentTypes: [.data, UTType(filenameExtension: "mod")].compactMap { $0 },
+                allowedContentTypes: [.data, UTType(filenameExtension: "mod"), UTType(filenameExtension: "s3m")].compactMap { $0 },
                 allowsMultipleSelection: true
             ) { result in
                 switch result {
@@ -363,7 +363,7 @@ struct MainView: View {
             let modFiles = MainView.copyModFilesToTemp(urls)
             DispatchQueue.main.async {
                 guard !modFiles.isEmpty else {
-                    self.errorMessage = "Keine passenden .mod Dateien gefunden."
+                    self.errorMessage = "Keine passenden .mod/.s3m Dateien gefunden."
                     return
                 }
                 let sorted = self.sortedByDisplayName(modFiles)
@@ -447,7 +447,8 @@ struct MainView: View {
         
         do {
             let fileData = try Data(contentsOf: url)
-            let mod = try ModParser.parse(data: fileData)
+            // ModuleLoader erkennt das Format am Inhalt (MOD-Varianten, S3M).
+            let mod = try ModuleLoader.parse(data: fileData)
             coordinator.setMod(mod)
             return true
         } catch {
@@ -477,7 +478,7 @@ struct MainView: View {
     nonisolated private static func isModFile(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         let name = url.lastPathComponent.lowercased()
-        return ext == "mod" || name.hasPrefix("mod.")
+        return ModuleLoader.supportedExtensions.contains(ext) || name.hasPrefix("mod.")
     }
     
     private func loadLocalAudioFolder() {
@@ -503,6 +504,66 @@ struct MainView: View {
         let demoMod = ModParser.generateDemoMod()
         coordinator.setMod(demoMod)
         coordinator.play()
+    }
+
+    // Ein Kanal-Streifen (VU-Meter, Mini-Oszilloskop, Mute/Solo) — von der
+    // dynamischen Kanal-Leiste pro Kanal aufgerufen. Die Index-Guards fangen
+    // den kurzen Moment ab, in dem channelCount schon aktualisiert ist, aber
+    // vuLevels/channelWaveforms noch die alte Länge haben.
+    @ViewBuilder
+    private func channelStripView(_ i: Int) -> some View {
+        VStack(spacing: 4) {
+            HStack(alignment: .bottom, spacing: 4) {
+                // VU segmented LED
+                VUMeterView(value: i < coordinator.vuLevels.count ? coordinator.vuLevels[i] : 0, theme: theme)
+                    .frame(width: 24, height: 50)
+
+                // Rolling channel oscilloscope waveform path
+                GeometryReader { geo in
+                    Path { path in
+                        guard i < coordinator.channelWaveforms.count else { return }
+                        let history = coordinator.channelWaveforms[i]
+                        guard history.count > 0 else { return }
+                        let step = geo.size.width / CGFloat(history.count - 1)
+                        path.move(to: CGPoint(x: 0, y: geo.size.height * CGFloat(0.5 - history[0] * 0.5)))
+                        for idx in 1..<history.count {
+                            path.addLine(to: CGPoint(x: CGFloat(idx) * step, y: geo.size.height * CGFloat(0.5 - history[idx] * 0.5)))
+                        }
+                    }
+                    .stroke(theme == .workbench ? Color.amigaOrange : Color.spaceAccent, lineWidth: 1.2)
+                }
+                .frame(width: 44, height: 50)
+                .background(Color.black.opacity(0.2))
+                .cornerRadius(3)
+            }
+
+            HStack(spacing: 8) {
+                Text("CH \(i + 1)")
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .foregroundColor(theme == .workbench ? .amigaWhite.opacity(0.7) : .spaceTextSecondary)
+
+                // MUTE / SOLO buttons
+                Button("M") {
+                    coordinator.toggleMute(channelIndex: i)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .padding(.horizontal, 3)
+                .background(coordinator.isMuted(channelIndex: i) ? Color.red : Color.clear)
+                .foregroundColor(coordinator.isMuted(channelIndex: i) ? .white : .red)
+                .cornerRadius(2)
+
+                Button("S") {
+                    coordinator.toggleSolo(channelIndex: i)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .padding(.horizontal, 3)
+                .background(coordinator.isSoloed(channelIndex: i) ? Color.green : Color.clear)
+                .foregroundColor(coordinator.isSoloed(channelIndex: i) ? .white : .green)
+                .cornerRadius(2)
+            }
+        }
     }
     
     // MARK: - Disk spin (deklarativ statt Timer)
@@ -1046,61 +1107,25 @@ struct MainView: View {
                 .background(theme == .workbench ? Color.amigaWhite.opacity(0.2) : Color.spaceAccent.opacity(0.2))
                 .frame(height: 48)
             
-            // 4 Peak Level VU Meters with Mute/Solo and Oscilloscope under them
-            ForEach(0..<4) { i in
-                VStack(spacing: 4) {
-                    HStack(alignment: .bottom, spacing: 4) {
-                        // VU segmented LED
-                        VUMeterView(value: coordinator.vuLevels[i], theme: theme)
-                            .frame(width: 24, height: 50)
-                        
-                        // Rolling channel oscilloscope waveform path
-                        GeometryReader { geo in
-                            Path { path in
-                                let history = coordinator.channelWaveforms[i]
-                                guard history.count > 0 else { return }
-                                let step = geo.size.width / CGFloat(history.count - 1)
-                                path.move(to: CGPoint(x: 0, y: geo.size.height * CGFloat(0.5 - history[0] * 0.5)))
-                                for idx in 1..<history.count {
-                                    path.addLine(to: CGPoint(x: CGFloat(idx) * step, y: geo.size.height * CGFloat(0.5 - history[idx] * 0.5)))
-                                }
-                            }
-                            .stroke(theme == .workbench ? Color.amigaOrange : Color.spaceAccent, lineWidth: 1.2)
+            // Peak Level VU Meters with Mute/Solo and Oscilloscope under them.
+            // Kanalzahl ist dynamisch (4 bei MOD, mehr bei 6CHN/8CHN/S3M);
+            // ab 5 Kanälen scrollt die Leiste horizontal, damit das Layout
+            // nicht explodiert.
+            if coordinator.channelCount <= 4 {
+                ForEach(0..<coordinator.channelCount, id: \.self) { i in
+                    channelStripView(i)
+                }
+            } else {
+                ScrollView(.horizontal, showsIndicators: true) {
+                    HStack(spacing: 16) {
+                        ForEach(0..<coordinator.channelCount, id: \.self) { i in
+                            channelStripView(i)
                         }
-                        .frame(width: 44, height: 50)
-                        .background(Color.black.opacity(0.2))
-                        .cornerRadius(3)
-                    }
-                    
-                    HStack(spacing: 8) {
-                        Text("CH \(i + 1)")
-                            .font(.system(size: 8, weight: .bold, design: .monospaced))
-                            .foregroundColor(theme == .workbench ? .amigaWhite.opacity(0.7) : .spaceTextSecondary)
-                        
-                        // MUTE / SOLO buttons
-                        Button("M") {
-                            coordinator.toggleMute(channelIndex: i)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
-                        .padding(.horizontal, 3)
-                        .background(coordinator.isMuted(channelIndex: i) ? Color.red : Color.clear)
-                        .foregroundColor(coordinator.isMuted(channelIndex: i) ? .white : .red)
-                        .cornerRadius(2)
-                        
-                        Button("S") {
-                            coordinator.toggleSolo(channelIndex: i)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
-                        .padding(.horizontal, 3)
-                        .background(coordinator.isSoloed(channelIndex: i) ? Color.green : Color.clear)
-                        .foregroundColor(coordinator.isSoloed(channelIndex: i) ? .white : .green)
-                        .cornerRadius(2)
                     }
                 }
+                .frame(maxWidth: 4 * 96)
             }
-            
+
             Divider()
                 .background(theme == .workbench ? Color.amigaWhite.opacity(0.2) : Color.spaceAccent.opacity(0.2))
                 .frame(height: 48)

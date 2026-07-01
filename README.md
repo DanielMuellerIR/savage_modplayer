@@ -5,15 +5,15 @@
 <h1 align="center">Savage Protracker Player</h1>
 
 <p align="center">
-  <strong>Amiga-ProTracker-MOD-Player als Single-File-HTML5-Version und native SwiftUI-macOS-App.</strong>
+  <strong>Amiga-/Tracker-Modul-Player als Single-File-HTML5-Version und native SwiftUI-macOS-App.</strong>
 </p>
 
-Ein plattformübergreifender, eigenständiger 4-Kanal-Amiga-ProTracker-MOD-Player in zwei Varianten:
+Ein plattformübergreifender, eigenständiger Tracker-Modul-Player in zwei Varianten:
 
-1. **HTML5 (`savage-protracker-player.html`)** — Eine einzelne HTML-Datei (unter 50 KB), die ohne Webserver direkt per Doppelklick aus dem Dateisystem funktioniert.
-2. **Native macOS App (`Savage Protracker Player.app`)** — SwiftUI-Desktop-Anwendung mit `AVAudioEngine`, `AVAudioSourceNode`, echten Echtzeit-Oszilloskopen und Pegel-Metern.
+1. **HTML5 (`savage-protracker-player.html`)** — Eine einzelne HTML-Datei (unter 50 KB), die ohne Webserver direkt per Doppelklick aus dem Dateisystem funktioniert. Spielt klassische 4-Kanal-ProTracker-MODs.
+2. **Native macOS App (`Savage Protracker Player.app`)** — SwiftUI-Desktop-Anwendung mit `AVAudioEngine`, `AVAudioSourceNode`, echten Echtzeit-Oszilloskopen und Pegel-Metern. Spielt zusätzlich Multichannel-MODs (6/8/… Kanäle, u. a. `6CHN`/`8CHN`/`FLT8`), 15-Sample-Soundtracker-Module und **ScreamTracker 3 (`.s3m`)** — und bringt ein **Quick-Look-Plugin** mit: Leertaste auf einer `.mod`/`.s3m` im Finder öffnet eine abspielbare Audio-Vorschau.
 
-Beide Varianten enthalten standardmäßig keine MOD-Dateien. Musikstücke werden per Drag & Drop oder Datei-Dialog geladen.
+Beide Varianten enthalten standardmäßig keine Moduldateien. Musikstücke werden per Drag & Drop oder Datei-Dialog geladen.
 
 ---
 
@@ -27,7 +27,9 @@ Der HTML5-Player benötigt keinen Download über die Releases hinaus: Die Datei 
 
 ## Funktionsumfang
 
-- **Drag & Drop**: Einzelne `.mod`-Dateien oder ganze Ordner (rekursiv) können auf den Player gezogen werden.
+- **Formatvielfalt (macOS-App)**: ProTracker-MOD, Multichannel-MOD (`xCHN`/`xxCH`/`CD81`/`OKTA`/`FLT8`), 15-Sample-Soundtracker und ScreamTracker 3 (`.s3m`) inklusive Volume-Column, Panning und S3M-Effekten. Der HTML5-Player bleibt bewusst kompakt und spielt 4-Kanal-MODs.
+- **Quick-Look-Vorschau (macOS-App)**: Das mitgelieferte Quick-Look-Plugin rendert `.mod`/`.s3m` mit der Player-Engine und zeigt im Finder (Leertaste) den nativen Audio-Player mit Play und Scrubbing.
+- **Drag & Drop**: Einzelne `.mod`-/`.s3m`-Dateien oder ganze Ordner (rekursiv) können auf den Player gezogen werden.
 - **Automatische Playlist**: Wenn im selben Ordner wie der Player oder die App ein Unterordner namens `audio/` vorhanden ist, wird dieser beim Start automatisch gescannt und als alphabetisch sortierte Playlist geladen.
 - **Playlist-Bedienung**: Einzelklick auf einen Playlist-Eintrag lädt und startet den Titel direkt. Nach dem Songende kann die Playlist automatisch weiterlaufen.
 - **Echtzeit-Oszilloskope**: 
@@ -57,9 +59,12 @@ Die Audio-Engine simuliert das Amiga Paula-Hardwareverhalten:
 
 | Schicht | HTML5 | macOS (Swift) |
 |---|---|---|
-| Parser | `modplayer.js` | `ModParser.swift` (SavageProtrackerPlayerCore) |
-| DSP / Mixer | `mod-player-worklet.js` (AudioWorklet) | `ModPlayerCoordinator.swift` (`AVAudioSourceNode`) |
+| Parser | `modplayer.js` | `ModuleLoader`/`ModParser`/`S3MParser` (SavageProtrackerPlayerCore) |
+| DSP / Mixer | `mod-player-worklet.js` (AudioWorklet) | `ModPlayerCoordinator.swift` (`AVAudioSourceNode`, bis 32 Kanäle) |
 | UI | Vanilla JS + CSS Grid | SwiftUI + Canvas |
+| Quick Look | — | `quicklook/PreviewProvider.swift` (Appex, WAV-Offline-Render) |
+
+Für S3M rechnet die Engine im ScreamTracker-Periodenmodell (C2Spd-basierte Perioden gegen die ST3-Clock 14,3 MHz) statt in Amiga-Paula-Perioden; die ProTracker-Effekte werden um S3M-Spezifika (Fine-/Extra-Fine-Slides mit Effekt-Memory, Tremor, Fine-Vibrato, Global Volume) ergänzt.
 
 ---
 

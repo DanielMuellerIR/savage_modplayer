@@ -21,6 +21,13 @@ public final class RealtimePlaybackState: Sendable {
     nonisolated(unsafe) public var stereoSeparation: Float = 0.8
     nonisolated(unsafe) public var useInterpolation: Bool = true
     nonisolated(unsafe) public var palClock: Bool = true
+
+    // Globale Lautstärke 0..64 (S3M Vxx; MOD bleibt konstant 64).
+    nonisolated(unsafe) public var globalVolume: Float = 64
+
+    // S3M rechnet Perioden gegen die feste ST3-Clock (14317056 Hz) statt
+    // gegen die Amiga-Paula-Clock. 0 = kein Override (PAL/NTSC-Schalter gilt).
+    nonisolated(unsafe) public var clockRateOverride: Double = 0
     
     // Elapsed frames for timing calculation
     nonisolated(unsafe) public var elapsedFrames: UInt64 = 0
@@ -99,8 +106,12 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
     }
     @Published public var trackName = "Kein Song geladen"
-    
-    // Realtime VU Levels (für SwiftUI gebunden)
+
+    // Kanalzahl des aktiven Moduls (4 bei klassischem MOD, bis 32 bei S3M).
+    // Die UI leitet daraus Grid-Spalten, VU-Meter und Scopes ab.
+    @Published public var channelCount = 4
+
+    // Realtime VU Levels (für SwiftUI gebunden) — immer channelCount Einträge.
     @Published public var vuLevels: [Float] = [0.0, 0.0, 0.0, 0.0]
     
     // New parameters for user controls
@@ -143,11 +154,16 @@ public final class ModPlayerCoordinator: ObservableObject {
         [Float](repeating: 0, count: 32),
         [Float](repeating: 0, count: 32)
     ]
-    
+
     @Published public var masterSamples: [Float] = [Float](repeating: 0, count: 128)
-    
-    // Vorallozierte DSP-Daten
-    private let channels = [DSPChannel(index: 1), DSPChannel(index: 2), DSPChannel(index: 3), DSPChannel(index: 4)]
+
+    // Obergrenze der unterstützten Kanäle — bestimmt die Größe der
+    // vorallozierten VU-/Waveform-Puffer (S3M erlaubt bis zu 32 Kanäle).
+    nonisolated public static let maxChannels = 32
+
+    // Vorallozierte DSP-Kanäle. Wird in setMod() passend zur Kanalzahl des
+    // Moduls neu aufgebaut (der Render-Block captured das Array bei play()).
+    private var channels = [DSPChannel(index: 1), DSPChannel(index: 2), DSPChannel(index: 3), DSPChannel(index: 4)]
     public var activeMod: Mod?
     
     // ARC-managed state captured by the AVAudioSourceNode closure
@@ -162,16 +178,18 @@ public final class ModPlayerCoordinator: ObservableObject {
     private var vuUpdateTimer: Timer?
     
     public init() {
-        self.peakLevelsPointer = UnsafeMutablePointer<Float>.allocate(capacity: 4)
-        for i in 0..<4 {
+        // Puffer immer für die Maximal-Kanalzahl anlegen: so bleibt der
+        // Echtzeit-Pfad allokationsfrei, egal wie viele Kanäle ein Modul hat.
+        self.peakLevelsPointer = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxChannels)
+        for i in 0..<Self.maxChannels {
             self.peakLevelsPointer[i] = 0.0
         }
         self.masterWavesPointer = UnsafeMutablePointer<Float>.allocate(capacity: 128)
         for i in 0..<128 {
             self.masterWavesPointer[i] = 0.0
         }
-        self.channelWavesPointer = UnsafeMutablePointer<Float>.allocate(capacity: 128) // 4 channels * 32 samples
-        for i in 0..<128 {
+        self.channelWavesPointer = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxChannels * 32) // je Kanal 32 Samples
+        for i in 0..<(Self.maxChannels * 32) {
             self.channelWavesPointer[i] = 0.0
         }
     }
@@ -186,11 +204,41 @@ public final class ModPlayerCoordinator: ObservableObject {
         stop()
         self.activeMod = mod
         self.trackName = mod.name.isEmpty ? "Unbekannter Track" : mod.name
+
+        // Kanal-Setup passend zum Modul neu aufbauen (4 bei MOD, N bei S3M).
+        let count = max(1, min(Self.maxChannels, mod.channelCount))
+        self.channels = (1...count).map { DSPChannel(index: $0) }
+        Self.configure(channels: self.channels, for: mod)
+        self.channelCount = count
+        self.vuLevels = [Float](repeating: 0, count: count)
+        self.channelWaveforms = (0..<count).map { _ in [Float](repeating: 0, count: 32) }
+
         self.currentPosition = 0
         self.currentRow = 0
-        // codereview-ok: by-design — neuer Song startet auf ProTracker-Default 125/6 und setzt sein Tempo per Fxx selbst; mit dem didSet-Fix benigne, kein Datenverlust an laufender Wiedergabe (2026-07-01)
-        self.bpm = 125
-        self.speed = 6
+        // codereview-ok: by-design — neuer Song startet auf seinem Header-Tempo
+        // (MOD: ProTracker-Default 125/6, S3M: Initial Speed/Tempo) und setzt
+        // sein Tempo per Effekt selbst; mit dem didSet-Fix benigne, kein
+        // Datenverlust an laufender Wiedergabe (2026-07-01)
+        self.bpm = mod.initialTempo
+        self.speed = mod.initialSpeed
+    }
+
+    // Format-abhängige Kanal-Konfiguration: Panning aus dem Modul, bei S3M
+    // zusätzlich das ScreamTracker-Periodenmodell (feinere Perioden, weitere
+    // Klemmgrenzen, Effekt-Memory). Muss nach jedem DSPChannel.reset() erneut
+    // angewandt werden (reset() stellt die MOD-Defaults wieder her).
+    nonisolated static func configure(channels: [DSPChannel], for mod: Mod) {
+        for (i, ch) in channels.enumerated() {
+            if i < mod.channelPannings.count {
+                ch.panning = mod.channelPannings[i]
+            }
+            if mod.format == .s3m {
+                ch.s3mMode = true
+                ch.periodScale = 4
+                ch.periodMin = 64
+                ch.periodMax = 32767
+            }
+        }
     }
     
     public func play() {
@@ -201,7 +249,9 @@ public final class ModPlayerCoordinator: ObservableObject {
         for ch in channels {
             ch.reset()
         }
-        
+        // reset() stellt MOD-Defaults her -> Format-Konfiguration neu anwenden.
+        Self.configure(channels: channels, for: mod)
+
         let engine = AVAudioEngine()
         self.audioEngine = engine
         
@@ -221,10 +271,10 @@ public final class ModPlayerCoordinator: ObservableObject {
         let state = RealtimePlaybackState()
         state.position = -1
         state.rowIndex = 63
-        state.tick = 5
-        state.ticksPerRow = 6
-        state.bpm = 125
-        state.outputsPerTick = sampleRate * 60.0 / (125.0 * 24.0)
+        state.tick = mod.initialSpeed - 1
+        state.ticksPerRow = mod.initialSpeed
+        state.bpm = mod.initialTempo
+        state.outputsPerTick = sampleRate * 60.0 / (Double(mod.initialTempo) * 24.0)
         state.outputsUntilNextTick = 0.0
         state.positionJump = -1
         state.patternBreak = -1
@@ -234,8 +284,10 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.stereoSeparation = self.stereoSeparation
         state.useInterpolation = self.useInterpolation
         state.palClock = self.palClock
+        state.globalVolume = Float(mod.initialGlobalVolume)
+        state.clockRateOverride = mod.format == .s3m ? 14317056.0 : 0
         state.elapsedFrames = 0
-        
+
         self.playbackState = state
         
         let dspChannels = channels
@@ -360,52 +412,51 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
     
     public func toggleMute(channelIndex: Int) {
-        guard channelIndex >= 0 && channelIndex < 4 else { return }
+        guard channelIndex >= 0 && channelIndex < channels.count else { return }
         channels[channelIndex].isMuted.toggle()
         objectWillChange.send()
     }
-    
+
     public func toggleSolo(channelIndex: Int) {
-        guard channelIndex >= 0 && channelIndex < 4 else { return }
+        guard channelIndex >= 0 && channelIndex < channels.count else { return }
         channels[channelIndex].isSoloed.toggle()
         objectWillChange.send()
     }
-    
+
     public func isMuted(channelIndex: Int) -> Bool {
-        guard channelIndex >= 0 && channelIndex < 4 else { return false }
+        guard channelIndex >= 0 && channelIndex < channels.count else { return false }
         return channels[channelIndex].isMuted
     }
-    
+
     public func isSoloed(channelIndex: Int) -> Bool {
-        guard channelIndex >= 0 && channelIndex < 4 else { return false }
+        guard channelIndex >= 0 && channelIndex < channels.count else { return false }
         return channels[channelIndex].isSoloed
     }
-    
+
     @MainActor
     private func updateVULevelsTick() {
-        var newLevels = [Float](repeating: 0, count: 4)
-        for i in 0..<4 {
+        let count = min(channelCount, Self.maxChannels)
+        var newLevels = [Float](repeating: 0, count: count)
+        for i in 0..<count {
             let rawPeak = self.peakLevelsPointer[i]
-            let prev = self.vuLevels[i]
+            let prev = i < self.vuLevels.count ? self.vuLevels[i] : 0
             let attack: Float = 0.35
             let release: Float = 0.08
-            
+
             let factor = rawPeak > prev ? attack : release
             newLevels[i] = prev + (rawPeak - prev) * factor
-            
+
             // Reset raw peak in the C-pointer
             self.peakLevelsPointer[i] = 0.0
         }
         self.vuLevels = newLevels
-        
+
         // Update true channel waveforms from channelWavesPointer
-        var newWaves = self.channelWaveforms
-        for i in 0..<4 {
-            var wave = [Float](repeating: 0.0, count: 32)
+        var newWaves = (0..<count).map { _ in [Float](repeating: 0.0, count: 32) }
+        for i in 0..<count {
             for j in 0..<32 {
-                wave[j] = self.channelWavesPointer[i * 32 + j]
+                newWaves[i][j] = self.channelWavesPointer[i * 32 + j]
             }
-            newWaves[i] = wave
         }
         self.channelWaveforms = newWaves
         
@@ -457,12 +508,14 @@ public final class ModPlayerCoordinator: ObservableObject {
     private func stopVUUpdates() {
         vuUpdateTimer?.invalidate()
         vuUpdateTimer = nil
-        self.vuLevels = [0, 0, 0, 0]
+        self.vuLevels = [Float](repeating: 0, count: channelCount)
     }
     
     // MARK: - Safe Real-Time Audio Block Construction
     
-    nonisolated private static func createRenderBlock(
+    // internal statt private: ModuleRenderer (WAV-Offline-Render für Export
+    // und Quick-Look) nutzt denselben Render-Block wie die Live-Wiedergabe.
+    nonisolated static func createRenderBlock(
         state: RealtimePlaybackState,
         vuBuffer: RealtimeVUBuffer,
         waveBuffer: RealtimeWaveBuffer,
@@ -470,18 +523,24 @@ public final class ModPlayerCoordinator: ObservableObject {
         mod: Mod,
         sampleRate: Double
     ) -> @Sendable (UnsafeMutablePointer<ObjCBool>, UnsafePointer<AudioTimeStamp>, UInt32, UnsafeMutablePointer<AudioBufferList>) -> OSStatus {
+        // Kanalzahl und Mix-Gain einmalig ableiten: Mehr als 4 Kanäle würden
+        // sonst deutlich heißer in den tanh-Limiter laufen als das klassische
+        // 4-Kanal-Bild — 4/N hält die Summenlautstärke vergleichbar.
+        let channelCount = dspChannels.count
+        let mixGain: Float = channelCount > 4 ? 4.0 / Float(channelCount) : 1.0
+
         return { (isSilence, timestamp, frameCount, outputData) -> OSStatus in
             let buffers = UnsafeMutableAudioBufferListPointer(outputData)
-            
+
             guard buffers.count >= 2,
                   let leftPtr = buffers[0].mData,
                   let rightPtr = buffers[1].mData else {
                 return noErr
             }
-            
+
             let left = leftPtr.assumingMemoryBound(to: Float.self)
             let right = rightPtr.assumingMemoryBound(to: Float.self)
-            
+
             let safeFrameCount = Int(frameCount)
 
             for frame in 0..<safeFrameCount {
@@ -545,11 +604,11 @@ public final class ModPlayerCoordinator: ObservableObject {
                                             let pattern = mod.patterns[patternIndex]
                                             if state.rowIndex >= 0 && state.rowIndex < pattern.rows.count {
                                                 let row = pattern.rows[state.rowIndex]
-                                                if row.notes.count >= 4 {
-                                                    for i in 0..<4 {
+                                                if row.notes.count >= channelCount {
+                                                    for i in 0..<channelCount {
                                                         let note = row.notes[i]
                                                         let ch = dspChannels[i]
-                                                        
+
                                                         // Jumps and breaks check
                                                         if note.hasEffect && note.effectId == 0x0B {
                                                             state.positionJump = note.effectData
@@ -586,8 +645,22 @@ public final class ModPlayerCoordinator: ObservableObject {
                                                                 // Update output clock speed
                                                                 state.outputsPerTick = sampleRate * 60.0 / (Double(note.effectData) * 24.0)
                                                             }
+                                                        } else if note.hasEffect && note.effectId == ModuleEffect.setSpeed {
+                                                            // S3M Axx: Ticks pro Zeile, volle 1..255.
+                                                            if note.effectData > 0 {
+                                                                state.ticksPerRow = note.effectData
+                                                            }
+                                                        } else if note.hasEffect && note.effectId == ModuleEffect.setTempo {
+                                                            // S3M Txx: BPM ab 32 (kleinere Werte sind
+                                                            // Tempo-Slides, die wir nicht unterstützen).
+                                                            if note.effectData >= 32 {
+                                                                state.bpm = note.effectData
+                                                                state.outputsPerTick = sampleRate * 60.0 / (Double(note.effectData) * 24.0)
+                                                            }
+                                                        } else if note.hasEffect && note.effectId == ModuleEffect.globalVolume {
+                                                            state.globalVolume = Float(min(64, max(0, note.effectData)))
                                                         }
-                                                        
+
                                                         ch.playNote(note, instruments: mod.instruments)
                                                     }
                                                 }
@@ -598,58 +671,62 @@ public final class ModPlayerCoordinator: ObservableObject {
                     }
                     
                     // Tick-Effekte
-                    let clockRate = state.palClock ? 3546894.6 : 3579545.25
-                    for i in 0..<4 {
+                    let clockRate = state.clockRateOverride > 0
+                        ? state.clockRateOverride
+                        : (state.palClock ? 3546894.6 : 3579545.25)
+                    for i in 0..<channelCount {
                         dspChannels[i].performTick(tick: state.tick, sampleRate: sampleRate, clockRate: clockRate)
                     }
-                    
+
                     state.outputsUntilNextTick += state.outputsPerTick
                 }
-                
+
                 state.outputsUntilNextTick -= 1.0
                 state.elapsedFrames += 1
-                
+
                 // Mischen der Kanäle
                 var outL: Float = 0.0
                 var outR: Float = 0.0
-                
+
                 let hasSolo = dspChannels.contains(where: { $0.isSoloed })
-                
+                // Globale Lautstärke (S3M Vxx) wirkt auf alle Kanäle gleich.
+                let globalGain = state.globalVolume / 64.0
+
                 // Roll the wave sample write index
                 state.waveWriteIndex = (state.waveWriteIndex + 1) % 32
                 let wIdx = state.waveWriteIndex
-                
-                for i in 0..<4 {
+
+                for i in 0..<channelCount {
                     let ch = dspChannels[i]
                     let outputSample = Self.renderChannelSample(
                         channel: ch,
                         useInterpolation: state.useInterpolation
-                    )
-                    
+                    ) * globalGain
+
                     // Mute / Solo logic
                     var isChannelMuted = ch.isMuted
                     if hasSolo && !ch.isSoloed {
                         isChannelMuted = true
                     }
-                    
+
                     if isChannelMuted {
                         waveBuffer.channelWavesPointer[i * 32 + wIdx] = 0.0
                         continue
                     }
-                    
+
                     // Write to channel waves buffer (Thread-safe, preallocated)
                     waveBuffer.channelWavesPointer[i * 32 + wIdx] = outputSample
-                    
+
                     // Panning LRRL mit Separation
                     let p = ch.panning
                     let separation = state.stereoSeparation
                     let pEffective = max(0.0, min(1.0, 0.5 + (p - 0.5) * separation))
                     let lGain = 1.0 - pEffective
                     let rGain = pEffective
-                    
-                    outL += outputSample * lGain
-                    outR += outputSample * rGain
-                    
+
+                    outL += outputSample * lGain * mixGain
+                    outR += outputSample * rGain * mixGain
+
                     // Peak-Level
                     let absVal = abs(outputSample)
                     if absVal > vuBuffer.pointer[i] {
@@ -675,22 +752,54 @@ public final class ModPlayerCoordinator: ObservableObject {
     
     public func previewInstrument(index: Int) {
         guard let mod = activeMod, index >= 1 && index < mod.instruments.count, let inst = mod.instruments[index], inst.bytes.count > 0 else { return }
-        
-        // Trigger preview on Channel 4
-        let ch = channels[3]
+
+        // Preview auf dem letzten Kanal antriggern
+        guard let ch = channels.last else { return }
         ch.reset()
+        Self.configure(channels: [ch], for: mod)
         ch.instrument = inst
         ch.volume = Float(inst.volume)
         ch.currentVolume = Float(inst.volume)
-        
-        // C-3 note period = 214
-        let finetune = Float(inst.finetune)
-        ch.period = 214.0 - finetune
+
+        if mod.format == .s3m {
+            // C-4 im ST3-Periodenmodell (Key 48) mit Instrument-C2Spd.
+            ch.period = DSPChannel.s3mPeriod(key: 48, c2spd: inst.c2spd)
+        } else {
+            // C-3 note period = 214
+            let finetune = Float(inst.finetune)
+            ch.period = 214.0 - finetune
+        }
         ch.currentPeriod = ch.period
         ch.sampleIndex = 0.0
         ch.playing = true
     }
     
+    // Frisch konfigurierte Offline-Render-Kanäle für ein Modul (Panning +
+    // Format-Modell), z.B. für WAV-Export, Render-Probe und Quick-Look.
+    nonisolated static func makeRenderChannels(for mod: Mod) -> [DSPChannel] {
+        let count = max(1, min(Self.maxChannels, mod.channelCount))
+        let renderChannels = (1...count).map { DSPChannel(index: $0) }
+        configure(channels: renderChannels, for: mod)
+        return renderChannels
+    }
+
+    // Startzustand des Sequencers für ein Modul (Header-Tempo, Global Volume,
+    // S3M-Clock). position/-rowIndex/-tick stehen so, dass der erste Frame
+    // sofort Zeile 0 lädt.
+    nonisolated static func makeRenderState(for mod: Mod, sampleRate: Double) -> RealtimePlaybackState {
+        let state = RealtimePlaybackState()
+        state.position = -1
+        state.rowIndex = 63
+        state.tick = mod.initialSpeed - 1
+        state.ticksPerRow = mod.initialSpeed
+        state.bpm = mod.initialTempo
+        state.outputsPerTick = sampleRate * 60.0 / (Double(mod.initialTempo) * 24.0)
+        state.outputsUntilNextTick = 0.0
+        state.globalVolume = Float(mod.initialGlobalVolume)
+        state.clockRateOverride = mod.format == .s3m ? 14317056.0 : 0
+        return state
+    }
+
     nonisolated public func exportActiveModToWav(
         mod: Mod,
         stereoSeparation: Float,
@@ -706,28 +815,22 @@ public final class ModPlayerCoordinator: ObservableObject {
         
         try? FileManager.default.removeItem(at: destinationURL)
         let audioFile = try AVAudioFile(forWriting: destinationURL, settings: stereoFormat.settings)
-        
-        let renderChannels = [DSPChannel(index: 1), DSPChannel(index: 2), DSPChannel(index: 3), DSPChannel(index: 4)]
-        let state = RealtimePlaybackState()
-        state.position = -1
-        state.rowIndex = 63
-        state.tick = 5
-        state.ticksPerRow = 6
-        state.bpm = 125
-        state.outputsPerTick = sampleRate * 60.0 / (125.0 * 24.0)
-        state.outputsUntilNextTick = 0.0
+
+        let renderChannels = Self.makeRenderChannels(for: mod)
+        let state = Self.makeRenderState(for: mod, sampleRate: sampleRate)
         state.stereoSeparation = stereoSeparation
         state.useInterpolation = useInterpolation
         state.palClock = palClock
-        
-        let dummyPeaks = UnsafeMutablePointer<Float>.allocate(capacity: 4)
+
+        let channelCount = renderChannels.count
+        let dummyPeaks = UnsafeMutablePointer<Float>.allocate(capacity: channelCount)
         defer { dummyPeaks.deallocate() }
-        for j in 0..<4 { dummyPeaks[j] = 0.0 }
+        for j in 0..<channelCount { dummyPeaks[j] = 0.0 }
         let vuBuffer = RealtimeVUBuffer(pointer: dummyPeaks)
-        
-        let dummyWaves = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+
+        let dummyWaves = UnsafeMutablePointer<Float>.allocate(capacity: channelCount * 32)
         defer { dummyWaves.deallocate() }
-        for j in 0..<128 { dummyWaves[j] = 0.0 }
+        for j in 0..<(channelCount * 32) { dummyWaves[j] = 0.0 }
         let dummyMasterWaves = UnsafeMutablePointer<Float>.allocate(capacity: 128)
         defer { dummyMasterWaves.deallocate() }
         for j in 0..<128 { dummyMasterWaves[j] = 0.0 }
@@ -776,15 +879,9 @@ public final class ModPlayerCoordinator: ObservableObject {
         durationSeconds: Double,
         sampleRate: Double = 44100.0
     ) -> [RenderProbeSample] {
-        let renderChannels = [DSPChannel(index: 1), DSPChannel(index: 2), DSPChannel(index: 3), DSPChannel(index: 4)]
-        let state = RealtimePlaybackState()
-        state.position = -1
-        state.rowIndex = 63
-        state.tick = 5
-        state.ticksPerRow = 6
-        state.bpm = 125
-        state.outputsPerTick = sampleRate * 60.0 / (125.0 * 24.0)
-        state.outputsUntilNextTick = 0.0
+        let renderChannels = Self.makeRenderChannels(for: mod)
+        let channelCount = renderChannels.count
+        let state = Self.makeRenderState(for: mod, sampleRate: sampleRate)
         state.stereoSeparation = 0.8
         state.useInterpolation = true
         state.palClock = true
@@ -810,8 +907,10 @@ public final class ModPlayerCoordinator: ObservableObject {
                     }
                 }
 
-                let clockRate = state.palClock ? 3546894.6 : 3579545.25
-                for i in 0..<4 {
+                let clockRate = state.clockRateOverride > 0
+                    ? state.clockRateOverride
+                    : (state.palClock ? 3546894.6 : 3579545.25)
+                for i in 0..<channelCount {
                     renderChannels[i].performTick(tick: state.tick, sampleRate: sampleRate, clockRate: clockRate)
                 }
                 state.outputsUntilNextTick += state.outputsPerTick
@@ -820,8 +919,8 @@ public final class ModPlayerCoordinator: ObservableObject {
             state.outputsUntilNextTick -= 1.0
             state.elapsedFrames += 1
 
-            var channelOutputs = [Float](repeating: 0, count: 4)
-            for i in 0..<4 {
+            var channelOutputs = [Float](repeating: 0, count: channelCount)
+            for i in 0..<channelCount {
                 channelOutputs[i] = Self.renderChannelSample(channel: renderChannels[i], useInterpolation: state.useInterpolation)
             }
 
@@ -878,9 +977,10 @@ public final class ModPlayerCoordinator: ObservableObject {
         let pattern = mod.patterns[patternIndex]
         guard state.rowIndex >= 0 && state.rowIndex < pattern.rows.count else { return }
         let row = pattern.rows[state.rowIndex]
-        guard row.notes.count >= 4 else { return }
+        let channelCount = channels.count
+        guard row.notes.count >= channelCount else { return }
 
-        for i in 0..<4 {
+        for i in 0..<channelCount {
             let note = row.notes[i]
             let ch = channels[i]
 
@@ -914,6 +1014,17 @@ public final class ModPlayerCoordinator: ObservableObject {
                     state.bpm = note.effectData
                     state.outputsPerTick = sampleRate * 60.0 / (Double(note.effectData) * 24.0)
                 }
+            } else if note.hasEffect && note.effectId == ModuleEffect.setSpeed {
+                if note.effectData > 0 {
+                    state.ticksPerRow = note.effectData
+                }
+            } else if note.hasEffect && note.effectId == ModuleEffect.setTempo {
+                if note.effectData >= 32 {
+                    state.bpm = note.effectData
+                    state.outputsPerTick = sampleRate * 60.0 / (Double(note.effectData) * 24.0)
+                }
+            } else if note.hasEffect && note.effectId == ModuleEffect.globalVolume {
+                state.globalVolume = Float(min(64, max(0, note.effectData)))
             }
 
             ch.playNote(note, instruments: mod.instruments)

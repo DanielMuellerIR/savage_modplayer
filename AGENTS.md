@@ -6,9 +6,26 @@ Diese Datei ist die zentrale Projektdokumentation. Sie beschreibt die Architektu
 
 ## Projektüberblick
 
-Der **Savage Protracker Player** ist ein plattformübergreifender 4-Kanal-Amiga-ProTracker-MOD-Player. Er ist als direktes Gegenstück zum **Vicious SID Player** konzipiert und besteht aus zwei Implementierungen:
-1. **HTML5-Variante**: Ein kompakter (unter 40 KB minifizierter) Single-File-Browser-Player (`savage-protracker-player.html`), der ohne Webserver direkt aus dem Dateisystem per Doppelklick gestartet werden kann.
+Der **Savage Protracker Player** ist ein plattformübergreifender Amiga-/Tracker-Modul-Player. Er ist als direktes Gegenstück zum **Vicious SID Player** konzipiert und besteht aus zwei Implementierungen:
+1. **HTML5-Variante**: Ein kompakter (unter 40 KB minifizierter) Single-File-Browser-Player (`savage-protracker-player.html`), der ohne Webserver direkt aus dem Dateisystem per Doppelklick gestartet werden kann. Bewusst auf klassische 4-Kanal-ProTracker-MODs beschränkt (Kompaktheit).
 2. **Swift-Variante**: Eine native, hochperformante macOS- & iOS-Anwendung (`Savage Protracker Player.app`), implementiert in SwiftUI und `AVAudioEngine`/`AVAudioSourceNode` für eine ressourcenschonende und latenzfreie Wiedergabe.
+
+### Unterstützte Formate (Stand 1.3.0)
+
+| Format | HTML5 | Swift + Quick Look |
+|---|---|---|
+| ProTracker MOD (M.K., M!K!, FLT4, 4CHN) | ✅ | ✅ |
+| Multichannel-MOD (xCHN 2-9, xxCH 10-32, CD81/OKTA/OCTA, FLT8-Pattern-Paare) | ❌ | ✅ |
+| Ur-Soundtracker (15 Instrumente, ohne Signatur, per Struktur-Heuristik) | ❌ | ✅ |
+| ScreamTracker 3 (S3M, bis 32 PCM-Kanäle) | ❌ | ✅ |
+
+Format-Dispatch am Dateiinhalt: `ModuleLoader.parse(data:)` (SCRM-Header → `S3MParser`, sonst `ModParser`).
+
+**S3M — bewusste Vereinfachungen** (nur exotische Module betroffen): AdLib-Instrumente stumm, Stereo-Samples nur linker Kanal, 16-Bit-Samples auf 8 Bit reduziert (High-Byte), Qxy ohne Volume-Modifier, kein Tempo-Slide (Txx mit x<2), keine ST3.00-„Fast Volume Slides".
+
+### Quick-Look-Plugin
+
+`quicklook/PreviewProvider.swift` + Appex-Bau in `build_app.sh` (swiftc kompiliert Core-Quellen + Provider zu EINEM Modul, Linker-Entry `_NSExtensionMain`; SwiftPM kann keine .appex bauen). Datenbasierte Preview (`QLIsDataBasedPreview`): Modul wird via `ModuleRenderer.renderWavData` offline zu WAV gerendert, Quick Look zeigt den nativen macOS-Audio-Player (Play/Scrubbing im Finder per Leertaste). Der Appex MUSS sandboxed signiert werden (Entitlements in `quicklook/`, Signier-Reihenfolge: erst Appex MIT Entitlements, dann App OHNE `--deep`). Die App-Info.plist deklariert UTIs für .mod/.s3m; zusätzlich claimt der Appex `org.videolan.mod`/`org.videolan.s3m`, weil VLCs exportierte UTIs sonst gewinnen.
 
 ---
 
@@ -60,10 +77,11 @@ p_savage_protracker/
 - **UI (`src/`)**: Vanilla JS und CSS, orientiert am Amiga-Workbench-1.3-Look und einem modernen "Cyber Charcoal"-Farbschema.
 
 ### 2. Swift-Variante
-- **Parser (`SavageProtrackerPlayerCore/Parser/`)**: Reines Swift, parst `.mod`-Dateien in typsichere Werttypen (`struct`).
-- **DSP / Synthesizer (`SavageProtrackerPlayerCore/DSP/`)**: Verwendet `AVAudioSourceNode` innerhalb von `AVAudioEngine`. Läuft direkt auf dem Core Audio Echtzeit-Thread.
+- **Parser (`SavageProtrackerPlayerCore/Parser/`)**: Reines Swift, parst `.mod`-Varianten (`ModParser`) und `.s3m` (`S3MParser`) in typsichere Werttypen (`struct`); Einstieg ist `ModuleLoader`. S3M-Noten liegen als Halbton-Keys (`Note.key`) vor, S3M-Effekte werden auf ProTracker-IDs bzw. `ModuleEffect.*`-IDs (>= 0x100) übersetzt.
+- **DSP / Synthesizer (`SavageProtrackerPlayerCore/DSP/`)**: Verwendet `AVAudioSourceNode` innerhalb von `AVAudioEngine`. Läuft direkt auf dem Core Audio Echtzeit-Thread. Kanalzahl dynamisch (bis 32, vorallozierte Puffer); Frequenzmodell pro Modul: Amiga-Paula-Perioden (MOD) oder ST3-Perioden mit C2Spd + 14,3-MHz-Clock (`DSPChannel.s3mMode`).
   - *Wichtig*: Keine Heap-Alloziierungen, Sperren oder dynamische Objective-C-Aufrufe im Render-Block!
-- **UI (`SavageProtrackerPlayerApp/UI/`)**: Deklaratives SwiftUI. Enthält zentrierende Tracker-Zeilen-Tabellen, Visualizer und CRT-Effekt-Filter.
+- **Offline-Renderer (`ModuleRenderer`)**: rendert Module mit demselben Render-Block zu WAV-Daten (Quick Look, Tests).
+- **UI (`SavageProtrackerPlayerApp/UI/`)**: Deklaratives SwiftUI. Enthält zentrierende Tracker-Zeilen-Tabellen (dynamische Spaltenzahl, horizontales Scrollen ab 5 Kanälen), Visualizer und CRT-Effekt-Filter.
 
 ---
 
@@ -102,8 +120,10 @@ p_savage_protracker/
 - **Swift-RType-Langsample**: Nach DSP-Änderungen `swift test --filter ModParserTests/testRTypeFourthChannelSampleSurvivesPastRow16` ausführen. Der Test lädt `audio/Rtype.mod`; Pattern 0 Row 16 Kanal 4 muss auch viele Rows später noch hörbar rendern.
 - **DSP-Timing & Amplitude**: `swift test --filter DSPChannelTimingTests` — Porta/Vibrato/Tremolo nur auf Tick > 0, ProTracker-Sinustabelle-Amplitude (depth*255/128 bzw. /64), Arpeggio-Zyklus, 9xx-Offset-Memory. Hardware-frei.
 - **Sequenzierung**: `swift test --filter CoordinatorSequencingTests` — Pattern-Break-Hang (Dxx > 63), In-Range-Break-Ziel, hardware-freier Demo-Render-Smoke. Läuft ohne `audio/` und ohne Audio-Gerät.
-- **JS↔Swift-Parität (headless)**: `node Tests/js/worklet-timing.mjs` — prüft, dass die Browser-Worklet-DSP dieselben Tick-/Amplituden-/Offset-Werte liefert wie `DSPChannel.swift`. Nach jeder DSP-Änderung in EINER Variante beide angleichen (siehe Synchronisierungsregel oben).
-- **Native App-Build**: Nach jedem Swift-Fix zusätzlich `./build_app.sh` ausführen, nicht nur `swift build`.
+- **JS↔Swift-Parität (headless)**: `node Tests/js/worklet-timing.mjs` — prüft, dass die Browser-Worklet-DSP dieselben Tick-/Amplituden-/Offset-Werte liefert wie `DSPChannel.swift`. Nach jeder DSP-Änderung in EINER Variante beide angleichen (siehe Synchronisierungsregel oben). Die Parität gilt für den gemeinsamen 4-Kanal-MOD-Kern; Multichannel/S3M sind Swift-only.
+- **Multiformat**: `swift test --filter MultiFormatTests` — Multichannel-MOD (6CHN/8CHN/xxCH/FLT8), Soundtracker-15-Heuristik, S3M-Parsing (synthetisch + echte Dateien aus `audio/`), S3M-DSP (Perioden, Slides mit Memory, Tremor, Fine-Porta) und WAV-Offline-Render (RIFF-Validität, Nicht-Stille).
+- **Native App-Build**: Nach jedem Swift-Fix zusätzlich `./build_app.sh` ausführen, nicht nur `swift build` (baut auch die Quick-Look-Extension).
+- **Quick Look (manuell)**: Nach App-Build/-Installation im Finder Leertaste auf einer `.mod`/`.s3m` — Audio-Player-Preview muss erscheinen und abspielen. Headless nur teilverifizierbar (Appex-Registrierung via `pluginkit -m -p com.apple.quicklook.preview`).
 
 - [x] **Todo 24**: GitHub-Auftritt mit README-Icon und Social-Preview-Bild aus dem App-Icon aufwerten
 
@@ -116,4 +136,12 @@ Intensiver Bug-/Verbesserungs-Audit beider Varianten. Umgesetzt (je mit Test):
 - **UI**: tote Menü-/Tastaturbefehle angeschlossen; Leer-Mod-Crash-Guard; Timer-Leak ersetzt; Lautstärke ab Start korrekt; Theme/loopMode/volume persistent; Recent-Songs-Temp-URLs stabil; Datei-I/O vom Main-Thread genommen; loopMode-Default jetzt `.playlist`.
 - **Build**: Minifier verschmilzt `+ +` nicht mehr zu `++`.
 
-Bewusst NICHT umgesetzt: „Vibrato/Tremolo-Offset bei Effekt-Ende zurücksetzen" (hätte Slide-Persistenz und ECx-Note-Cut zerschossen). Offen/optional: echte Multichannel-Unterstützung (6/8 Kanäle), Anti-Click-Hüllkurve, JS-Sample-Interpolation als Hi-Fi-Option, VU-Tick-Allokationen reduzieren.
+Bewusst NICHT umgesetzt: „Vibrato/Tremolo-Offset bei Effekt-Ende zurücksetzen" (hätte Slide-Persistenz und ECx-Note-Cut zerschossen). Offen/optional: Anti-Click-Hüllkurve, JS-Sample-Interpolation als Hi-Fi-Option, VU-Tick-Allokationen reduzieren.
+
+## Multiformat-Ausbau 2026-07-02 (Release 1.3.0)
+
+Swift-Variante um weitere Tracker-Formate + Quick-Look-Plugin erweitert (Details oben unter „Unterstützte Formate" und „Quick-Look-Plugin"):
+- **Parser**: Multichannel-MOD (xCHN/xxCH/CD81/OKTA, FLT8 als Pattern-Paare), Ur-Soundtracker-15-Heuristik (strenge Struktur-Checks gegen False-Positives; Repeat-Offset dort in Bytes statt Words), neuer `S3MParser` (Order-Filterung 254/255 mit Bxx-Remap, gepackte Patterns, unsigned→signed Samples).
+- **Engine**: Kanäle dynamisch bis 32 (Puffer vorher fix 4), ST3-Periodenmodell pro Kanal konfigurierbar, S3M-Effekte (geteiltes Effekt-Memory D/E/F/I, Fine-/Extra-Fine-Porta, Tremor, Fine-Vibrato, Global Volume, Set Speed/Tempo als eigene interne IDs), Mix-Gain 4/N ab 5 Kanälen, Initial-Tempo/-Speed/-GlobalVolume aus dem Modul-Header.
+- **Erledigt damit**: das frühere Deferred-Item „echte Multichannel-Unterstützung (6/8 Kanäle)".
+- **Offen/optional**: S3M-Volume-Column im Tracker-Grid anzeigen; XM/IT bewusst NICHT geplant (eigene Instrument-Engine nötig).
