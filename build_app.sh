@@ -141,6 +141,9 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
     <string>$APP_VERSION</string>
     <key>CFBundleVersion</key>
     <string>$APP_VERSION</string>
+    <!-- Erscheint unten im nativen "Über"-Panel -->
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 Daniel Müller</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>

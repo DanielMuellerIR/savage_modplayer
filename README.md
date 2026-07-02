@@ -60,11 +60,41 @@ If no preview appears:
 - **Multiple themes**:
   - **Dark**: graphite/black palette with good contrast and muted accent colors.
   - **Light**: a classic, bright macOS-like style with sober contrast.
-- **PAL & NTSC clocks**: switchable Paula clocking (7.09 MHz PAL vs. 7.16 MHz NTSC).
+- **PAL & NTSC clocks**: switchable Paula clocking (3.546 MHz PAL vs. 3.580 MHz NTSC).
 - **Volume & stereo separation**: psychoacoustic (quadratic) volume scaling and adjustable stereo separation (bleed from 0% mono to 100% hard panning).
 - **Hi-fi resampling**: switchable linearly interpolated sample playback for a smoother sound (can be disabled for the original 8-bit crunch).
 - **WAV & stem export**: export the entire song to a stereo WAV file, or export individual instrument samples as WAV.
 - **Full keyboard control**: space bar for play/pause, left/right arrows for song positions, up/down arrows to switch songs in the playlist.
+
+---
+
+## Controls & display explained
+
+The transport buttons speak for themselves, but the tracker-specific readouts and toggles carry a bit of Amiga history. Every item below is also available as a **tooltip in the app** — hover over a control and wait a moment for the explanation to appear. Since tooltips take a few seconds to show and are easy to miss, they are collected here as well.
+
+**Header readouts**
+
+- **BPM** (beats per minute): playback tempo. The Amiga standard is 125. Adjustable with −/+; a song can also change its own tempo via effects. Switching songs sets the new module's header value.
+- **SPD** (speed): ticks per pattern row (Amiga standard 6). Lower = rows advance faster, higher = slower. Together with BPM this sets the effective speed.
+- **PAT** (pattern position): the current pattern and the total in the song's play order. A pattern is a block of notes (usually 64 rows); the song plays them in this sequence.
+
+**Clock**
+
+- **PAL** (3.546 MHz Paula clock): as on European Amigas — the reference pitch and speed for most modules.
+- **NTSC** (3.580 MHz Paula clock): as on US Amigas — modules sound slightly higher and run a little faster than with PAL.
+
+**Sound options**
+
+- **LED filter**: the Amiga's switchable low-pass filter at ~3.2 kHz that rolls off the highs — the duller original sound, as when the power LED was lit on a real Amiga.
+- **Hi-Fi interpolation**: smooths samples during resampling (softer sound). Turned off it sounds like the original hardware — raw 8-bit audio with audible aliasing.
+- **Stereo separation**: 100% = hard Amiga panning (channels fully left/right), 0% = mono. In between, crosstalk is blended in to reduce headphone fatigue. Most audible on headphones; barely noticeable on laptop speakers.
+- **Loop mode**: what happens when the song ends — continue the playlist, repeat the song, or stop.
+
+**Transport & navigation**
+
+- **Shuffle**: when on, track changes and song ends jump randomly through the playlist; when off, the playlist plays in order.
+- **−15 s / +30 s**: skip backward/forward (row-accurate; approximate across tempo changes).
+- **Position slider**: pick a spot in the song — also works while stopped, in which case Play starts from there.
 
 ---
 
@@ -171,11 +201,6 @@ TypeScript/AudioWorklet implementation (`AmiModPanel` / `utils/modplayer`, no
 HTML player and additionally ported to a native Swift engine built on
 `AVAudioSourceNode`. Bundled MOD files are not part of this repository.
 
-## AI assistance
-
-AI-assisted pair programming was used as a tool during implementation, porting,
-and debugging. The author and maintainer is Daniel Müller.
-
 ## License
 
-**MIT license** — see [LICENSE](LICENSE).
+**WTFPL** (Do What The Fuck You Want To Public License) — see [LICENSE](LICENSE).

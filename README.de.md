@@ -60,11 +60,41 @@ Falls keine Vorschau erscheint:
 - **Multi-Theme**:
   - **Dark**: Graphit-/Schwarzpalette mit gutem Kontrast und gedämpften Akzentfarben.
   - **Light**: klassischer, heller macOS-naher Stil mit nüchternem Kontrast.
-- **PAL- & NTSC-Taktfrequenzen**: Umschaltbare Paula-Taktung (7,09 MHz PAL vs. 7,16 MHz NTSC).
+- **PAL- & NTSC-Taktfrequenzen**: Umschaltbare Paula-Taktung (3,546 MHz PAL vs. 3,580 MHz NTSC).
 - **Lautstärke & Stereo-Separation**: Psychoakustische (quadratische) Lautstärkeskalierung und einstellbare Stereo-Separation (Bleed von 0% Mono bis 100% Hard-Panning).
 - **Hi-Fi Resampling**: Umschaltbares linear-interpoliertes Sample-Playback für weicheren Sound (deaktivierbar für originalen 8-Bit-Crunch).
 - **WAV- & Stem-Export**: Export des gesamten Songs in eine Stereo-WAV-Datei sowie Export einzelner Instrumentensamples als WAV.
 - **Komplette Tastatursteuerung**: Leertaste für Play/Pause, Pfeiltasten links/rechts für Song-Positionen, Pfeiltasten oben/unten für Song-Wechsel in der Playlist.
+
+---
+
+## Bedienelemente & Anzeigen erklärt
+
+Die Transport-Tasten erklären sich von selbst, doch die tracker-typischen Anzeigen und Schalter tragen ein Stück Amiga-Geschichte in sich. Jeder Punkt hier ist in der App auch als **Tooltip** hinterlegt — einfach mit dem Mauszeiger auf einem Bedienelement verweilen, bis die Erklärung erscheint. Weil Tooltips ein paar Sekunden brauchen und leicht zu übersehen sind, sind sie hier zusätzlich gesammelt.
+
+**Kopfzeilen-Anzeigen**
+
+- **BPM** (Beats per Minute): Wiedergabe-Tempo. Der Amiga-Standard ist 125. Mit −/+ veränderbar; ein Song kann sein Tempo per Effekt auch selbst umstellen. Bei Songwechsel wird der Header-Wert des neuen Moduls gesetzt.
+- **SPD** (Speed): Ticks pro Pattern-Zeile (Amiga-Standard 6). Kleiner = die Zeilen laufen schneller durch, größer = langsamer. Zusammen mit BPM ergibt das die effektive Geschwindigkeit.
+- **PAT** (Pattern-Position): aktuelles Pattern und Gesamtzahl in der Abspielreihenfolge des Songs. Ein Pattern ist ein Notenblock (meist 64 Zeilen); der Song spielt sie in dieser Reihenfolge ab.
+
+**Taktfrequenz**
+
+- **PAL** (3,546 MHz Paula-Takt): wie bei europäischen Amigas — die Referenz-Tonhöhe und -Geschwindigkeit der meisten Module.
+- **NTSC** (3,580 MHz Paula-Takt): wie bei US-Amigas — Module klingen minimal höher und laufen etwas schneller als mit PAL.
+
+**Klang-Optionen**
+
+- **LED-Filter**: der zuschaltbare Amiga-Tiefpass bei ~3,2 kHz, der die Höhen kappt — der dumpfere Originalklang, wie wenn am echten Amiga die Power-LED leuchtete.
+- **Hi-Fi-Interpolation**: glättet die Samples beim Resampling (weicherer Klang). Ausgeschaltet klingt es wie die Original-Hardware — roher 8-Bit-Sound mit hörbarem Aliasing.
+- **Stereo-Separation**: 100 % = hartes Amiga-Panning (Kanäle ganz links/rechts), 0 % = Mono. Dazwischen wird Übersprechen beigemischt, das Kopfhörer-Ermüdung vermeidet. Am deutlichsten mit Kopfhörern hörbar; über Laptop-Lautsprecher kaum.
+- **Loop-Modus**: was nach dem Songende passiert — Playlist fortsetzen, den Song wiederholen oder stoppen.
+
+**Transport & Navigation**
+
+- **Shuffle** (Zufallswiedergabe): eingeschaltet springen Titelwechsel und Songende zufällig durch die Playlist; ausgeschaltet spielt die Playlist der Reihe nach.
+- **−15 s / +30 s**: zurück-/vorspringen (zeilengenau; bei Tempo-Wechseln näherungsweise).
+- **Positions-Schieberegler**: eine Stelle im Song wählen — funktioniert auch bei gestoppter Wiedergabe: Play startet dann ab dieser Stelle.
 
 ---
 
@@ -170,11 +200,6 @@ Single-File-HTML-Player herausgelöst und zusätzlich als native Swift-Engine mi
 `AVAudioSourceNode` portiert. Mitgelieferte MOD-Dateien sind nicht Teil dieses
 Repositories.
 
-## KI-Unterstützung
-
-Bei Umsetzung, Portierung und Fehlersuche wurde KI-gestütztes Pair-Programming
-als Werkzeug genutzt. Autor und Maintainer ist Daniel Müller.
-
 ## Lizenz
 
-**MIT-Lizenz** — siehe [LICENSE](LICENSE).
+**WTFPL** (Do What The Fuck You Want To Public License) — siehe [LICENSE](LICENSE).

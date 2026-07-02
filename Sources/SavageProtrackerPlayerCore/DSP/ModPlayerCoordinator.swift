@@ -204,10 +204,19 @@ public final class ModPlayerCoordinator: ObservableObject {
         channelWavesPointer.deallocate()
     }
     
-    public func setMod(_ mod: Mod) {
+    // fallbackName: Anzeigename (i. d. R. der Dateiname), der genutzt wird, wenn
+    // das Modul selbst keinen brauchbaren Titel im Header traegt. Viele Module —
+    // gerade aus der Demoscene — haben ein leeres Titelfeld; frueher stand dann
+    // stumpf "Unbekannter Track" oben. Der Dateiname ist fuer den Nutzer weit
+    // aussagekraeftiger.
+    public func setMod(_ mod: Mod, fallbackName: String? = nil) {
         stop()
         self.activeMod = mod
-        self.trackName = mod.name.isEmpty ? "Unbekannter Track" : mod.name
+        // Header-Titel um Leerraum bereinigen; nur ein echter, nicht-leerer Titel
+        // gewinnt, sonst der Dateiname-Fallback (und erst zuletzt der Default).
+        let headerTitle = mod.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.trackName = !headerTitle.isEmpty ? headerTitle
+            : (fallbackName?.isEmpty == false ? fallbackName! : "Unbekannter Track")
 
         // Kanal-Setup passend zum Modul neu aufbauen (4 bei MOD, N bei S3M).
         let count = max(1, min(Self.maxChannels, mod.channelCount))
@@ -277,10 +286,16 @@ public final class ModPlayerCoordinator: ObservableObject {
         let state = RealtimePlaybackState()
         state.position = -1
         state.rowIndex = 63
-        state.tick = mod.initialSpeed - 1
-        state.ticksPerRow = mod.initialSpeed
-        state.bpm = mod.initialTempo
-        state.outputsPerTick = sampleRate * 60.0 / (Double(mod.initialTempo) * 24.0)
+        // Start-Tempo aus den aktuellen Coordinator-Werten (self.bpm/self.speed)
+        // statt stur aus dem Modul-Header: setMod() setzt beide beim Songwechsel
+        // ohnehin auf die Header-Werte, aber eine im gestoppten Zustand per
+        // Stepper gewaehlte Aenderung bleibt so erhalten und wird beim Play nicht
+        // sofort wieder ueberschrieben. Song-eigene Tempo-Effekte (Fxx) greifen
+        // waehrend der Wiedergabe weiterhin.
+        state.tick = self.speed - 1
+        state.ticksPerRow = self.speed
+        state.bpm = self.bpm
+        state.outputsPerTick = sampleRate * 60.0 / (Double(self.bpm) * 24.0)
         state.outputsUntilNextTick = 0.0
         state.positionJump = -1
         state.patternBreak = -1

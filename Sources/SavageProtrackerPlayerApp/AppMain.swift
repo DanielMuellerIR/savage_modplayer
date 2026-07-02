@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 @main
 struct SavageProtrackerPlayerApp: App {
@@ -11,6 +14,26 @@ struct SavageProtrackerPlayerApp: App {
         }
         .commands {
             #if os(macOS)
+            // Standard-"Über"-Eintrag im App-Menü durch einen eigenen ersetzen,
+            // damit der native macOS-About-Panel Autor und Lizenz zeigt (Icon,
+            // Name und Version kommen automatisch aus dem Bundle). Der verspielte
+            // Guru-Meditation-Screen bleibt zusätzlich über den ⓘ-Button erhalten.
+            CommandGroup(replacing: .appInfo) {
+                Button("Über Savage Protracker Player") {
+                    let credits = NSAttributedString(
+                        string: "Entwickelt von Daniel Müller.\n\n"
+                            + "ProTracker-/Paula-Engine: Eigenentwicklung (kein libopenmpt), "
+                            + "aus dem Schwesterprojekt FraktalLab nach Swift portiert.\n\n"
+                            + "Lizenz: WTFPL (Do What The Fuck You Want To Public License).\n",
+                        attributes: [
+                            .font: NSFont.systemFont(ofSize: 11),
+                            .foregroundColor: NSColor.labelColor
+                        ]
+                    )
+                    NSApplication.shared.orderFrontStandardAboutPanel(options: [.credits: credits])
+                }
+            }
+
             CommandMenu("Wiedergabe") {
                 Button("Abspielen / Pause") {
                     NotificationCenter.default.post(name: NSNotification.Name("menuPlayStop"), object: nil)
