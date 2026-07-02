@@ -41,6 +41,9 @@ struct MainView: View {
     // fuer einen Playlist-Player das erwartete Verhalten (frueher lief der loopMode
     // ins Leere und der Renderblock wiederholte denselben Song endlos).
     @AppStorage("savage.loopMode") private var loopMode: LoopMode = .playlist
+    // Shuffle: Titel-Wechsel (weiter/zurueck/Songende) springt zufaellig statt
+    // sequenziell durch die Playlist. Ueberlebt App-Neustarts.
+    @AppStorage("savage.shuffle") private var shuffleEnabled = false
     
     // Sidebar tabs
     @State private var selectedSidebarTab: Int = 0 // 0 = Playlist, 1 = Instrumente
@@ -356,11 +359,26 @@ struct MainView: View {
         coordinator.stop()
     }
 
+    // Zufaelligen Playlist-Index liefern, der (wenn moeglich) nicht der
+    // aktuelle Titel ist.
+    private func randomPlaylistIndex() -> Int {
+        guard playlist.count > 1 else { return 0 }
+        var idx = currentPlaylistIndex
+        while idx == currentPlaylistIndex {
+            idx = Int.random(in: 0..<playlist.count)
+        }
+        return idx
+    }
+
     private func nextTrack() {
         guard !playlist.isEmpty else { return }
         // Transportzustand erhalten: setMod() in loadModFile ruft stop(), daher
         // VOR dem Wechsel merken, ob gerade aktiv (nicht pausiert) gespielt wurde.
         let wasPlaying = coordinator.isPlaying && !coordinator.isPaused
+        if shuffleEnabled {
+            selectPlaylistSong(at: randomPlaylistIndex(), autoPlay: wasPlaying)
+            return
+        }
         let nextIndex = currentPlaylistIndex + 1
         if nextIndex < playlist.count {
             selectPlaylistSong(at: nextIndex, autoPlay: wasPlaying)
@@ -372,6 +390,10 @@ struct MainView: View {
     private func prevTrack() {
         guard !playlist.isEmpty else { return }
         let wasPlaying = coordinator.isPlaying && !coordinator.isPaused
+        if shuffleEnabled {
+            selectPlaylistSong(at: randomPlaylistIndex(), autoPlay: wasPlaying)
+            return
+        }
         let prevIndex = currentPlaylistIndex - 1
         if prevIndex >= 0 {
             selectPlaylistSong(at: prevIndex, autoPlay: wasPlaying)
@@ -412,32 +434,36 @@ struct MainView: View {
                 let sorted = self.sortedByDisplayName(modFiles)
                 self.playlist = sorted
                 self.selectedSidebarTab = 0 // Playlist fokussieren
-                self.currentPlaylistIndex = 0
+
+                // Start-Titel bestimmen: ein expliziter "--autoplay <filter>"
+                // gewinnt; sonst bei aktivem Shuffle ein Zufalls-Titel, sonst
+                // der erste der (sortierten) Liste.
+                let filterIndex = Self.autoplayFilterIndex(in: sorted)
+                let startIndex = filterIndex ?? (self.shuffleEnabled ? Int.random(in: 0..<sorted.count) : 0)
+
                 // Headless-/Agent-Steuerung: "--autoplay [filter]" startet die
-                // Wiedergabe sofort (optional den ersten Titel, dessen Name den
-                // Filter enthaelt) — fuer Screenshots und Smoke-Tests ohne Klicks.
-                if let autoplayIndex = Self.autoplayIndex(in: sorted) {
-                    self.selectPlaylistSong(at: autoplayIndex, autoPlay: true)
+                // Wiedergabe sofort — fuer Screenshots und Smoke-Tests ohne Klicks.
+                if CommandLine.arguments.contains("--autoplay") {
+                    self.selectPlaylistSong(at: startIndex, autoPlay: true)
                 } else {
-                    self.loadModFile(from: sorted[0])
+                    self.currentPlaylistIndex = startIndex
+                    self.loadModFile(from: sorted[startIndex])
                 }
             }
         }
     }
 
-    // Wertet das Kommandozeilen-Argument "--autoplay [filter]" aus. Liefert den
-    // Playlist-Index des zu startenden Titels oder nil (kein Autoplay gewuenscht).
-    nonisolated private static func autoplayIndex(in urls: [URL]) -> Int? {
+    // Liefert den Playlist-Index des ersten Titels, dessen Name den optionalen
+    // "--autoplay <filter>"-Parameter enthaelt (nil ohne Filter/Treffer).
+    nonisolated private static func autoplayFilterIndex(in urls: [URL]) -> Int? {
         let args = CommandLine.arguments
         guard let flagIndex = args.firstIndex(of: "--autoplay") else { return nil }
         let next = flagIndex + 1
         if next < args.count, !args[next].hasPrefix("--") {
             let filter = args[next].lowercased()
-            if let match = urls.firstIndex(where: { $0.lastPathComponent.lowercased().contains(filter) }) {
-                return match
-            }
+            return urls.firstIndex(where: { $0.lastPathComponent.lowercased().contains(filter) })
         }
-        return 0
+        return nil
     }
 
     // Hintergrund-Worker: kopiert alle .mod-Dateien aus den gedroppten URLs (inkl.
@@ -1627,6 +1653,33 @@ struct MainView: View {
                 .cornerRadius(theme == .workbench ? 0 : 15)
                 .disabled(playlist.isEmpty)
                 .help("Nächster Titel der Playlist (⌘→ oder Pfeil rechts).")
+
+                // Shuffle-Toggle (iTunes-Symbol): zufaellige statt sequenzielle
+                // Titel-Wechsel. Aktiv = Akzentfarbe.
+                Button(action: {
+                    shuffleEnabled.toggle()
+                }) {
+                    ZStack {
+                        if theme == .cyber {
+                            Circle()
+                                .fill(shuffleEnabled ? Color.spaceAccent : Color.spaceSurface)
+                                .overlay(Circle().stroke(Color.spaceAccent.opacity(0.3), lineWidth: 1))
+                        } else {
+                            Rectangle()
+                                .fill(shuffleEnabled ? Color.amigaOrange : Color.amigaDarkBlue)
+                        }
+                        Image(systemName: "shuffle")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(shuffleEnabled ? (theme == .cyber ? .black : .white) : (theme == .workbench ? .amigaGrey : .spaceTextSecondary))
+                    }
+                    .frame(width: 30, height: 30)
+                }
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                .cornerRadius(theme == .workbench ? 0 : 15)
+                .disabled(playlist.isEmpty)
+                .help(shuffleEnabled
+                      ? "Zufallswiedergabe ist AN: Titel-Wechsel und Songende springen zufällig durch die Playlist."
+                      : "Zufallswiedergabe ist AUS: die Playlist spielt der Reihe nach.")
             }
             
             // Middle block: Progress Timeline
@@ -1754,15 +1807,22 @@ struct MainView: View {
                 )
                 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("PROTRACKER PLAYER - NATIVE APPLE SWIFT")
+                    Text("SAVAGE PROTRACKER PLAYER - NATIVE APPLE SWIFT")
                         .bold()
                         .foregroundColor(.spaceAccent)
-                    
+
                     Text("• Engine: AVAudioEngine + lock-free AVAudioSourceNode")
-                    Text("• Clock Rate: Configurable PAL PAL (7.09MHz) / NTSC (7.16MHz)")
+                    Text("• Formate: ProTracker MOD, Multichannel, Soundtracker, S3M")
+                    Text("• Clock Rate: Configurable PAL (7.09MHz) / NTSC (7.16MHz)")
                     Text("• Mixing model: Authentic Nearest or linear Interpolated (Hifi)")
                     Text("• Design: Classic Light & Graphite Dark Themes")
-                    Text("• Features: WAV audio renderer exporter, notifications & keyboard HUD")
+                    Text("• Features: Quick-Look-Plugin, WAV-Export, Media-Tasten")
+
+                    Divider().background(Color.spaceAccent.opacity(0.3))
+
+                    Text("© 2026 Daniel Müller — Autor & Maintainer")
+                        .foregroundColor(.spaceAccentGlow)
+                    Text("MIT-Lizenz — Quellcode: github.com/DanielMuellerIR/savage_protracker")
                 }
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.white)
