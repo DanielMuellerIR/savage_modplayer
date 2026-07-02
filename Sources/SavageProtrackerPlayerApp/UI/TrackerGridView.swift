@@ -11,19 +11,15 @@ struct TrackerRowView: View {
     let fixedCellWidth: CGFloat?
     // S3M-Patterns haben eine eigene Volume-Column; bei MOD bleibt sie weg.
     let showVolume: Bool
+    // Schriftgroesse der Pattern-Zellen; die Zeilenhoehe haengt daran (kompakt).
+    let fontSize: CGFloat
 
+    // Nur noch die Kanal-Zellen — die Zeilennummer sitzt in einer eigenen, beim
+    // horizontalen Scrollen FESTSTEHENDEN Spalte (siehe TrackerGridView).
     var body: some View {
-        let rowIndexColor: Color = isCurrent ? .amigaOrange : (theme == .workbench ? .amigaOrange : .spaceAccentGlow)
         let rowBg: Color = isCurrent ? (theme == .workbench ? Color.amigaOrange.opacity(0.35) : Color.spaceAccent.opacity(0.18)) : Color.clear
 
         HStack(spacing: 0) {
-            // Row Index
-            Text(String(format: "%02d", rIdx))
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundColor(rowIndexColor)
-                .frame(width: 32)
-                .padding(.leading, 6)
-
             ForEach(0..<notes.count, id: \.self) { c in
                 separator
 
@@ -36,20 +32,18 @@ struct TrackerRowView: View {
                 }
             }
         }
-        .frame(height: 24)
+        // Zeilenhoehe = Schrift + 6 (frueher fixe 24): halbiert den Abstand
+        // zwischen den 3-Zeichen-Reihen, zeigt so mehr Zeilen gleichzeitig.
+        .frame(height: fontSize + 6)
         .background(rowBg)
-        .overlay(
-            Group {
-                if isCurrent {
-                    Rectangle().stroke(theme == .workbench ? Color.amigaOrange : Color.spaceAccent, lineWidth: 1)
-                }
-            }
-        )
     }
 
+    // Kein Abstand mehr zwischen den Kanaelen — nur eine 1-pt-Trennlinie, dafuer
+    // deutlich heller, damit sie klar trennt (Wunsch: Kanaele dichter, Linie
+    // sichtbarer).
     private var separator: some View {
         Rectangle()
-            .fill(theme == .workbench ? Color.amigaWhite.opacity(0.3) : Color.spaceAccent.opacity(0.12))
+            .fill(theme == .workbench ? Color.amigaWhite.opacity(0.55) : Color.spaceAccent.opacity(0.45))
             .frame(width: 1)
             .frame(maxHeight: .infinity)
     }
@@ -84,7 +78,7 @@ struct TrackerRowView: View {
         let volStr = hasVol ? String(format: "v%02d", note.volume) : "..."
         let volColor: Color = hasVol ? (theme == .workbench ? .amigaGrey : .codeInstrument) : (theme == .workbench ? .amigaWhite.opacity(0.3) : .codeDim)
 
-        return HStack(spacing: 8) {
+        return HStack(spacing: 4) {
             Text(noteStr).foregroundColor(noteColor)
             Text(instStr).foregroundColor(instColor)
             if showVolume {
@@ -92,7 +86,7 @@ struct TrackerRowView: View {
             }
             Text(effStr).foregroundColor(effColor)
         }
-        .font(.system(size: 12, weight: isCurrent ? .bold : .semibold, design: .monospaced))
+        .font(.system(size: fontSize, weight: isCurrent ? .bold : .semibold, design: .monospaced))
     }
 
     private static let noteNames = ["C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-"]
@@ -142,22 +136,68 @@ struct TrackerGridView: View {
     let currentRow: Int
     let theme: PlayerTheme
 
+    // Aktueller horizontaler Scroll-Offset (nur bei >4 Kanaelen relevant).
+    @State private var hScrollOffset: CGFloat = 0
+
     // Kanalzahl aus den Pattern-Daten (jede Row hat channelCount Noten).
     private var channelCount: Int {
         pattern.rows.first?.notes.count ?? 4
     }
 
-    // Bis 4 Kanäle direkt (Zellen füllen die Breite), darüber in einen
-    // horizontalen ScrollView eingepackt.
+    // Horizontaler Scroll-Container fuer die Kanalspalten (nur bei >4 Kanaelen).
+    // Traegt KEINE Scrollbar — die wird in body an den unteren SICHTBAREN Rand
+    // gepinnt (hier laege sie am Ende des langen 64-Zeilen-Inhalts).
     @ViewBuilder
     private func horizontalWrapper<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         if channelCount > 4 {
-            ScrollView(.horizontal) {
+            ScrollView(.horizontal, showsIndicators: false) {
                 content()
+                    .background(
+                        // Offset bei JEDER Layout-Auswertung direkt in den State
+                        // schreiben (async, um "State waehrend View-Update"-Warnung
+                        // zu vermeiden) — folgt dem Scrollen kontinuierlich.
+                        GeometryReader { g -> Color in
+                            let x = -g.frame(in: .named("patternH")).minX
+                            DispatchQueue.main.async {
+                                if abs(hScrollOffset - x) > 0.5 { hScrollOffset = x }
+                            }
+                            return Color.clear
+                        }
+                    )
             }
+            .coordinateSpace(name: "patternH")
         } else {
             content()
         }
+    }
+
+    // Eigene horizontale Scrollbar: duenn, mit einem mittleren Grau, das sonst
+    // nirgends vorkommt — faellt auf, bleibt aber dezent. Nur sichtbar, wenn der
+    // Inhalt breiter als die Ansicht ist.
+    @ViewBuilder
+    private func hScrollBar(viewport: CGFloat, contentWidth: CGFloat) -> some View {
+        if contentWidth > viewport && viewport > 0 {
+            let thumbWidth = max(28, viewport * viewport / contentWidth)
+            let maxOffset = contentWidth - viewport
+            let ratio = maxOffset > 0 ? min(1, max(0, hScrollOffset / maxOffset)) : 0
+            Capsule()
+                .fill(Color(white: 0.5).opacity(0.75))
+                .frame(width: thumbWidth, height: 4)
+                .offset(x: (viewport - thumbWidth) * ratio, y: -2)
+                .allowsHitTesting(false)
+        }
+    }
+
+    // Feststehende Zeilennummer (scrollt NICHT horizontal mit den Kanaelen).
+    @ViewBuilder
+    private func rowIndexCell(_ rIdx: Int, isCurrent: Bool, fontSize: CGFloat) -> some View {
+        let color: Color = isCurrent ? .amigaOrange : (theme == .workbench ? .amigaOrange : .spaceAccentGlow)
+        let bg: Color = isCurrent ? (theme == .workbench ? Color.amigaOrange.opacity(0.35) : Color.spaceAccent.opacity(0.18)) : Color.clear
+        Text(String(format: "%02d", rIdx))
+            .font(.system(size: fontSize - 1, weight: .semibold, design: .monospaced))
+            .foregroundColor(color)
+            .frame(width: 38, height: fontSize + 6, alignment: .center)
+            .background(bg)
     }
 
     // S3M-Patterns tragen eine Volume-Column (Note.volume >= 0 irgendwo im
@@ -171,41 +211,73 @@ struct TrackerGridView: View {
         // darüber feste Zellbreite + horizontales Scrollen (mit Volume-Column
         // entsprechend breiter).
         let showVolume = hasVolumeColumn
-        let fixedCellWidth: CGFloat? = channelCount > 4 ? (showVolume ? 150 : 118) : nil
 
-        // Horizontales Scrollen (bei >4 Kanälen) liegt AUSSEN, das vertikale
-        // Zeilen-Folgen INNEN: scrollTo() im inneren Reader bewegt so nur die
-        // Y-Achse. In einem kombinierten ScrollView([.vertical, .horizontal])
-        // zentrierte der Zeilen-Autoscroll sonst bei jedem Row-Wechsel auch
-        // horizontal und riss die Ansicht seitlich weg.
-        horizontalWrapper {
-            ScrollViewReader { proxy in
-                ScrollView(.vertical) {
-                    // VStack statt LazyVStack: 64 Zeilen × 24 pt = 1536 pt — zu klein
-                    // für lazy rendering. LazyVStack kennt die Zeilen-Positionen erst
-                    // beim Render, was scrollTo-Sprünge und Jitter verursacht.
-                    VStack(spacing: 0) {
-                        ForEach(0..<64, id: \.self) { rIdx in
-                            if rIdx < pattern.rows.count {
-                                TrackerRowView(
-                                    rIdx: rIdx,
-                                    notes: pattern.rows[rIdx].notes,
-                                    isCurrent: currentRow == rIdx,
-                                    theme: theme,
-                                    fixedCellWidth: fixedCellWidth,
-                                    showVolume: showVolume
-                                )
-                                .id(rIdx)
+        GeometryReader { geo in
+            // Zellbreite/Font: bei >4 Kanaelen feste Zellen; muesste dann eine
+            // horizontale Scrollbar noetig sein, wird die Schrift um 1 verkleinert
+            // (Entscheidung auf Font-12-Basis -> stabil, kein Flackern). Zellbreiten
+            // eng an den Inhalt (nur ein Hauch Rand um die Trennlinie).
+            let rowIndexWidth: CGFloat = 38
+            let baseCell: CGFloat = showVolume ? 98 : 72
+            let sepGap: CGFloat = 1          // Kanal-Trennlinie (siehe separator)
+            let channelsViewport = geo.size.width - rowIndexWidth
+            let neededAtBase = CGFloat(channelCount) * (baseCell + sepGap)
+            let needsScroll = channelCount > 4 && neededAtBase > channelsViewport
+            let fontSize: CGFloat = needsScroll ? 11 : 12
+            let fixedCellWidth: CGFloat? = channelCount > 4 ? baseCell * (fontSize / 12) : nil
+            // Inhaltsbreite NUR der Kanalspalten (die Nummern-Spalte steht fest).
+            let contentWidth = CGFloat(channelCount) * ((fixedCellWidth ?? 0) + sepGap)
+
+            // Vertikaler Scroll AUSSEN; darin die feststehende Nummern-Spalte plus
+            // die horizontal scrollbaren Kanaele. scrollTo() folgt so nur der
+            // Y-Achse, und die Nummern bleiben beim H-Scroll links stehen. Die
+            // eigene Scrollbar wird per ZStack an den unteren SICHTBAREN Rand
+            // gepinnt (nicht ans Ende des langen 64-Zeilen-Inhalts).
+            ZStack(alignment: .bottomLeading) {
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical) {
+                        HStack(alignment: .top, spacing: 0) {
+                            // Feststehende Nummern-Spalte (scrollt nur vertikal mit).
+                            VStack(spacing: 0) {
+                                ForEach(0..<64, id: \.self) { rIdx in
+                                    if rIdx < pattern.rows.count {
+                                        rowIndexCell(rIdx, isCurrent: currentRow == rIdx, fontSize: fontSize)
+                                            .id(rIdx)
+                                    }
+                                }
+                            }
+                            // Horizontal scrollbare Kanalspalten.
+                            horizontalWrapper {
+                                // VStack statt LazyVStack: die ~64 Zeilen sind zu klein
+                                // für lazy rendering (scrollTo-Sprünge/Jitter sonst).
+                                VStack(spacing: 0) {
+                                    ForEach(0..<64, id: \.self) { rIdx in
+                                        if rIdx < pattern.rows.count {
+                                            TrackerRowView(
+                                                rIdx: rIdx,
+                                                notes: pattern.rows[rIdx].notes,
+                                                isCurrent: currentRow == rIdx,
+                                                theme: theme,
+                                                fixedCellWidth: fixedCellWidth,
+                                                showVolume: showVolume,
+                                                fontSize: fontSize
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
+                    .onChange(of: currentRow) { newRow in
+                        // Kein withAnimation: direktes scrollTo landet frame-synchron.
+                        proxy.scrollTo(newRow, anchor: .center)
+                    }
                 }
-                .onChange(of: currentRow) { newRow in
-                    // Kein withAnimation: jede Animation bricht die vorherige ab und
-                    // erzeugt die "auf-ab"-Oszillation. SwiftUI ist frame-synchron —
-                    // direktes scrollTo landet sauber im nächsten Paint-Zyklus.
-                    proxy.scrollTo(newRow, anchor: .center)
-                }
+
+                // Scrollbar am unteren SICHTBAREN Rand, rechts neben der fixen
+                // Nummern-Spalte.
+                hScrollBar(viewport: channelsViewport, contentWidth: contentWidth)
+                    .padding(.leading, rowIndexWidth)
             }
         }
         .background(theme == .workbench ? Color.amigaDarkBlue : Color.spaceSurface)

@@ -155,11 +155,10 @@ Nachlese zum Code-Review + GUI-Feedback (je mit Test/Verifikation):
 - **Code-Review-Fehlalarm** dokumentiert: der NSText-First-Responder-Guard ist funktional (der Feld-Editor eines fokussierten SwiftUI-`TextField` ist eine `NSText`-Subklasse), `codereview-ok`-Marker gesetzt.
 - **CI**: Runner auf `macos-15` (Swift 6.0) — der `macos-14`-Runner scheiterte an `swift-tools-version: 6.0`.
 
-## Ideen / Backlog (Stand: 2026-07-02)
-
-- **Rotierende Disc als Play/Pause-Schalter**: Die drehende Vinyl-/Disc-Animation
-  selbst als kombinierten Play/Pause-Button nutzen (statt separatem Transport-Button);
-  die Play/Pause-Symbole optional dezent darüberlegen. (Idee Daniel, 2026-07-02.)
+GUI-Umbau derselben Runde (visuell per fenstergezieltem Screenshot verifiziert, Multichannel mit dem 16-Kanal-S3M):
+- **Oszilloskop-/Transport-Zeile**: Play/Pause liegt jetzt auf der rotierenden Disk im Transport-Balken (Stop/Prev/Next separat), LED-Filter/Hi-Fi/Loop in eine schmale Leiste unter die Oszis verschoben. Die **Kanal-Oszis sind adaptiv breit** (verfügbare Breite / Kanalzahl, Mindestbreite dann Scroll) — bis 16 Kanäle passen gleichzeitig; das VU-Meter schrumpft bei vielen Kanälen mit.
+- **Pattern-Ansicht gestrafft**: Zeilenhöhe = Schrift + 6 (statt fix 24); Kanäle mit nur 1-pt-Trennlinie (heller) und eng an den Inhalt gelegten Zellen; bei drohender H-Scrollbar wird die Schrift um 1 verkleinert; **feststehende Zeilennummern-Spalte** (scrollt nicht mit); **eigene, dezent-graue H-Scrollbar** (native ist schwarz/nicht einfärbbar), am unteren sichtbaren Rand gepinnt.
+- **Zuletzt gespielter Titel** wird bei ausgeschaltetem Shuffle nach Neustart wieder aufgenommen (`@AppStorage("savage.lastPlayed")`, stabiler Dateiname). Headless verifiziert.
 
 ## Fallen / Agent-Hinweise
 

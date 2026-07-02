@@ -44,7 +44,12 @@ struct MainView: View {
     // Shuffle: Titel-Wechsel (weiter/zurueck/Songende) springt zufaellig statt
     // sequenziell durch die Playlist. Ueberlebt App-Neustarts.
     @AppStorage("savage.shuffle") private var shuffleEnabled = false
-    
+
+    // Zuletzt gespielter Titel als stabiler Anzeigename (ohne UUID-Temp-Praefix).
+    // Bei ausgeschaltetem Shuffle nimmt der naechste Start diesen Titel wieder
+    // auf, statt stur beim ersten der Liste zu beginnen.
+    @AppStorage("savage.lastPlayed") private var lastPlayedSongName: String = ""
+
     // Sidebar tabs
     @State private var selectedSidebarTab: Int = 0 // 0 = Playlist, 1 = Instrumente
     
@@ -451,10 +456,16 @@ struct MainView: View {
                 self.selectedSidebarTab = 0 // Playlist fokussieren
 
                 // Start-Titel bestimmen: ein expliziter "--autoplay <filter>"
-                // gewinnt; sonst bei aktivem Shuffle ein Zufalls-Titel, sonst
-                // der erste der (sortierten) Liste.
+                // gewinnt; sonst bei ausgeschaltetem Shuffle der zuletzt gespielte
+                // Titel (falls noch in der Liste); sonst bei Shuffle ein Zufalls-
+                // Titel, sonst der erste der (sortierten) Liste.
                 let filterIndex = Self.autoplayFilterIndex(in: sorted)
-                let startIndex = filterIndex ?? (self.shuffleEnabled ? Int.random(in: 0..<sorted.count) : 0)
+                let lastPlayedIndex = self.shuffleEnabled
+                    ? nil
+                    : sorted.firstIndex(where: { self.cleanFilename($0) == self.lastPlayedSongName })
+                let startIndex = filterIndex
+                    ?? lastPlayedIndex
+                    ?? (self.shuffleEnabled ? Int.random(in: 0..<sorted.count) : 0)
 
                 // Sofort losspielen, wenn der Aufrufer es will (App-Start) oder die
                 // Headless-/Agent-Steuerung "--autoplay [filter]" gesetzt ist —
@@ -571,6 +582,8 @@ struct MainView: View {
             // Fallback-Titel, falls das Modul kein Titelfeld gesetzt hat.
             let fallbackName = (cleanFilename(url) as NSString).deletingPathExtension
             coordinator.setMod(mod, fallbackName: fallbackName)
+            // Stabilen Namen fuer "zuletzt gespielt" merken (ueberlebt Neustart).
+            self.lastPlayedSongName = cleanFilename(url)
             return true
         } catch {
             self.errorMessage = "Parser-Fehler bei '\(cleanFilename(url))': \(error.localizedDescription)"
@@ -639,12 +652,16 @@ struct MainView: View {
     // den kurzen Moment ab, in dem channelCount schon aktualisiert ist, aber
     // vuLevels/channelWaveforms noch die alte Länge haben.
     @ViewBuilder
-    private func channelStripView(_ i: Int) -> some View {
+    private func channelStripView(_ i: Int, width stripWidth: CGFloat) -> some View {
+        // VU-Breite schrumpft mit der Streifenbreite mit: bei breiten Streifen
+        // die volle LED-Saeule (24), bei vielen schmalen Kanaelen bis auf ~1/4
+        // (6) — das Oszi bekommt den Rest.
+        let vuWidth = min(24, max(6, stripWidth * 0.20))
         VStack(spacing: 4) {
             HStack(alignment: .bottom, spacing: 4) {
                 // VU segmented LED
                 VUMeterView(value: i < coordinator.vuLevels.count ? coordinator.vuLevels[i] : 0, theme: theme)
-                    .frame(width: 24, height: 50)
+                    .frame(width: vuWidth, height: 50)
 
                 // Rolling channel oscilloscope waveform path
                 GeometryReader { geo in
@@ -660,7 +677,9 @@ struct MainView: View {
                     }
                     .stroke(theme == .workbench ? Color.amigaOrange : Color.spaceAccent, lineWidth: 1.2)
                 }
-                .frame(width: 44, height: 50)
+                // Breite flexibel: die adaptive Kanal-Leiste gibt jedem Streifen
+                // per .frame(width:) seine Breite vor, das Oszi fuellt sie aus.
+                .frame(maxWidth: .infinity, minHeight: 50, maxHeight: 50)
                 // Wie das Master-Oszilloskop: im Light-Mode weisser Hintergrund
                 // mit dezentem Rahmen (einheitliche Scope-Optik).
                 .background(theme == .workbench ? Color.white : Color.black.opacity(0.2))
@@ -671,10 +690,13 @@ struct MainView: View {
                 )
             }
 
-            HStack(spacing: 8) {
-                Text("CH \(i + 1)")
+            HStack(spacing: 4) {
+                // Nur die Kanalnummer (ohne "CH"-Praefix), damit der Fuss auch
+                // bei vielen schmalen Streifen passt.
+                Text("\(i + 1)")
                     .font(.system(size: 8, weight: .bold, design: .monospaced))
                     .foregroundColor(theme == .workbench ? .amigaWhite.opacity(0.7) : .spaceTextSecondary)
+                    .lineLimit(1)
 
                 // MUTE / SOLO buttons
                 Button("M") {
@@ -1337,73 +1359,53 @@ struct MainView: View {
     }
     
     private var vuVisualizersView: some View {
-        HStack(spacing: 16) {
-            // Spinning Disk Indicator
-            ZStack {
-                Circle()
-                    .fill(theme == .workbench ? Color.amigaWhite.opacity(0.1) : Color.spaceSurface)
-                    .frame(width: 54, height: 54)
-                    .shadow(color: theme == .workbench ? Color.clear : Color.spaceAccent.opacity(0.3), radius: 6)
-                
-                Image(systemName: "opticaldisc.fill")
-                    .font(.system(size: 42))
-                    .foregroundColor(theme == .workbench ? .amigaOrange : .spaceAccent)
-                    .rotationEffect(.degrees(diskRotation))
-                
-                Circle()
-                    .fill(theme == .workbench ? Color.amigaDarkBlue : Color.spaceBackground)
-                    .frame(width: 8, height: 8)
-            }
-            .opacity(coordinator.isPlaying ? 1.0 : 0.4)
-            .animation(.easeInOut, value: coordinator.isPlaying)
-            
-            Divider()
-                .background(theme == .workbench ? Color.amigaWhite.opacity(0.2) : Color.spaceAccent.opacity(0.2))
-                .frame(height: 48)
-            
-            // Peak Level VU Meters with Mute/Solo and Oscilloscope under them.
-            // Kanalzahl ist dynamisch (4 bei MOD, mehr bei 6CHN/8CHN/S3M);
-            // ab 5 Kanälen scrollt die Leiste horizontal, damit das Layout
-            // nicht explodiert.
-            if coordinator.channelCount <= 4 {
-                ForEach(0..<coordinator.channelCount, id: \.self) { i in
-                    channelStripView(i)
-                }
-            } else {
-                ScrollView(.horizontal, showsIndicators: true) {
-                    HStack(spacing: 16) {
-                        ForEach(0..<coordinator.channelCount, id: \.self) { i in
-                            channelStripView(i)
+        VStack(spacing: 8) {
+            // Obere Zeile: adaptive Kanal-Oszilloskope über die VOLLE Breite.
+            // (Play/Pause liegt jetzt als Disk unten im Transport-Balken.)
+            // Die verfuegbare Breite wird gleichmaessig auf alle Kanaele verteilt
+            // — wenige Kanaele => breite Oszis, viele => schmaler, bis zu einer
+            // Mindestbreite; darunter (sehr viele Kanaele) wird dezent horizontal
+            // gescrollt.
+            GeometryReader { geo in
+                let count = max(1, coordinator.channelCount)
+                let spacing: CGFloat = count > 8 ? 6 : 12
+                let minStripWidth: CGFloat = 26
+                let ideal = (geo.size.width - spacing * CGFloat(count - 1)) / CGFloat(count)
+                if ideal >= minStripWidth {
+                    HStack(spacing: spacing) {
+                        ForEach(0..<count, id: \.self) { i in
+                            channelStripView(i, width: ideal).frame(width: ideal)
                         }
                     }
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
+                } else {
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        HStack(spacing: spacing) {
+                            ForEach(0..<count, id: \.self) { i in
+                                channelStripView(i, width: minStripWidth).frame(width: minStripWidth)
+                            }
+                        }
+                    }
+                    .frame(height: geo.size.height)
                 }
-                .frame(maxWidth: 4 * 96)
             }
+            .frame(height: 70)
 
-            Divider()
-                .background(theme == .workbench ? Color.amigaWhite.opacity(0.2) : Color.spaceAccent.opacity(0.2))
-                .frame(height: 48)
-            
-            // Audio Option synthesis parameters panel
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 12) {
-                    Toggle("LED FILTER", isOn: $coordinator.ledFilterActive)
-                        .toggleStyle(CheckboxToggleStyle(theme: theme))
-                        .help("Amiga-LED-Filter: zuschaltbarer Tiefpass bei ~3,2 kHz, der die Höhen kappt — der dumpfere Originalklang, wie wenn am echten Amiga die Power-LED leuchtete.")
+            // Untere Zeile: kompakte Optionsleiste (aus der oberen Zeile
+            // ausgelagert, damit die Oszis dort die volle Breite bekommen).
+            HStack(spacing: 16) {
+                Toggle("LED FILTER", isOn: $coordinator.ledFilterActive)
+                    .toggleStyle(CheckboxToggleStyle(theme: theme))
+                    .help("Amiga-LED-Filter: zuschaltbarer Tiefpass bei ~3,2 kHz, der die Höhen kappt — der dumpfere Originalklang, wie wenn am echten Amiga die Power-LED leuchtete.")
 
-                    Toggle("HI-FI INT.", isOn: $coordinator.useInterpolation)
-                        .toggleStyle(CheckboxToggleStyle(theme: theme))
-                        .help("Hi-Fi-Interpolation: glättet die Samples beim Resampling (weicherer Klang). Ausgeschaltet klingt es wie die Original-Hardware — roher 8-Bit-Sound mit hörbarem Aliasing.")
-                }
+                Toggle("HI-FI INT.", isOn: $coordinator.useInterpolation)
+                    .toggleStyle(CheckboxToggleStyle(theme: theme))
+                    .help("Hi-Fi-Interpolation: glättet die Samples beim Resampling (weicherer Klang). Ausgeschaltet klingt es wie die Original-Hardware — roher 8-Bit-Sound mit hörbarem Aliasing.")
 
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Text("LOOP:")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .foregroundColor(theme == .workbench ? .amigaGrey : .spaceTextSecondary)
 
-                    // Keine feste Breite und kein ALLCAPS mehr: der Picker
-                    // nimmt sich die Breite, die der laengste Eintrag braucht,
-                    // statt "WIEDERHOLE..." abzuschneiden.
                     Picker("", selection: $loopMode) {
                         ForEach(LoopMode.allCases) { m in
                             Text(m.rawValue).tag(m)
@@ -1412,19 +1414,15 @@ struct MainView: View {
                     .pickerStyle(DefaultPickerStyle())
                     .labelsHidden()
                     .fixedSize()
-                    // Das native Popup folgt sonst dem System-Erscheinungsbild:
-                    // Im Dark-Theme der App war der gewaehlte Wert auf hellem
-                    // System kaum lesbar. Control-Optik ans App-Theme koppeln.
+                    // Control-Optik ans App-Theme koppeln (sonst im Dark-Theme
+                    // auf hellem System kaum lesbar).
                     .colorScheme(theme == .workbench ? .light : .dark)
                     .help("Was nach dem Songende passiert: Playlist fortsetzen, den Song wiederholen oder stoppen.")
                 }
+
+                Spacer()
             }
             .font(.system(size: 9, weight: .semibold, design: .monospaced))
-            .padding(6)
-            // Im Light-Mode ohne Kasten — der dunkle Hintergrund wirkte dort
-            // wie ein Fremdkoerper.
-            .background(theme == .workbench ? Color.clear : Color.spaceBackground.opacity(0.4))
-            .cornerRadius(6)
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
@@ -1652,38 +1650,35 @@ struct MainView: View {
         HStack(spacing: 24) {
             // Left block: Play controls
             HStack(spacing: 8) {
-                // Play / Stop button
-                Button(action: {
-                    togglePlayback()
-                }) {
+                // Play/Pause = rotierende Disk (mit dezentem Symbol) — sitzt hier
+                // bei den anderen Transport-Buttons; oben bleibt so die volle
+                // Breite fuer die Oszis.
+                Button(action: { togglePlayback() }) {
                     ZStack {
-                        if theme == .cyber {
-                            Circle()
-                                .fill(
-                                    LinearGradient(
-                                        colors: [.spaceAccent, .spaceAccentGlow],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                                .shadow(color: Color.spaceAccent.opacity(0.4), radius: 6)
-                        } else {
-                            Rectangle()
-                                .fill(Color.amigaOrange)
-                        }
-
-                        // Play/Pause-Toggle: pausiert (fortsetzbar), stoppt NICHT.
+                        Circle()
+                            .fill(theme == .workbench ? Color.amigaWhite.opacity(0.12) : Color.spaceSurface)
+                            .frame(width: 40, height: 40)
+                            .shadow(color: theme == .workbench ? Color.clear : Color.spaceAccent.opacity(0.3), radius: 5)
+                        Image(systemName: "opticaldisc.fill")
+                            .font(.system(size: 30))
+                            .foregroundColor(theme == .workbench ? .amigaOrange : .spaceAccent)
+                            .rotationEffect(.degrees(diskRotation))
+                        Circle()
+                            .fill(theme == .workbench ? Color.amigaDarkBlue : Color.spaceBackground)
+                            .frame(width: 6, height: 6)
                         Image(systemName: coordinator.isPlaying && !coordinator.isPaused ? "pause.fill" : "play.fill")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(.white)
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(.white.opacity(0.9))
+                            .shadow(color: .black.opacity(0.6), radius: 1)
                     }
-                    .frame(width: 36, height: 36)
+                    .opacity(coordinator.isPlaying ? 1.0 : 0.6)
+                    .animation(.easeInOut, value: coordinator.isPlaying)
+                    .contentShape(Circle())
                 }
-                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
-                .cornerRadius(theme == .workbench ? 0 : 18)
+                .buttonStyle(PlainButtonStyle())
                 .disabled(coordinator.activeMod == nil)
                 .help(coordinator.isPlaying && !coordinator.isPaused
-                      ? "Pause — die Wiedergabe lässt sich an derselben Stelle fortsetzen (Leertaste)."
+                      ? "Pause — an derselben Stelle fortsetzbar (Leertaste)."
                       : "Abspielen bzw. pausierte Wiedergabe fortsetzen (Leertaste).")
 
                 // Stop button (setzt an den Songanfang zurueck)
