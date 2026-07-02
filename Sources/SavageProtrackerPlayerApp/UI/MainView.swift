@@ -924,9 +924,18 @@ struct MainView: View {
                                 .buttonStyle(PlainButtonStyle())
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
+                                // Light-Mode: nur duenner Rahmen ohne Fuellung,
+                                // Hover hebt die Zeile weiss hervor. Der dunkle
+                                // Fuellton passte nicht ins helle Theme.
                                 .background(
                                     RoundedRectangle(cornerRadius: 6)
-                                        .fill(hoveredInstrumentIndex == i ? Color.spaceAccent.opacity(0.08) : Color.spaceBackground.opacity(0.3))
+                                        .fill(theme == .workbench
+                                              ? (hoveredInstrumentIndex == i ? Color.white : Color.clear)
+                                              : (hoveredInstrumentIndex == i ? Color.spaceAccent.opacity(0.08) : Color.spaceBackground.opacity(0.3)))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .stroke(theme == .workbench ? Color.amigaGrey.opacity(0.35) : Color.clear, lineWidth: 1)
                                 )
                                 .onHover { hovering in
                                     hoveredInstrumentIndex = hovering ? i : nil
@@ -1023,10 +1032,13 @@ struct MainView: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
                 .background(coordinator.palClock ? (theme == .workbench ? Color.amigaOrange : Color.spaceAccent) : Color.clear)
-                .foregroundColor(coordinator.palClock ? .white : .spaceTextSecondary)
+                // Inaktive Beschriftung theme-abhängig: das Dark-Grau war im
+                // Light-Mode auf dem hellen Kasten unlesbar.
+                .foregroundColor(coordinator.palClock ? .white : (theme == .workbench ? .amigaGrey : .spaceTextSecondary))
                 .cornerRadius(4)
                 .buttonStyle(PlainButtonStyle())
-                
+                .help("PAL-Paula-Takt (3,546 MHz) wie bei europäischen Amigas — die Referenz-Tonhöhe und -Geschwindigkeit der meisten Module.")
+
                 Button("NTSC (7.16MHz)") {
                     coordinator.palClock = false
                 }
@@ -1034,12 +1046,13 @@ struct MainView: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
                 .background(!coordinator.palClock ? (theme == .workbench ? Color.amigaOrange : Color.spaceAccent) : Color.clear)
-                .foregroundColor(!coordinator.palClock ? .white : .spaceTextSecondary)
+                .foregroundColor(!coordinator.palClock ? .white : (theme == .workbench ? .amigaGrey : .spaceTextSecondary))
                 .cornerRadius(4)
                 .buttonStyle(PlainButtonStyle())
+                .help("NTSC-Paula-Takt (3,580 MHz) wie bei US-Amigas — Module klingen minimal höher und laufen etwas schneller als mit PAL.")
             }
             .padding(2)
-            .background(Color.spaceBackground.opacity(0.4))
+            .background(theme == .workbench ? Color.amigaDarkBlue : Color.spaceBackground.opacity(0.4))
             .cornerRadius(6)
             
             // Theme Selector
@@ -1135,28 +1148,37 @@ struct MainView: View {
                 HStack(spacing: 12) {
                     Toggle("LED FILTER", isOn: $coordinator.ledFilterActive)
                         .toggleStyle(CheckboxToggleStyle(theme: theme))
-                    
+                        .help("Amiga-LED-Filter: zuschaltbarer Tiefpass bei ~3,2 kHz, der die Höhen kappt — der dumpfere Originalklang, wie wenn am echten Amiga die Power-LED leuchtete.")
+
                     Toggle("HI-FI INT.", isOn: $coordinator.useInterpolation)
                         .toggleStyle(CheckboxToggleStyle(theme: theme))
+                        .help("Hi-Fi-Interpolation: glättet die Samples beim Resampling (weicherer Klang). Ausgeschaltet klingt es wie die Original-Hardware — roher 8-Bit-Sound mit hörbarem Aliasing.")
                 }
-                
-                HStack(spacing: 12) {
-                    Text("LOOP MODE:")
+
+                HStack(spacing: 8) {
+                    Text("LOOP:")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundColor(.spaceTextSecondary)
-                    
+                        .foregroundColor(theme == .workbench ? .amigaGrey : .spaceTextSecondary)
+
+                    // Keine feste Breite und kein ALLCAPS mehr: der Picker
+                    // nimmt sich die Breite, die der laengste Eintrag braucht,
+                    // statt "WIEDERHOLE..." abzuschneiden.
                     Picker("", selection: $loopMode) {
                         ForEach(LoopMode.allCases) { m in
-                            Text(m.rawValue.uppercased()).tag(m)
+                            Text(m.rawValue).tag(m)
                         }
                     }
                     .pickerStyle(DefaultPickerStyle())
-                    .frame(width: 140)
+                    .labelsHidden()
+                    .fixedSize()
+                    .help("Was nach dem Songende passiert: Playlist fortsetzen, den Song wiederholen oder stoppen.")
                 }
             }
             .font(.system(size: 9, weight: .semibold, design: .monospaced))
             .padding(6)
-            .background(Color.spaceBackground.opacity(0.4))
+            // Im Light-Mode ohne Kasten — der dunkle Hintergrund wirkte dort
+            // wie ein Fremdkoerper.
+            .background(theme == .workbench ? Color.clear : Color.spaceBackground.opacity(0.4))
             .cornerRadius(6)
         }
         .padding(.horizontal)
@@ -1309,7 +1331,7 @@ struct MainView: View {
         HStack(spacing: 16) {
             Text("MASTER OSCILLOSCOPE")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundColor(.spaceTextSecondary)
+                .foregroundColor(theme == .workbench ? .amigaGrey : .spaceTextSecondary)
                 .frame(width: 140, alignment: .leading)
             
             GeometryReader { geo in
@@ -1329,11 +1351,12 @@ struct MainView: View {
                 .stroke(theme == .workbench ? Color.amigaOrange : Color.spaceAccent, lineWidth: 1.5)
             }
             .frame(height: 32)
-            .background(Color.black.opacity(0.3))
+            // Light-Mode: weisser Hintergrund statt des dunklen Streifens.
+            .background(theme == .workbench ? Color.white : Color.black.opacity(0.3))
             .cornerRadius(4)
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color.spaceAccent.opacity(0.15), lineWidth: 1)
+                    .stroke(theme == .workbench ? Color.amigaGrey.opacity(0.35) : Color.spaceAccent.opacity(0.15), lineWidth: 1)
             )
             
             // Stereo Separation bleed adjustment slider
