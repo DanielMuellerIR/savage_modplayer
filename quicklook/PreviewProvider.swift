@@ -20,16 +20,41 @@ class PreviewProvider: QLPreviewProvider, QLPreviewingController {
         let mod = try ModuleLoader.parse(data: data)
         let wav = try ModuleRenderer.renderWavData(mod: mod)
 
-        let reply = QLPreviewReply(
-            dataOfContentType: .wav,
-            contentSize: CGSize(width: 800, height: 400)
-        ) { _ in
-            wav
-        }
+        // WICHTIG: Die WAV als DATEI-URL liefern, nicht als Daten-Reply.
+        // QLPreviewReply(dataOfContentType:) zeigt fuer Audio nur die
+        // generische Info-Karte; erst initWithFileURL: (laut Header explizit
+        // inkl. UTTypeAudio) bekommt den nativen Audio-Player mit
+        // Play/Scrubbing. Die Datei liegt im Sandbox-Container der Extension.
+        let wavURL = try Self.writePreviewWav(wav, sourceName: request.fileURL.deletingPathExtension().lastPathComponent)
+        let reply = QLPreviewReply(fileURL: wavURL)
 
         // Titelzeile des Preview-Fensters: Songname + Format + Kanalzahl.
         let title = mod.name.isEmpty ? request.fileURL.lastPathComponent : mod.name
         reply.title = "\(title) — \(mod.format.displayName), \(mod.channelCount) Kanäle"
         return reply
+    }
+
+    // Schreibt die gerenderte WAV in den Temp-Bereich des Extension-Containers.
+    // Eindeutiger Dateiname pro Request (parallele Previews); Altbestand wird
+    // best-effort weggeraeumt, damit der Container nicht zumuellt.
+    private static func writePreviewWav(_ wav: Data, sourceName: String) throws -> URL {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("SavagePreviews", isDirectory: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        // Aufraeumen: alles loeschen, was aelter als eine Stunde ist.
+        if let existing = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) {
+            let cutoff = Date().addingTimeInterval(-3600)
+            for url in existing {
+                let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                if mtime < cutoff {
+                    try? fm.removeItem(at: url)
+                }
+            }
+        }
+
+        let url = dir.appendingPathComponent("\(sourceName)-\(UUID().uuidString).wav")
+        try wav.write(to: url)
+        return url
     }
 }
