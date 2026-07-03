@@ -1,22 +1,18 @@
-# Savage Protracker Player 1.3.0
+A polish release on top of 1.3.0: a reworked player UI, a dedicated instrument-preview path, and the code-review fixes from that round.
 
-The macOS app grows from a 4-channel ProTracker player into a multi-format tracker player — and previews modules right in Finder.
+## Improved
 
-## New
+- **Reworked scope & transport bar**: play/pause now sits on the spinning disk in the transport bar (stop/prev/next stay separate); the LED filter, hi-fi and loop toggles moved into a slim strip below the scopes. The **channel scopes are now adaptive-width** (available width ÷ channel count, scrolling once they hit their minimum) — up to 16 channels fit side by side at once, and the VU meter shrinks along with them.
+- **Tighter tracker grid**: compact row height, 1-pt channel separators, cells hugging their content, and an automatic 1-point font reduction before a horizontal scrollbar would appear. The **row-number column is now frozen** (no longer scrolls away), and the grid has its own **discreet grey horizontal scrollbar** pinned to the bottom of the visible area.
+- **Bigger click targets**: the whole instrument row (minus the download button) and the PLAYLIST/INSTRUMENTS tabs are now fully clickable.
+- **Recursive `audio/` loading**: modules in subfolders (e.g. `audio/Artist/song.mod`) are found automatically, and leftover temp copies from earlier runs are cleaned up on launch.
 
-- **Multichannel MOD support**: `6CHN`/`8CHN`, generic `xCHN`/`xxCH` up to 32 channels, `CD81`/`OKTA`, and `FLT8` (StarTrekker pattern pairs).
-- **15-sample Soundtracker**: original Ultimate Soundtracker modules without a signature are detected via structural heuristics.
-- **ScreamTracker 3 (`.s3m`)**: packed patterns, volume column (also shown in the tracker grid), per-channel panning, C2Spd-based ST3 period model, and S3M effects including fine/extra-fine slides with effect memory, tremor, fine vibrato, global volume, and speed/tempo commands.
-- **Quick Look plugin**: press the space bar on a `.mod`/`.s3m` file in Finder to get a playable audio preview (native macOS player with play and scrubbing). The plugin ships inside the app bundle — install the app, launch it once, done. Note: if VLC is installed, macOS intercepts `.mod` (not `.s3m`) previews with its built-in media preview; this is a Quick Look system limitation.
-- **Dynamic UI**: tracker grid, VU meters, scopes, and mute/solo adapt to the module's channel count (horizontal scrolling from 5 channels up).
-- **Reworked transport**: play/pause now resumes instead of restarting, stop is a separate button, plus song-position jump buttons, 15/30-second skips, and seeking while stopped (playback then starts from the chosen position). Tooltips explain every control, including the LED filter, hi-fi interpolation, PAL/NTSC clocks, and stereo separation — and they are now also collected in the README.
-- **Instant playback & smarter titles**: playback starts right away on launch when an `audio/` folder is present; titles too long to fit scroll as a marquee; and a module without an embedded title shows its file name instead of a placeholder.
-- **Playlist follows playback**: the list scrolls to the currently playing track automatically, including on shuffle and skip.
-- **Native About panel**: a standard macOS About dialog with author and license — the retro Guru Meditation screen stays on as an easter egg (ⓘ button).
-- **Fixes**: BPM/Speed changed while stopped now persist into playback, and the PAL/NTSC labels show the correct Paula clock (3.546/3.580 MHz).
+## Fixed
+
+- **Instrument preview** now has its own playback path, separate from the song (dedicated preview engine and channel). It plays even while the player is stopped and no longer hijacks a song channel — which previously caused a silent loss of mute/solo state.
+- **Resume last played track**: with shuffle off, the previously played title is picked up again after a restart.
 
 ## Notes
 
 - The HTML5 single-file player intentionally stays a compact 4-channel ProTracker player.
 - The DMG contains the app including the Quick Look plugin; no module files are bundled. Songs are loaded via drag & drop or from a local `audio/` folder.
-- Now released under the **WTFPL** (Do What The Fuck You Want To Public License).
