@@ -54,8 +54,17 @@ struct MainView: View {
     @State private var selectedSidebarTab: Int = 0 // 0 = Playlist, 1 = Instrumente
     
     // Playlist states
+    // `playlist` bleibt die flache Abspielliste in Anzeige-Reihenfolge
+    // (Tiefensuche durch den Baum) — Weiter/Zurueck/Shuffle/Loop arbeiten
+    // damit unveraendert ueber alle Ordner hinweg.
     @State private var playlist: [URL] = []
     @State private var currentPlaylistIndex: Int = -1
+    // Hierarchische Anzeige: Ordner-/Archiv-Baum der aktuellen Playlist,
+    // Menge der aufgeklappten Ordner-Pfade und Ordner-Pfad je Datei
+    // (fuers Auto-Aufklappen des gerade laufenden Titels).
+    @State private var playlistTree: PlaylistScanner.FolderNode? = nil
+    @State private var expandedFolders: Set<String> = []
+    @State private var folderPathByURL: [URL: [String]] = [:]
     
     // Search & Filter
     @State private var playlistSearchQuery: String = ""
@@ -106,6 +115,47 @@ struct MainView: View {
         } else {
             return playlist.filter { cleanFilename($0).localizedCaseInsensitiveContains(playlistSearchQuery) }
         }
+    }
+
+    // Eine sichtbare Zeile der Playlist-Sidebar: entweder ein auf-/zuklappbarer
+    // Ordner (bzw. ein wie ein Ordner dargestelltes Archiv) oder ein Titel.
+    // Datei-Zeilen nutzen die URL als ID — darauf zielt auch das programmatische
+    // Scrollen zum laufenden Titel (scrollTo).
+    private struct PlaylistRow: Identifiable {
+        enum Kind {
+            case folder(name: String, path: String, expanded: Bool)
+            case file(URL)
+        }
+        let id: String
+        let depth: Int
+        let kind: Kind
+    }
+
+    // Sichtbare Zeilen aus Baum + Aufklapp-Zustand berechnen. Bei aktiver Suche
+    // stattdessen eine flache Trefferliste — Hierarchie waere dabei nur im Weg.
+    private var playlistRows: [PlaylistRow] {
+        if !playlistSearchQuery.isEmpty {
+            return filteredPlaylist.map { PlaylistRow(id: $0.absoluteString, depth: 0, kind: .file($0)) }
+        }
+        guard let tree = playlistTree else {
+            // Kein Baum vorhanden (sollte nur bei leerer Playlist passieren) —
+            // flache Liste als Fallback.
+            return playlist.map { PlaylistRow(id: $0.absoluteString, depth: 0, kind: .file($0)) }
+        }
+        var rows: [PlaylistRow] = []
+        func walk(_ node: PlaylistScanner.FolderNode, depth: Int) {
+            for sub in node.subfolders {
+                let expanded = expandedFolders.contains(sub.path)
+                rows.append(PlaylistRow(id: "folder:\(sub.path)", depth: depth,
+                                        kind: .folder(name: sub.name, path: sub.path, expanded: expanded)))
+                if expanded { walk(sub, depth: depth + 1) }
+            }
+            for entry in node.files {
+                rows.append(PlaylistRow(id: entry.url.absoluteString, depth: depth, kind: .file(entry.url)))
+            }
+        }
+        walk(tree, depth: 0)
+        return rows
     }
     
     var body: some View {
@@ -445,14 +495,24 @@ struct MainView: View {
         // @State-Mutation und das Laden der ersten Datei kehren auf den Main-Thread
         // zurueck.
         DispatchQueue.global(qos: .userInitiated).async {
-            let modFiles = MainView.copyModFilesToTemp(urls)
+            // Einsammeln (inkl. Ordner-Rekursion und unsichtbarem Entpacken von
+            // Zip/7z-Archiven) uebernimmt der testbare Core-Scanner; hier bleibt
+            // nur das Temp-Ziel und die UI-Anbindung.
+            let entries = PlaylistScanner.collectEntries(from: urls, tempDir: MainView.newDropTempDir())
+            let tree = PlaylistScanner.buildTree(entries)
+            let flat = PlaylistScanner.flattenedFiles(tree)
             DispatchQueue.main.async {
-                guard !modFiles.isEmpty else {
+                guard !flat.isEmpty else {
                     self.errorMessage = "Keine passenden .mod/.s3m Dateien gefunden."
                     return
                 }
-                let sorted = self.sortedByDisplayName(modFiles)
+                let sorted = flat.map(\.url)
                 self.playlist = sorted
+                self.playlistTree = tree
+                self.folderPathByURL = Dictionary(uniqueKeysWithValues: flat.map { ($0.url, $0.folderPath) })
+                // Standard: alle Ordner zugeklappt; nur der Pfad zum Start-Titel
+                // wird unten via selectPlaylistSong/expandAncestors geoeffnet.
+                self.expandedFolders = []
                 self.selectedSidebarTab = 0 // Playlist fokussieren
 
                 // Start-Titel bestimmen: ein expliziter "--autoplay <filter>"
@@ -475,6 +535,7 @@ struct MainView: View {
                 } else {
                     self.currentPlaylistIndex = startIndex
                     self.loadModFile(from: sorted[startIndex])
+                    self.expandAncestors(of: sorted[startIndex])
                 }
             }
         }
@@ -493,49 +554,13 @@ struct MainView: View {
         return nil
     }
 
-    // Hintergrund-Worker: kopiert alle .mod-Dateien aus den gedroppten URLs (inkl.
-    // Ordner-Rekursion) in ein frisches Temp-Unterverzeichnis und liefert die Liste.
-    // Beruehrt KEINEN @State — laeuft sicher abseits des Main-Threads.
-    nonisolated private static func copyModFilesToTemp(_ urls: [URL]) -> [URL] {
-        var modFiles: [URL] = []
-        let fm = FileManager.default
-        // Pro Drop ein eigenes Unterverzeichnis statt das gemeinsame zu loeschen:
-        // sonst entwertet ein neuer Drop die Temp-URLs frueherer Baetche.
-        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+    // Pro Drop ein eigenes Temp-Unterverzeichnis statt das gemeinsame zu loeschen:
+    // sonst entwertet ein neuer Drop die Temp-URLs frueherer Baetche. Das
+    // eigentliche Einsammeln/Kopieren/Entpacken macht PlaylistScanner (Core).
+    nonisolated private static func newDropTempDir() -> URL {
+        URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("ModPlayerTemp", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try? fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
-
-        func copyIfMod(_ fileURL: URL) {
-            guard isModFile(fileURL) else { return }
-            let destURL = tempDir.appendingPathComponent("\(UUID().uuidString)_\(fileURL.lastPathComponent)")
-            do {
-                try fm.copyItem(at: fileURL, to: destURL)
-                modFiles.append(destURL)
-            } catch {
-                print("Fehler beim Kopieren: \(error)")
-            }
-        }
-
-        for url in urls {
-            let accessed = url.startAccessingSecurityScopedResource()
-            var isDir: ObjCBool = false
-            if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
-                if isDir.boolValue {
-                    if let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
-                        while let fileURL = enumerator.nextObject() as? URL {
-                            let fileAccessed = fileURL.startAccessingSecurityScopedResource()
-                            copyIfMod(fileURL)
-                            if fileAccessed { fileURL.stopAccessingSecurityScopedResource() }
-                        }
-                    }
-                } else {
-                    copyIfMod(url)
-                }
-            }
-            if accessed { url.stopAccessingSecurityScopedResource() }
-        }
-        return modFiles
     }
 
     // Loescht die Temp-Kopien frueherer App-Laeufe (ModPlayerTemp/). Wird einmalig
@@ -549,10 +574,23 @@ struct MainView: View {
         try? FileManager.default.removeItem(at: root)
     }
 
+    // Alle Ordner-Ebenen ueber dem Titel aufklappen, damit der laufende
+    // Eintrag in der Baum-Ansicht sichtbar ist. Manuell geoeffnete Ordner
+    // bleiben unangetastet (nur einfuegen, nie zuklappen).
+    private func expandAncestors(of url: URL) {
+        guard let components = folderPathByURL[url], !components.isEmpty else { return }
+        var path = ""
+        for component in components {
+            path = path.isEmpty ? component : "\(path)/\(component)"
+            expandedFolders.insert(path)
+        }
+    }
+
     private func selectPlaylistSong(at index: Int, autoPlay: Bool = true) {
         guard index >= 0 && index < playlist.count else { return }
         self.currentPlaylistIndex = index
         let songUrl = playlist[index]
+        expandAncestors(of: songUrl)
         if loadModFile(from: songUrl) {
             // Nur abspielen, wenn gewuenscht — sonst startet z.B. Weiterblaettern
             // im pausierten Zustand ungewollt die Wiedergabe.
@@ -603,21 +641,18 @@ struct MainView: View {
         return name
     }
     
-    private func sortedByDisplayName(_ urls: [URL]) -> [URL] {
-        urls.sorted {
-            cleanFilename($0).localizedStandardCompare(cleanFilename($1)) == .orderedAscending
-        }
+    nonisolated private static func isModFile(_ url: URL) -> Bool {
+        PlaylistScanner.isModFile(url)
     }
 
-    nonisolated private static func isModFile(_ url: URL) -> Bool {
-        let ext = url.pathExtension.lowercased()
-        let name = url.lastPathComponent.lowercased()
-        return ModuleLoader.supportedExtensions.contains(ext) || name.hasPrefix("mod.")
-    }
-    
     private func loadLocalAudioFolder() {
         let fm = FileManager.default
         var candidateDirs: [URL] = []
+        // Primaere Quelle: der Nextcloud-Ordner, der auf allen Macs synct —
+        // dieselbe Playlist unabhaengig davon, wo die App gestartet wird.
+        candidateDirs.append(fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("Nextcloud/Musik/mods", isDirectory: true))
+        // Fallbacks wie bisher: audio/-Ordner neben Arbeitsverzeichnis bzw. App.
         candidateDirs.append(URL(fileURLWithPath: fm.currentDirectoryPath).appendingPathComponent("audio"))
         // Bundle.main.bundlePath ist immer ein (non-optional) String.
         let appDir = URL(fileURLWithPath: Bundle.main.bundlePath).deletingLastPathComponent()
@@ -625,18 +660,11 @@ struct MainView: View {
         for dir in candidateDirs {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
-            // Rekursiv absteigen (wie beim Ordner-Drop in copyModFilesToTemp), damit
-            // auch eine audio/Autor/<mod>-Struktur gefunden wird statt nur die
-            // oberste Verzeichnisebene.
-            var mods: [URL] = []
-            if let enumerator = fm.enumerator(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
-                while let fileURL = enumerator.nextObject() as? URL {
-                    if Self.isModFile(fileURL) { mods.append(fileURL) }
-                }
-            }
-            let sorted = sortedByDisplayName(mods)
-            if sorted.isEmpty { continue }
-            handleDroppedURLs(sorted, autoPlay: true)
+            // Nur nehmen, wenn (rekursiv) wirklich Mods oder Archive drin sind —
+            // sonst den naechsten Kandidaten probieren. Den eigentlichen Scan
+            // (inkl. Hierarchie + Archive) macht dann handleDroppedURLs.
+            guard PlaylistScanner.directoryContainsPlayableContent(dir) else { continue }
+            handleDroppedURLs([dir], autoPlay: true)
             return
         }
     }
@@ -921,6 +949,73 @@ struct MainView: View {
     
     // MARK: - UI Components
     
+    // Eine Zeile der Playlist: Ordner-Zeile (klick = auf-/zuklappen) oder
+    // Titel-Zeile (klick = abspielen). Die Einrueckung folgt der Baumtiefe.
+    @ViewBuilder
+    private func playlistRowView(_ row: PlaylistRow) -> some View {
+        let indent = CGFloat(row.depth) * 14
+
+        switch row.kind {
+        case .folder(let name, let path, let expanded):
+            Button(action: {
+                if expanded { expandedFolders.remove(path) } else { expandedFolders.insert(path) }
+            }) {
+                HStack(spacing: 8) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.spaceTextSecondary)
+                        .frame(width: 10)
+                    Image(systemName: expanded ? "folder.fill" : "folder")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme == .workbench ? .amigaOrange : .spaceAccent)
+                    Text(name)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.leading, 12 + indent)
+                .padding(.trailing, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                .contentShape(Rectangle())
+                .foregroundColor(theme == .workbench ? .amigaWhite : .spaceTextSecondary)
+            }
+            .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+
+        case .file(let fileURL):
+            let playlistIndex = playlist.firstIndex(of: fileURL) ?? -1
+            let isPlayingSong = playlistIndex == currentPlaylistIndex
+
+            Button(action: { selectPlaylistSong(at: playlistIndex) }) {
+                HStack(spacing: 8) {
+                    Image(systemName: isPlayingSong ? "speaker.wave.2.fill" : "music.note")
+                        .font(.system(size: 11))
+                        .foregroundColor(isPlayingSong ? (theme == .workbench ? .amigaOrange : .spaceAccent) : .spaceTextSecondary)
+
+                    Text(cleanFilename(fileURL))
+                        .font(.system(size: 11, weight: isPlayingSong ? .bold : .medium, design: .monospaced))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.leading, 12 + indent)
+                .padding(.trailing, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                .contentShape(Rectangle())
+                .background(
+                    RoundedRectangle(cornerRadius: theme == .workbench ? 0 : 6)
+                        .fill(
+                            isPlayingSong
+                            ? (theme == .workbench ? Color.amigaOrange.opacity(0.2) : Color.spaceAccent.opacity(0.15))
+                            : Color.clear
+                        )
+                )
+                .foregroundColor(isPlayingSong ? (theme == .workbench ? .amigaOrange : .white) : (theme == .workbench ? .amigaWhite : .spaceTextSecondary))
+            }
+            .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+        }
+    }
+
     private var playlistSidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Search field
@@ -984,6 +1079,9 @@ struct MainView: View {
                     Button("Leeren") {
                         coordinator.stop()
                         playlist.removeAll()
+                        playlistTree = nil
+                        expandedFolders.removeAll()
+                        folderPathByURL.removeAll()
                         currentPlaylistIndex = -1
                     }
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -1002,36 +1100,8 @@ struct MainView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(spacing: 0) {
-                            ForEach(filteredPlaylist, id: \.self) { fileURL in
-                                let playlistIndex = playlist.firstIndex(of: fileURL) ?? -1
-                                let isPlayingSong = playlistIndex == currentPlaylistIndex
-
-                                Button(action: { selectPlaylistSong(at: playlistIndex) }) {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: isPlayingSong ? "speaker.wave.2.fill" : "music.note")
-                                            .font(.system(size: 11))
-                                            .foregroundColor(isPlayingSong ? (theme == .workbench ? .amigaOrange : .spaceAccent) : .spaceTextSecondary)
-
-                                        Text(cleanFilename(fileURL))
-                                            .font(.system(size: 11, weight: isPlayingSong ? .bold : .medium, design: .monospaced))
-                                            .lineLimit(1)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 10)
-                                    .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
-                                    .contentShape(Rectangle())
-                                    .background(
-                                        RoundedRectangle(cornerRadius: theme == .workbench ? 0 : 6)
-                                            .fill(
-                                                isPlayingSong
-                                                ? (theme == .workbench ? Color.amigaOrange.opacity(0.2) : Color.spaceAccent.opacity(0.15))
-                                                : Color.clear
-                                            )
-                                    )
-                                    .foregroundColor(isPlayingSong ? (theme == .workbench ? .amigaOrange : .white) : (theme == .workbench ? .amigaWhite : .spaceTextSecondary))
-                                }
-                                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                            ForEach(playlistRows) { row in
+                                playlistRowView(row)
                             }
                         }
                     }
@@ -1042,7 +1112,10 @@ struct MainView: View {
                     .onChange(of: currentPlaylistIndex) { idx in
                         guard idx >= 0, idx < playlist.count else { return }
                         withAnimation {
-                            proxy.scrollTo(playlist[idx], anchor: .center)
+                            // Zeilen-ID der Datei-Zeile ist die URL als String
+                            // (siehe PlaylistRow); der Ordner-Pfad zum Titel ist
+                            // durch expandAncestors bereits aufgeklappt.
+                            proxy.scrollTo(playlist[idx].absoluteString, anchor: .center)
                         }
                     }
                 }
@@ -1066,10 +1139,12 @@ struct MainView: View {
                                 if let idx = playlist.firstIndex(of: url) {
                                     selectPlaylistSong(at: idx)
                                 } else {
-                                    playlist.append(url)
-                                    playlist = sortedByDisplayName(playlist)
-                                    if let idx = playlist.firstIndex(of: url) {
-                                        selectPlaylistSong(at: idx)
+                                    // Titel ist nicht mehr Teil der Playlist (z.B. nach
+                                    // "Leeren") — direkt laden statt ihn in die
+                                    // hierarchische Liste zu zwaengen.
+                                    if loadModFile(from: url) {
+                                        currentPlaylistIndex = -1
+                                        coordinator.play()
                                     }
                                 }
                             }) {

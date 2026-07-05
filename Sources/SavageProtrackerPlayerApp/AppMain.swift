@@ -10,6 +10,16 @@ struct SavageProtrackerPlayerApp: App {
         // (Innerhalb einer Sitzung bleiben die pro-Drop-Verzeichnisse bestehen,
         // weil die Playlist sie noch referenziert — siehe cleanStaleTempRoot.)
         MainView.cleanStaleTempRoot()
+        #if os(macOS)
+        // Zusaetzlich beim regulaeren Beenden aufraeumen (Temp-Kopien und
+        // entpackte Archive verschwinden sofort); die Start-Reinigung oben
+        // bleibt als Fallnetz fuer Abstuerze/Force-Quit bestehen.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: nil
+        ) { _ in
+            MainView.cleanStaleTempRoot()
+        }
+        #endif
     }
 
     var body: some Scene {
