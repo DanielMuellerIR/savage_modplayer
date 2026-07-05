@@ -75,6 +75,17 @@ if [[ "$REQUIRE_CLEAN" == "1" ]] && [[ -n "$(git status --short --untracked-file
     exit 1
 fi
 
+# Die Single-File-HTML wird aus src/ generiert und bettet u.a. VERSION ein.
+# Veraltet gepushter Stand laesst den CI-Check "HTML ist aktuell" fehlschlagen
+# (passiert bei 1.4.0/1.4.1 nach VERSION-Bumps). Deshalb hier regenerieren und
+# bei Abweichung abbrechen — committen bleibt bewusst ein manueller Schritt.
+python3 build.py >/dev/null
+if [[ -n "$(git status --short -- savage-mod-player.html)" ]]; then
+    echo "ABBRUCH: savage-mod-player.html war veraltet (build.py hat sie gerade regeneriert)." >&2
+    echo "Diff pruefen, committen und publish_github.sh erneut starten." >&2
+    exit 1
+fi
+
 # Nur getrackte Dateien koennen auf GitHub landen. Deshalb reicht git ls-files
 # als harter Schutz gegen Testmusik und lokale Release-Artefakte.
 FORBIDDEN="$(git ls-files | grep -E -i '(^audio/|\.mod$|\.sid$|\.wav$|\.aiff?$|\.mp3$|\.flac$|\.dmg$|\.app/|\.zip$|\.tar(\.gz)?$)' || true)"
