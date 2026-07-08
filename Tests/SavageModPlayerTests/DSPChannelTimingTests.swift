@@ -317,4 +317,73 @@ final class DSPChannelTimingTests: XCTestCase {
         ch.performTick(tick: 2, sampleRate: sampleRate, clockRate: clockRate) // pos2 -> 32/64
         XCTAssertEqual(ch.envVolumeFactor, 0.5, accuracy: 1e-5)
     }
+
+    // MARK: - XM Volume-Column + Effekte (M4)
+
+    private func makeXMChannel() -> DSPChannel {
+        let ch = DSPChannel(index: 1)
+        ch.xmLinearMode = true
+        ch.periodMin = 1
+        ch.periodMax = 7680
+        return ch
+    }
+
+    /// Volume-Column Set Volume (0x10..0x50) setzt die Lautstärke direkt.
+    func testXMVolumeColumnSetVolume() {
+        let ch = makeXMChannel()
+        let inst = Instrument(index: 1, name: "X",
+                              samples: [Sample(pcm: [0.1, 0.2], loopStart: 0, loopLength: 0,
+                                               loopType: .none, volume: 64, finetune: 0)])
+        // volCmd 0x40 -> Volume 48.
+        ch.playNote(Note(instrument: 1, period: 0, effectId: 0, effectData: 0, key: 48, volCmd: 0x40),
+                    instruments: [nil, inst])
+        XCTAssertEqual(ch.volume, 48, accuracy: 0.001, "Volume-Column 0x40 -> Volume 48")
+    }
+
+    /// Volume-Column Vol-Slide up (0x70..0x7F) gleitet ab Tick 1.
+    func testXMVolumeColumnVolumeSlide() {
+        let ch = makeXMChannel()
+        ch.volume = 32
+        ch.currentVolume = 32
+        // volCmd 0x73 -> +3 pro Tick.
+        ch.playNote(Note(instrument: 0, period: 0, effectId: 0, effectData: 0, volCmd: 0x73),
+                    instruments: [nil])
+        ch.performTick(tick: 0, sampleRate: sampleRate, clockRate: clockRate)
+        XCTAssertEqual(ch.currentVolume, 32, accuracy: 0.001, "Tick 0: kein Slide")
+        ch.performTick(tick: 1, sampleRate: sampleRate, clockRate: clockRate)
+        XCTAssertEqual(ch.currentVolume, 35, accuracy: 0.001, "Tick 1: +3")
+    }
+
+    /// Volume-Column Set Panning (0xC0..0xCF) setzt das Panorama (y<<4)/255.
+    func testXMVolumeColumnSetPanning() {
+        let ch = makeXMChannel()
+        let inst = Instrument(index: 1, name: "X",
+                              samples: [Sample(pcm: [0.1, 0.2], loopStart: 0, loopLength: 0,
+                                               loopType: .none, volume: 64, finetune: 0)])
+        // volCmd 0xC8 -> Panning (8<<4)/255 = 128/255.
+        ch.playNote(Note(instrument: 1, period: 0, effectId: 0, effectData: 0, key: 48, volCmd: 0xC8),
+                    instruments: [nil, inst])
+        XCTAssertEqual(ch.panning, 128.0 / 255.0, accuracy: 0.001)
+    }
+
+    /// XM Kxx (Effekt-Spalte) mit Tick-Parameter löst Key-Off auf dem Tick aus.
+    func testXMKeyOffEffectAtTick() {
+        let ch = makeXMChannel()
+        let env = Envelope(points: [EnvelopePoint(frame: 0, value: 64)],
+                           sustainPoint: 0, loopStart: 0, loopEnd: 0,
+                           sustainEnabled: false, loopEnabled: false)
+        let inst = Instrument(index: 1, name: "X",
+                              samples: [Sample(pcm: [0.1, 0.2], loopStart: 0, loopLength: 0,
+                                               loopType: .none, volume: 64, finetune: 0)],
+                              volumeEnvelope: env, fadeout: 2048)
+        ch.instrument = inst
+        // K02 (ModuleEffect.keyOff, Param 2) -> Key-Off auf Tick 2.
+        ch.playNote(Note(instrument: 0, period: 0, effectId: ModuleEffect.keyOff, effectData: 2),
+                    instruments: [nil])
+        XCTAssertFalse(ch.keyReleased, "vor Tick 2 noch nicht losgelassen")
+        ch.performTick(tick: 1, sampleRate: sampleRate, clockRate: clockRate)
+        XCTAssertFalse(ch.keyReleased)
+        ch.performTick(tick: 2, sampleRate: sampleRate, clockRate: clockRate)
+        XCTAssertTrue(ch.keyReleased, "Tick 2: Kxx löst Key-Off aus")
+    }
 }

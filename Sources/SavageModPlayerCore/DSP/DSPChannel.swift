@@ -63,6 +63,10 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var volume: Float = 64
     nonisolated(unsafe) public var currentVolume: Float = 64
     nonisolated(unsafe) public var volumeSlide: Float = 0
+    // XM-Volume-Column Volume-Slide pro Tick (getrennt vom Effekt-Spalten-Slide).
+    nonisolated(unsafe) public var volColVolSlide: Float = 0
+    // XM Panning-Slide pro Tick in 0..255-Einheiten (Volume-Column D/E oder Pxy).
+    nonisolated(unsafe) public var panSlide: Float = 0
     
     // Custom Panning (0..1.0, 0.5 = Center)
     nonisolated(unsafe) public var panning: Float = 0.5
@@ -77,6 +81,8 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var patternLoopStartRow: Int = 0
     nonisolated(unsafe) public var patternLoopCount: Int = -1
     nonisolated(unsafe) public var cutNoteTick: Int = -1
+    // XM Kxx: Key-Off soll auf diesem Tick ausgelöst werden (-1 = inaktiv).
+    nonisolated(unsafe) public var keyOffTick: Int = -1
     nonisolated(unsafe) public var retrigger: Int = 0
     // -1 bedeutet: kein EDx-Delay aktiv. 0 ist ein echter Tick und darf
     // leere Rows nicht versehentlich wie eine verzögerte Note auslösen.
@@ -185,12 +191,15 @@ public final class DSPChannel: Sendable {
         volume = 64
         currentVolume = 64
         volumeSlide = 0
+        volColVolSlide = 0
+        panSlide = 0
         sampleIndex = 0.0
         sampleSpeed = 0.0
         sampleOffsetMemory = 0.0
         patternLoopStartRow = 0
         patternLoopCount = -1
         cutNoteTick = -1
+        keyOffTick = -1
         retrigger = 0
         delayNote = -1
         arpActive = false
@@ -294,6 +303,7 @@ public final class DSPChannel: Sendable {
         self.setPeriod = nil
         self.delayNote = -1
         self.cutNoteTick = -1
+        self.keyOffTick = -1
 
         var hasSetInstrument = false
         if note.instrument > 0 {
@@ -358,7 +368,11 @@ public final class DSPChannel: Sendable {
         }
 
         self.applyEffect(note: note)
-        
+
+        // XM-Volume-Column (zweite Effektspalte) NACH dem Haupteffekt auswerten,
+        // damit sie bei Lautstärke/Panning Vorrang hat (FT2-Verhalten).
+        if xmLinearMode { self.applyXMVolumeColumn(note.volCmd) }
+
         if self.delayNote > 0 {
             return
         }
@@ -490,6 +504,10 @@ public final class DSPChannel: Sendable {
 
     public func applyEffect(note: Note) {
         self.volumeSlide = 0
+        // XM-Volume-Column-/Panning-Slides pro Row zurücksetzen (auch wenn die
+        // Zeile gar keinen Haupteffekt hat — daher vor dem hasEffect-Guard).
+        self.volColVolSlide = 0
+        self.panSlide = 0
         self.periodDelta = 0
         self.portamento = false
         self.vibrato = false
@@ -641,6 +659,74 @@ public final class DSPChannel: Sendable {
             if effectHigh > 0 { self.vibratoSpeed = Float(effectHigh) }
             if effectLow > 0 { self.vibratoDepth = Float(effectLow) / 4.0 }
             self.vibrato = true
+        case ModuleEffect.keyOff: // XM Kxx: Key-Off (sofort bei 0, sonst auf Tick xx)
+            if effectData == 0 {
+                self.triggerKeyOff()
+            } else {
+                self.keyOffTick = effectData
+            }
+        case ModuleEffect.setEnvelopePos: // XM Lxx: Envelope-Position setzen
+            self.volEnvPos = effectData
+            self.panEnvPos = effectData
+        case ModuleEffect.panSlide: // XM Pxy: x = nach rechts, y = nach links (pro Tick)
+            if effectHigh > 0 {
+                self.panSlide = Float(effectHigh)
+            } else if effectLow > 0 {
+                self.panSlide = -Float(effectLow)
+            }
+        case ModuleEffect.extraFinePortaUp: // XM X1x: einmalig Periode -x (höher)
+            applyFinePeriod(delta: -Float(effectData))
+        case ModuleEffect.extraFinePortaDown: // XM X2x: einmalig Periode +x (tiefer)
+            applyFinePeriod(delta: Float(effectData))
+        default:
+            break
+        }
+    }
+
+    // XM-Key-Off auslösen: Sustain freigeben (Fadeout startet); ohne aktive
+    // Volume-Hüllkurve stoppt der Ton sofort (FT2-Quirk).
+    private func triggerKeyOff() {
+        self.keyReleased = true
+        if self.instrument?.volumeEnvelope == nil {
+            self.playing = false
+        }
+    }
+
+    // XM-Volume-Column (rohes Byte 0x00..0xFF) auswerten. Tick-0-Sofortwerte
+    // (Set Volume/Panning, Fine-Slides, Vibrato-Parameter, Tone-Porta) direkt,
+    // die laufenden Slides über volColVolSlide/panSlide (in performTick pro Tick).
+    private func applyXMVolumeColumn(_ v: Int) {
+        switch v {
+        case 0x00:
+            break                                   // nichts
+        case 0x10...0x50:
+            self.setVolume = Float(v - 0x10)        // Set Volume 0..64
+        case 0x60...0x6F:
+            self.volColVolSlide = -Float(v & 0x0F)  // Vol-Slide down/Tick
+        case 0x70...0x7F:
+            self.volColVolSlide = Float(v & 0x0F)   // Vol-Slide up/Tick
+        case 0x80...0x8F:
+            applyFineVolume(delta: -Float(v & 0x0F)) // Fine Vol down (einmalig)
+        case 0x90...0x9F:
+            applyFineVolume(delta: Float(v & 0x0F))  // Fine Vol up (einmalig)
+        case 0xA0...0xAF:
+            self.vibratoSpeed = Float(v & 0x0F)     // Set Vibrato Speed
+        case 0xB0...0xBF:
+            self.vibratoDepth = Float(v & 0x0F)     // Vibrato (Depth)
+            self.vibrato = true
+        case 0xC0...0xCF:
+            self.panning = Float((v & 0x0F) << 4) / 255.0  // Set Panning (0,16,…,240)
+        case 0xD0...0xDF:
+            self.panSlide = -Float(v & 0x0F)        // Panning-Slide links/Tick
+        case 0xE0...0xEF:
+            self.panSlide = Float(v & 0x0F)         // Panning-Slide rechts/Tick
+        case 0xF0...0xFF:                            // Tone Portamento (Speed = y<<4)
+            self.portamento = true
+            let speed = (v & 0x0F) << 4
+            if speed > 0 { self.portamentoSpeed = Float(speed) }
+            self.periodDelta = self.portamentoSpeed
+            self.setCurrentPeriod = false           // nicht snappen, nicht retriggern
+            self.setSampleIndex = nil
         default:
             break
         }
@@ -803,6 +889,17 @@ public final class DSPChannel: Sendable {
         // currentPeriod akkumuliert). Alles gegated — MOD/S3M unberührt.
         var xmPeriodDelta: Float = 0
         if xmLinearMode {
+            // Volume-Column-Volume-Slide und Panning-Slide (erst ab Tick 1, wie
+            // die anderen Slides).
+            if self.volColVolSlide != 0 && tick > 0 {
+                self.currentVolume = max(0.0, min(64.0, self.currentVolume + self.volColVolSlide))
+            }
+            if self.panSlide != 0 && tick > 0 {
+                self.panning = max(0.0, min(1.0, self.panning + self.panSlide / 255.0))
+            }
+            // XM Kxx: verzögerter Key-Off auf dem angegebenen Tick.
+            if self.keyOffTick == tick { self.triggerKeyOff() }
+
             if let env = instrument?.volumeEnvelope {
                 envVolumeFactor = envelopeValue(env, at: volEnvPos) / 64.0
                 stepEnvelope(env, pos: &volEnvPos, released: keyReleased)
