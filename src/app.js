@@ -149,7 +149,13 @@ folderInput.addEventListener('change', (e) => {
 });
 
 volumeSlider.addEventListener('input', (e) => {
-  player.setVolume(Number(e.target.value));
+  const v = Number(e.target.value);
+  player.setVolume(v);
+  // Letzte hörbare Lautstärke merken. So stellt Mute/Unmute (Taste M) beim
+  // Entmuten den vorherigen Pegel wieder her — auch wenn der User den Slider
+  // von Hand auf 0 gezogen hat. Vorher blieb previousVolume in diesem Fall auf
+  // dem hartkodierten Startwert 1.0, und M sprang unerwartet auf volle Lautstärke.
+  if (v > 0) previousVolume = v;
 });
 
 playBtn.addEventListener('click', async () => {
