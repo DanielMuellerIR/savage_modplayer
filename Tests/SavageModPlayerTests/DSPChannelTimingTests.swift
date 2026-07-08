@@ -244,11 +244,17 @@ final class DSPChannelTimingTests: XCTestCase {
         XCTAssertEqual(ch.period, 3840, accuracy: 0.001)
     }
 
-    /// Key-Off (Note 97 / Note.keyOff) setzt keyReleased, ohne die laufende Note
-    /// zu retriggern oder die Periode zu ändern.
-    func testXMKeyOffMarksReleasedWithoutRetrigger() {
+    /// Key-Off (Note 97 / Note.keyOff) setzt keyReleased und retriggert die Note
+    /// nicht (Sample-Position/Periode unverändert). Ohne Volume-Hüllkurve stoppt der
+    /// Ton nach FT2-Quirk sofort, MIT Hüllkurve läuft er (Fadeout) weiter.
+    func testXMKeyOffWithoutVolumeEnvelopeStopsImmediately() {
         let ch = DSPChannel(index: 1)
         ch.xmLinearMode = true
+        // Instrument OHNE Volume-Hüllkurve.
+        let inst = Instrument(index: 1, name: "X",
+                              samples: [Sample(pcm: [0.1, 0.2], loopStart: 0, loopLength: 0,
+                                               loopType: .none, volume: 64, finetune: 0)])
+        ch.instrument = inst
         ch.period = 4608
         ch.currentPeriod = 4608
         ch.sampleIndex = 100
@@ -256,8 +262,59 @@ final class DSPChannelTimingTests: XCTestCase {
         ch.playNote(Note(instrument: 0, period: 0, effectId: 0, effectData: 0, key: Note.keyOff),
                     instruments: [nil])
         XCTAssertTrue(ch.keyReleased)
-        XCTAssertTrue(ch.playing, "Key-Off stoppt (noch) nicht sofort")
+        XCTAssertFalse(ch.playing, "Key-Off ohne Volume-Hüllkurve stoppt sofort (FT2-Quirk)")
         XCTAssertEqual(ch.sampleIndex, 100, "Key-Off darf das Sample nicht neu starten")
         XCTAssertEqual(ch.period, 4608, accuracy: 0.001)
+    }
+
+    /// Mit aktiver Volume-Hüllkurve läuft Key-Off als Fadeout weiter (Ton bleibt
+    /// zunächst spielend), und der Fadeout senkt fadeVolume pro Tick.
+    func testXMKeyOffWithVolumeEnvelopeFadesOut() {
+        let ch = DSPChannel(index: 1)
+        ch.xmLinearMode = true
+        let env = Envelope(points: [EnvelopePoint(frame: 0, value: 64)],
+                           sustainPoint: 0, loopStart: 0, loopEnd: 0,
+                           sustainEnabled: false, loopEnabled: false)
+        let inst = Instrument(index: 1, name: "X",
+                              samples: [Sample(pcm: [0.1, 0.2], loopStart: 0, loopLength: 0,
+                                               loopType: .none, volume: 64, finetune: 0)],
+                              volumeEnvelope: env, fadeout: 4096)
+        ch.instrument = inst
+        ch.period = 4608
+        ch.currentPeriod = 4608
+        ch.fadeVolume = 65536
+        ch.playing = true
+        ch.playNote(Note(instrument: 0, period: 0, effectId: 0, effectData: 0, key: Note.keyOff),
+                    instruments: [nil])
+        XCTAssertTrue(ch.keyReleased)
+        XCTAssertTrue(ch.playing, "Key-Off mit Volume-Hüllkurve fadet aus, stoppt nicht sofort")
+        ch.performTick(tick: 1, sampleRate: sampleRate, clockRate: clockRate)
+        XCTAssertEqual(ch.fadeVolume, 65536 - 4096, "Fadeout senkt fadeVolume pro Tick um instrument.fadeout")
+        XCTAssertLessThan(ch.xmVolumeScale, 1.0, "xmVolumeScale sinkt mit dem Fadeout")
+    }
+
+    /// Die Volume-Hüllkurve wird pro Tick linear zwischen den Punkten interpoliert
+    /// (Punkte (0,64)->(4,0): fällt in 4 Ticks von voll auf null).
+    func testXMVolumeEnvelopeInterpolates() {
+        let ch = DSPChannel(index: 1)
+        ch.xmLinearMode = true
+        ch.periodMin = 1
+        ch.periodMax = 7680
+        let env = Envelope(points: [EnvelopePoint(frame: 0, value: 64), EnvelopePoint(frame: 4, value: 0)],
+                           sustainPoint: 0, loopStart: 0, loopEnd: 0,
+                           sustainEnabled: false, loopEnabled: false)
+        let inst = Instrument(index: 1, name: "X",
+                              samples: [Sample(pcm: [0.1, 0.2, 0.3], loopStart: 0, loopLength: 0,
+                                               loopType: .none, volume: 64, finetune: 0)],
+                              volumeEnvelope: env)
+        ch.playNote(Note(instrument: 1, period: 0, effectId: 0, effectData: 0, key: 48),
+                    instruments: [nil, inst])
+        XCTAssertEqual(ch.envVolumeFactor, 1.0, accuracy: 1e-5, "Startwert Tick 0")
+        ch.performTick(tick: 0, sampleRate: sampleRate, clockRate: clockRate) // liest pos0=64, steppt auf 1
+        XCTAssertEqual(ch.envVolumeFactor, 1.0, accuracy: 1e-5)
+        ch.performTick(tick: 1, sampleRate: sampleRate, clockRate: clockRate) // pos1 -> 48/64
+        XCTAssertEqual(ch.envVolumeFactor, 48.0 / 64.0, accuracy: 1e-5)
+        ch.performTick(tick: 2, sampleRate: sampleRate, clockRate: clockRate) // pos2 -> 32/64
+        XCTAssertEqual(ch.envVolumeFactor, 0.5, accuracy: 1e-5)
     }
 }

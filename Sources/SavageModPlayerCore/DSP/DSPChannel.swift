@@ -97,9 +97,43 @@ public final class DSPChannel: Sendable {
     // XM-Modus mit linearer Frequenztabelle: Periode aus Halbton (Key +
     // relativeNote) + Finetune, Frequenz exponentiell statt clockRate/Periode.
     nonisolated(unsafe) public var xmLinearMode: Bool = false
-    // XM: Note wurde losgelassen (Key-Off / Note 97). Steuert in M3 Fadeout und
-    // Envelope-Release; hier bereits gesetzt, damit playNote es zurücksetzen kann.
+    // XM: Note wurde losgelassen (Key-Off / Note 97). Gibt Sustain frei + startet
+    // den Fadeout.
     nonisolated(unsafe) public var keyReleased: Bool = false
+
+    // ---- XM Voice-Zustand (Hüllkurven / Fadeout / Auto-Vibrato / Ping-Pong) ----
+    // Volume-/Panning-Envelope-Position (x-Achse = Ticks ab Note-Start).
+    nonisolated(unsafe) public var volEnvPos: Int = 0
+    nonisolated(unsafe) public var panEnvPos: Int = 0
+    // Aktueller Envelope-Volume-Faktor 0..1 (1 wenn keine Volume-Hüllkurve).
+    nonisolated(unsafe) public var envVolumeFactor: Float = 1.0
+    // Aktueller Panning-Envelope-Wert 0..64 (32 = neutral/Mitte).
+    nonisolated(unsafe) public var panEnvValue: Float = 32
+    // Ob das aktive Instrument eine Panning-Hüllkurve hat (steuert effectivePanning).
+    nonisolated(unsafe) public var hasPanEnvelope: Bool = false
+    // Fade-Volume 0..65536. Sinkt nach Key-Off pro Tick um instrument.fadeout.
+    nonisolated(unsafe) public var fadeVolume: Int = 65536
+    // Auto-Vibrato-Zustand (Phase 0..255, Amplitude als depth<<8, Sweep-Schritt).
+    nonisolated(unsafe) public var autoVibPos: Int = 0
+    nonisolated(unsafe) public var autoVibAmp: Int = 0
+    nonisolated(unsafe) public var autoVibSweepStep: Int = 0
+    // Ping-Pong-Sample-Richtung: +1 vorwärts, -1 rückwärts.
+    nonisolated(unsafe) public var sampleDirection: Double = 1.0
+
+    // Render-Skalierung der XM-Voice: Envelope-Volume * Fadeout. Für MOD/S3M 1.0
+    // (kein Einfluss). Wird vom Renderer auf die Kanal-Lautstärke multipliziert.
+    public var xmVolumeScale: Float {
+        xmLinearMode ? envVolumeFactor * (Float(fadeVolume) / 65536.0) : 1.0
+    }
+
+    // Effektives Panning inkl. XM-Panning-Hüllkurve. Ohne XM/ohne Pan-Hüllkurve
+    // das rohe Kanal-Panning (MOD/S3M unverändert). Formel §8 der XM-Referenz.
+    public var effectivePanning: Float {
+        guard xmLinearMode, hasPanEnvelope else { return panning }
+        let pan = panning * 255.0
+        let finalPan = pan + (panEnvValue - 32.0) * (128.0 - abs(pan - 128.0)) / 32.0
+        return max(0.0, min(1.0, finalPan / 255.0))
+    }
     // Skaliert Vibrato-Deltas: S3M-Perioden sind 4x feiner als Amiga-Perioden.
     nonisolated(unsafe) public var periodScale: Float = 1
     // Perioden-Klemmgrenzen (Amiga: 113..856, S3M: 64..32767).
@@ -168,6 +202,16 @@ public final class DSPChannel: Sendable {
         s3mMode = false
         xmLinearMode = false
         keyReleased = false
+        volEnvPos = 0
+        panEnvPos = 0
+        envVolumeFactor = 1.0
+        panEnvValue = 32
+        hasPanEnvelope = false
+        fadeVolume = 65536
+        autoVibPos = 0
+        autoVibAmp = 0
+        autoVibSweepStep = 0
+        sampleDirection = 1.0
         periodScale = 1
         periodMin = 113
         periodMax = 856
@@ -274,10 +318,13 @@ public final class DSPChannel: Sendable {
             // S3M-Note-Cut (^^): Sample sofort stoppen.
             self.playing = false
         } else if note.key == Note.keyOff {
-            // XM-Key-Off (Note 97): Note loslassen. Envelope-Release + Fadeout
-            // folgen in M3; hier nur den Zustand markieren (kein Retrigger, keine
-            // Perioden-/Sample-Änderung).
+            // XM-Key-Off (Note 97): Sustain freigeben, Fadeout startet.
             self.keyReleased = true
+            // FT2-Quirk: Ohne aktive Volume-Hüllkurve stoppt Key-Off den Ton
+            // sofort (statt langsam auszufaden).
+            if self.instrument?.volumeEnvelope == nil {
+                self.playing = false
+            }
         } else if note.period > 0 {
             // Finetune vom aktiven Sample (neu getriggert oder laufend).
             let activeSample = self.setSample ?? self.sample
@@ -338,8 +385,109 @@ public final class DSPChannel: Sendable {
             self.sampleIndex = idx
             self.playing = true
         }
+
+        // XM: bei echtem Retrigger (neue Note) die Voice zurücksetzen —
+        // Hüllkurven-Positionen, Fadeout, Auto-Vibrato, Sample-Richtung.
+        if xmLinearMode, self.setSampleIndex != nil {
+            initXMVoice()
+        }
     }
-    
+
+    // XM-Voice bei Note-Trigger initialisieren. Setzt Hüllkurven-Positionen auf 0
+    // (mit sofortigem Startwert für Tick 0), Fadeout auf voll und den Auto-Vibrato
+    // inkl. Sweep-Anlauf. Liest die Parameter aus dem aktuellen Instrument.
+    private func initXMVoice() {
+        volEnvPos = 0
+        panEnvPos = 0
+        fadeVolume = 65536
+        sampleDirection = 1.0
+        hasPanEnvelope = instrument?.panningEnvelope != nil
+        // Startwerte für Tick 0 sofort setzen (sonst erst ab dem ersten Tick).
+        if let env = instrument?.volumeEnvelope {
+            envVolumeFactor = envelopeValue(env, at: 0) / 64.0
+        } else {
+            envVolumeFactor = 1.0
+        }
+        if let env = instrument?.panningEnvelope {
+            panEnvValue = envelopeValue(env, at: 0)
+        } else {
+            panEnvValue = 32
+        }
+        autoVibPos = 0
+        if let av = instrument?.autoVibrato, av.depth > 0 {
+            if av.sweep > 0 {
+                autoVibAmp = 0
+                autoVibSweepStep = (av.depth << 8) / av.sweep
+            } else {
+                autoVibAmp = av.depth << 8
+                autoVibSweepStep = 0
+            }
+        } else {
+            autoVibAmp = 0
+            autoVibSweepStep = 0
+        }
+    }
+
+    // Linear interpolierten Envelope-Wert (0..64) an Tick-Position `pos` lesen.
+    // Vor dem ersten Punkt = erster Wert, hinter dem letzten = letzter Wert.
+    private func envelopeValue(_ env: Envelope, at pos: Int) -> Float {
+        let pts = env.points
+        guard let first = pts.first, let last = pts.last else { return 64 }
+        if pos <= first.frame { return Float(first.value) }
+        if pos >= last.frame { return Float(last.value) }
+        for i in 0..<(pts.count - 1) {
+            let a = pts[i], b = pts[i + 1]
+            if pos >= a.frame && pos <= b.frame {
+                let dx = b.frame - a.frame
+                if dx <= 0 { return Float(a.value) }
+                let t = Float(pos - a.frame) / Float(dx)
+                return Float(a.value) + t * Float(b.value - a.value)
+            }
+        }
+        return Float(last.value)
+    }
+
+    // Envelope-Position einen Tick weiterschieben — mit Sustain (hält, solange
+    // die Note nicht losgelassen ist) und Loop.
+    private func stepEnvelope(_ env: Envelope, pos: inout Int, released: Bool) {
+        let pts = env.points
+        guard pts.count > 1 else { return }
+        if env.sustainEnabled, !released,
+           env.sustainPoint >= 0, env.sustainPoint < pts.count,
+           pos == pts[env.sustainPoint].frame {
+            return // am Sustain-Punkt halten
+        }
+        pos += 1
+        if env.loopEnabled,
+           env.loopEnd >= 0, env.loopEnd < pts.count,
+           pos >= pts[env.loopEnd].frame {
+            pos = (env.loopStart >= 0 && env.loopStart < pts.count) ? pts[env.loopStart].frame : 0
+        }
+    }
+
+    // Auto-Vibrato einen Tick weiterdrehen und das Perioden-Delta zurückgeben
+    // (±~15 bei voller Tiefe). Sweep läuft nur, solange die Note nicht losgelassen ist.
+    private func advanceAutoVibrato() -> Float {
+        guard let av = instrument?.autoVibrato, av.depth > 0 else { return 0 }
+        if autoVibSweepStep > 0, !keyReleased {
+            autoVibAmp += autoVibSweepStep
+            if (autoVibAmp >> 8) > av.depth {
+                autoVibAmp = av.depth << 8
+                autoVibSweepStep = 0
+            }
+        }
+        autoVibPos = (autoVibPos + av.rate) & 0xFF
+        let waveVal: Int
+        switch av.type {
+        case 1: waveVal = autoVibPos > 127 ? 64 : -64                 // Square
+        case 2: waveVal = (((autoVibPos >> 1) + 64) & 127) - 64       // Ramp
+        case 3: waveVal = (((-(autoVibPos >> 1)) + 64) & 127) - 64    // Ramp (invertiert)
+        default:                                                       // Sine (±64)
+            waveVal = Int((sin(Double(autoVibPos) / 256.0 * 2.0 * Double.pi) * 64.0).rounded())
+        }
+        return Float((waveVal * autoVibAmp) >> 14)
+    }
+
     public func applyEffect(note: Note) {
         self.volumeSlide = 0
         self.periodDelta = 0
@@ -650,25 +798,49 @@ public final class DSPChannel: Sendable {
             self.tremorCount += 1
         }
 
+        // XM-Voice pro Tick: Volume-/Panning-Hüllkurve fortschreiben, Fadeout nach
+        // Key-Off, Auto-Vibrato als Perioden-Delta (nur für die Frequenz, nicht in
+        // currentPeriod akkumuliert). Alles gegated — MOD/S3M unberührt.
+        var xmPeriodDelta: Float = 0
+        if xmLinearMode {
+            if let env = instrument?.volumeEnvelope {
+                envVolumeFactor = envelopeValue(env, at: volEnvPos) / 64.0
+                stepEnvelope(env, pos: &volEnvPos, released: keyReleased)
+            }
+            if let env = instrument?.panningEnvelope {
+                panEnvValue = envelopeValue(env, at: panEnvPos)
+                stepEnvelope(env, pos: &panEnvPos, released: keyReleased)
+            }
+            // Fadeout nur bei aktiver Volume-Hüllkurve (FT2-Verhalten).
+            if keyReleased, let inst = instrument, inst.volumeEnvelope != nil, inst.fadeout > 0 {
+                fadeVolume -= inst.fadeout
+                if fadeVolume < 0 { fadeVolume = 0 }
+            }
+            xmPeriodDelta = advanceAutoVibrato()
+        }
+
         if self.currentPeriod < self.periodMin { self.currentPeriod = self.periodMin }
         if self.currentPeriod > self.periodMax { self.currentPeriod = self.periodMax }
-        
-        if self.currentPeriod > 0, sampleRate > 0 {
+
+        // Auto-Vibrato-Delta nur für die Frequenzberechnung addieren (nicht clampen
+        // in currentPeriod, damit es sich nicht aufsummiert). MOD/S3M: Delta 0.
+        let effPeriod = self.currentPeriod + xmPeriodDelta
+        if effPeriod > 0, sampleRate > 0 {
             // XM linear: Frequenz exponentiell aus der Periode. MOD/S3M: Paula-/
             // ST3-Clock geteilt durch die Periode. (pow ist alloc-frei — wie das
             // Arpeggio oben — und damit im Render-Block zulässig.)
             let hz: Double
             if xmLinearMode {
-                hz = 8363.0 * pow(2.0, (4608.0 - Double(self.currentPeriod)) / 768.0)
+                hz = 8363.0 * pow(2.0, (4608.0 - Double(effPeriod)) / 768.0)
             } else {
-                hz = clockRate / Double(self.currentPeriod)
+                hz = clockRate / Double(effPeriod)
             }
             let speed = hz / sampleRate
             self.sampleSpeed = speed.isNaN || speed.isInfinite ? 0.0 : speed
         } else {
             self.sampleSpeed = 0.0
         }
-        
+
         if self.cutNoteTick == tick {
             self.currentVolume = 0.0
         }

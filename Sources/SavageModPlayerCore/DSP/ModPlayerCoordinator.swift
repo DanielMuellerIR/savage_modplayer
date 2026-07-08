@@ -844,8 +844,8 @@ public final class ModPlayerCoordinator: ObservableObject {
                     // Write to channel waves buffer (Thread-safe, preallocated)
                     waveBuffer.channelWavesPointer[i * 32 + wIdx] = outputSample
 
-                    // Panning LRRL mit Separation
-                    let p = ch.panning
+                    // Panning LRRL mit Separation (XM: inkl. Panning-Hüllkurve)
+                    let p = ch.effectivePanning
                     let separation = state.stereoSeparation
                     let pEffective = max(0.0, min(1.0, 0.5 + (p - 0.5) * separation))
                     let lGain = 1.0 - pEffective
@@ -1271,12 +1271,14 @@ public final class ModPlayerCoordinator: ObservableObject {
             sampleVal = ch.getNearestSample(from: smp.pcm, index: ch.sampleIndex)
         }
 
-        ch.sampleIndex += ch.sampleSpeed
+        // sampleDirection ist bei MOD/S3M immer +1 (unverändert); nur XM-Ping-Pong
+        // dreht sie auf -1. xmVolumeScale ist bei MOD/S3M 1.0 (Envelope/Fadeout aus).
+        ch.sampleIndex += ch.sampleSpeed * ch.sampleDirection
         if smp.isLooped {
             wrapLoopedSampleIndexIfNeeded(channel: ch, sample: smp)
         }
 
-        return sampleVal * ch.currentVolume / 64.0
+        return sampleVal * ch.currentVolume / 64.0 * ch.xmVolumeScale
     }
 
     nonisolated private static func wrapLoopedSampleIndexIfNeeded(channel ch: DSPChannel, sample smp: Sample) {
@@ -1287,11 +1289,25 @@ public final class ModPlayerCoordinator: ObservableObject {
         guard loopEnd > loopStart else { return }
 
         let start = Double(loopStart)
-        let length = Double(loopEnd - loopStart)
-        if ch.sampleIndex >= Double(loopEnd) {
-            // Paula laeuft in den Repeat-Bereich weiter. Der alte Swift-Code
-            // setzte hart auf repeatOffset und konnte bei genauem Loop-Ende
-            // kurzzeitig ausserhalb der gueltigen Sampledaten landen.
+        let end = Double(loopEnd)
+        let length = end - start
+
+        if smp.loopType == .pingpong {
+            // Ping-Pong: an den Loop-Grenzen die Richtung umkehren und den
+            // Überschuss zurückreflektieren.
+            if ch.sampleDirection > 0, ch.sampleIndex >= end {
+                let over = (ch.sampleIndex - end).truncatingRemainder(dividingBy: length)
+                ch.sampleIndex = end - 1 - over
+                ch.sampleDirection = -1
+            } else if ch.sampleDirection < 0, ch.sampleIndex < start {
+                let under = (start - ch.sampleIndex).truncatingRemainder(dividingBy: length)
+                ch.sampleIndex = start + under
+                ch.sampleDirection = 1
+            }
+        } else if ch.sampleIndex >= end {
+            // Vorwärts-Loop: in den Repeat-Bereich zurückfalten. Der alte Swift-
+            // Code setzte hart auf repeatOffset und konnte bei genauem Loop-Ende
+            // kurzzeitig ausserhalb der gültigen Sampledaten landen.
             ch.sampleIndex = start + (ch.sampleIndex - start).truncatingRemainder(dividingBy: length)
         }
     }
