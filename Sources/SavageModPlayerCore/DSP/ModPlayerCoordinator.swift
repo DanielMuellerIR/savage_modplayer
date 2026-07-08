@@ -264,6 +264,15 @@ public final class ModPlayerCoordinator: ObservableObject {
                 ch.periodScale = 4
                 ch.periodMin = 64
                 ch.periodMax = 32767
+            } else if mod.format == .xm {
+                // Lineares XM-Frequenzmodell. Perioden reichen bis ~7680 (tiefste
+                // Note), darum weite Klemmgrenzen. Amiga-Frequenz-XMs (selten,
+                // mod.linearFrequency == false) werden vorerst über dasselbe
+                // lineare Modell approximiert — echte Amiga-Periodentabelle ist
+                // ein späterer Feinschliff (TODO).
+                ch.xmLinearMode = true
+                ch.periodMin = 1
+                ch.periodMax = 7680
             }
         }
     }

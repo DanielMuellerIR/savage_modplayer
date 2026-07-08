@@ -27,6 +27,14 @@ public final class DSPChannel: Sendable {
         return Float(8363.0 * (base / octaveDivisor) / Double(c2spd))
     }
 
+    // XM lineare Periode: realNote (0-basiert, C-4 = 48) + signed Finetune
+    // (-128..127). period = 7680 - realNote*64 - finetune/2. Abspielfrequenz ist
+    // später 8363 * 2^((4608 - period) / 768) (siehe performTick, xmLinearMode).
+    // Verifiziert: realNote 48, finetune 0 -> period 4608 -> 8363 Hz (C-4).
+    public static func xmLinearPeriod(realNote: Int, finetune: Int) -> Float {
+        return Float(7680 - realNote * 64) - Float(finetune) / 2.0
+    }
+
     // Nonisolated unsafe to bypass strict concurrency warnings inside lock-free real-time audio thread
     // instrument = aktuelles Instrument (für XM-Hüllkurven/Fadeout/Auto-Vibrato).
     // sample = das gerade klingende Sample (PCM/Loop/Tuning) — bei XM per Keymap
@@ -86,6 +94,12 @@ public final class DSPChannel: Sendable {
     // ---- Format-Konfiguration (vom Coordinator pro Modul gesetzt) ----
     // S3M-Modus: Perioden aus Key+C2Spd, Effekt-Memory, ST3-Clock.
     nonisolated(unsafe) public var s3mMode: Bool = false
+    // XM-Modus mit linearer Frequenztabelle: Periode aus Halbton (Key +
+    // relativeNote) + Finetune, Frequenz exponentiell statt clockRate/Periode.
+    nonisolated(unsafe) public var xmLinearMode: Bool = false
+    // XM: Note wurde losgelassen (Key-Off / Note 97). Steuert in M3 Fadeout und
+    // Envelope-Release; hier bereits gesetzt, damit playNote es zurücksetzen kann.
+    nonisolated(unsafe) public var keyReleased: Bool = false
     // Skaliert Vibrato-Deltas: S3M-Perioden sind 4x feiner als Amiga-Perioden.
     nonisolated(unsafe) public var periodScale: Float = 1
     // Perioden-Klemmgrenzen (Amiga: 113..856, S3M: 64..32767).
@@ -152,6 +166,8 @@ public final class DSPChannel: Sendable {
         isSoloed = false
 
         s3mMode = false
+        xmLinearMode = false
+        keyReleased = false
         periodScale = 1
         periodMin = 113
         periodMax = 856
@@ -257,6 +273,11 @@ public final class DSPChannel: Sendable {
         if note.key == Note.keyCut {
             // S3M-Note-Cut (^^): Sample sofort stoppen.
             self.playing = false
+        } else if note.key == Note.keyOff {
+            // XM-Key-Off (Note 97): Note loslassen. Envelope-Release + Fadeout
+            // folgen in M3; hier nur den Zustand markieren (kein Retrigger, keine
+            // Perioden-/Sample-Änderung).
+            self.keyReleased = true
         } else if note.period > 0 {
             // Finetune vom aktiven Sample (neu getriggert oder laufend).
             let activeSample = self.setSample ?? self.sample
@@ -266,13 +287,22 @@ public final class DSPChannel: Sendable {
             self.setPeriod = Float(note.period) - finetune
             self.setCurrentPeriod = true
             self.setSampleIndex = 0.0
+            self.keyReleased = false
         } else if note.key >= 0 {
-            // S3M: Period aus Halbton-Key + C2Spd des (neuen oder laufenden)
-            // Samples berechnen.
             let activeSample = self.setSample ?? self.sample
-            self.setPeriod = DSPChannel.s3mPeriod(key: note.key, c2spd: activeSample?.c2spd ?? 8363)
+            if xmLinearMode {
+                // XM: Periode aus (Key + Sample-relativeNote) + Sample-Finetune,
+                // lineares Modell.
+                let realNote = note.key + (activeSample?.relativeNote ?? 0)
+                self.setPeriod = DSPChannel.xmLinearPeriod(realNote: realNote, finetune: activeSample?.finetune ?? 0)
+            } else {
+                // S3M: Period aus Halbton-Key + C2Spd des (neuen oder laufenden)
+                // Samples berechnen.
+                self.setPeriod = DSPChannel.s3mPeriod(key: note.key, c2spd: activeSample?.c2spd ?? 8363)
+            }
             self.setCurrentPeriod = true
             self.setSampleIndex = 0.0
+            self.keyReleased = false
         }
 
         // S3M-Volume-Column überschreibt die Instrument-Default-Lautstärke.
@@ -624,8 +654,16 @@ public final class DSPChannel: Sendable {
         if self.currentPeriod > self.periodMax { self.currentPeriod = self.periodMax }
         
         if self.currentPeriod > 0, sampleRate > 0 {
-            let paulaHz = clockRate / Double(self.currentPeriod)
-            let speed = paulaHz / sampleRate
+            // XM linear: Frequenz exponentiell aus der Periode. MOD/S3M: Paula-/
+            // ST3-Clock geteilt durch die Periode. (pow ist alloc-frei — wie das
+            // Arpeggio oben — und damit im Render-Block zulässig.)
+            let hz: Double
+            if xmLinearMode {
+                hz = 8363.0 * pow(2.0, (4608.0 - Double(self.currentPeriod)) / 768.0)
+            } else {
+                hz = clockRate / Double(self.currentPeriod)
+            }
+            let speed = hz / sampleRate
             self.sampleSpeed = speed.isNaN || speed.isInfinite ? 0.0 : speed
         } else {
             self.sampleSpeed = 0.0

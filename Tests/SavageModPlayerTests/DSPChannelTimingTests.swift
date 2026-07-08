@@ -194,4 +194,70 @@ final class DSPChannelTimingTests: XCTestCase {
         XCTAssertEqual(ch.tremoloIndex, 20, accuracy: 0.0001,
                        "Tremolo-Index muss 5x weiterdrehen, nicht 6x")
     }
+
+    // MARK: - XM lineares Frequenzmodell (M2)
+
+    /// Lineare Periodenformel: C-4 (realNote 48) ohne Finetune -> Periode 4608.
+    func testXMLinearPeriodReference() {
+        XCTAssertEqual(DSPChannel.xmLinearPeriod(realNote: 48, finetune: 0), 4608, accuracy: 0.001)
+        // Eine Oktave höher (realNote 60) -> 64 Einheiten pro Halbton * 12 = 768
+        // weniger.
+        XCTAssertEqual(DSPChannel.xmLinearPeriod(realNote: 60, finetune: 0), 3840, accuracy: 0.001)
+        // Finetune -128 hebt die Periode um 64 (‑128/2), +127 senkt um 63.5.
+        XCTAssertEqual(DSPChannel.xmLinearPeriod(realNote: 48, finetune: -128), 4672, accuracy: 0.001)
+        XCTAssertEqual(DSPChannel.xmLinearPeriod(realNote: 48, finetune: 127), 4544.5, accuracy: 0.001)
+    }
+
+    /// Im xmLinearMode muss die Abspielfrequenz exponentiell sein: C-4 -> 8363 Hz,
+    /// eine Oktave höher -> 16726 Hz. sampleSpeed = Hz / sampleRate.
+    func testXMLinearFrequencyIsExponential() {
+        let ch = DSPChannel(index: 1)
+        ch.xmLinearMode = true
+        ch.periodMin = 1
+        ch.periodMax = 7680
+
+        ch.period = 4608
+        ch.currentPeriod = 4608
+        ch.performTick(tick: 0, sampleRate: sampleRate, clockRate: clockRate)
+        XCTAssertEqual(ch.sampleSpeed, 8363.0 / sampleRate, accuracy: 1e-6, "C-4 muss 8363 Hz ergeben")
+
+        ch.period = 3840
+        ch.currentPeriod = 3840
+        ch.performTick(tick: 0, sampleRate: sampleRate, clockRate: clockRate)
+        XCTAssertEqual(ch.sampleSpeed, 16726.0 / sampleRate, accuracy: 1e-6, "Oktave höher = doppelte Frequenz")
+    }
+
+    /// playNote muss im xmLinearMode Key + Sample-relativeNote + Finetune zur
+    /// Periode verrechnen (nicht das S3M-Modell nutzen).
+    func testXMPlayNoteUsesLinearPeriodWithRelativeNote() {
+        let ch = DSPChannel(index: 1)
+        ch.xmLinearMode = true
+        ch.periodMin = 1
+        ch.periodMax = 7680
+        // Sample mit relativeNote +12 (eine Oktave hoch) und Finetune 0.
+        let smp = Sample(pcm: [0.1, 0.2, 0.3], loopStart: 0, loopLength: 0,
+                         loopType: .none, volume: 64, finetune: 0, relativeNote: 12)
+        let inst = Instrument(index: 1, name: "XM", samples: [smp])
+        // Note C-4 (key 48) + relativeNote 12 -> realNote 60 -> Periode 3840.
+        ch.playNote(Note(instrument: 1, period: 0, effectId: 0, effectData: 0, key: 48),
+                    instruments: [nil, inst])
+        XCTAssertEqual(ch.period, 3840, accuracy: 0.001)
+    }
+
+    /// Key-Off (Note 97 / Note.keyOff) setzt keyReleased, ohne die laufende Note
+    /// zu retriggern oder die Periode zu ändern.
+    func testXMKeyOffMarksReleasedWithoutRetrigger() {
+        let ch = DSPChannel(index: 1)
+        ch.xmLinearMode = true
+        ch.period = 4608
+        ch.currentPeriod = 4608
+        ch.sampleIndex = 100
+        ch.playing = true
+        ch.playNote(Note(instrument: 0, period: 0, effectId: 0, effectData: 0, key: Note.keyOff),
+                    instruments: [nil])
+        XCTAssertTrue(ch.keyReleased)
+        XCTAssertTrue(ch.playing, "Key-Off stoppt (noch) nicht sofort")
+        XCTAssertEqual(ch.sampleIndex, 100, "Key-Off darf das Sample nicht neu starten")
+        XCTAssertEqual(ch.period, 4608, accuracy: 0.001)
+    }
 }
