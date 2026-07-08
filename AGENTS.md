@@ -4,6 +4,11 @@ Diese Datei ist die zentrale Projektdokumentation. Sie beschreibt die Architektu
 
 ---
 
+## Typ & Zweck
+- **Typ:** GUI-App
+- **Zweck:** Nativer Amiga/Tracker-Modul-Player (ProTracker/S3M) mit SwiftUI, AVAudioEngine und Quick-Look-Plugin; plus HTML5-Variante.
+- **Plattform:** macOS-GUI, iOS
+
 ## Datei-Verzeichnis
 
 | Datei | Wozu |
