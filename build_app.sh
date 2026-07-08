@@ -85,12 +85,14 @@ cat <<EOF > "$QL_APPEX/Contents/Info.plist"
             <array>
                 <string>com.viben.savage-modplayer.mod</string>
                 <string>com.viben.savage-modplayer.s3m</string>
+                <string>com.viben.savage-modplayer.xm</string>
                 <!-- Ist VLC (o.ae.) installiert, gewinnen dessen EXPORTIERTE
                      UTIs gegen unsere importierten — .mod ist dann
                      org.videolan.mod. Diese UTIs zusaetzlich claimen, damit
                      die Preview auch auf solchen Systemen funktioniert. -->
                 <string>org.videolan.mod</string>
                 <string>org.videolan.s3m</string>
+                <string>org.videolan.xm</string>
             </array>
         </dict>
         <key>NSExtensionPointIdentifier</key>
@@ -159,6 +161,7 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
             <array>
                 <string>com.viben.savage-modplayer.mod</string>
                 <string>com.viben.savage-modplayer.s3m</string>
+                <string>com.viben.savage-modplayer.xm</string>
             </array>
         </dict>
     </array>
@@ -198,6 +201,23 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
                 <key>public.filename-extension</key>
                 <array>
                     <string>s3m</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.viben.savage-modplayer.xm</string>
+            <key>UTTypeDescription</key>
+            <string>FastTracker II Module</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>xm</string>
                 </array>
             </dict>
         </dict>

@@ -274,7 +274,7 @@ struct MainView: View {
             .font(theme == .workbench ? .system(.body, design: .monospaced) : .body)
             .fileImporter(
                 isPresented: $showFileImporter,
-                allowedContentTypes: [.data, UTType(filenameExtension: "mod"), UTType(filenameExtension: "s3m")].compactMap { $0 },
+                allowedContentTypes: [.data, UTType(filenameExtension: "mod"), UTType(filenameExtension: "s3m"), UTType(filenameExtension: "xm")].compactMap { $0 },
                 allowsMultipleSelection: true
             ) { result in
                 switch result {

@@ -36,8 +36,9 @@ Der **Savage Mod Player** ist ein plattformübergreifender Amiga-/Tracker-Modul-
 | Multichannel-MOD (xCHN 2-9, xxCH 10-32, CD81/OKTA/OCTA, FLT8-Pattern-Paare) | ❌ | ✅ |
 | Ur-Soundtracker (15 Instrumente, ohne Signatur, per Struktur-Heuristik) | ❌ | ✅ |
 | ScreamTracker 3 (S3M, bis 32 PCM-Kanäle) | ❌ | ✅ |
+| FastTracker II (XM, Multi-Sample-Instrumente, Hüllkurven) | ❌ | ✅ |
 
-Format-Dispatch am Dateiinhalt: `ModuleLoader.parse(data:)` (SCRM-Header → `S3MParser`, sonst `ModParser`).
+Format-Dispatch am Dateiinhalt: `ModuleLoader.parse(data:)` (`"Extended Module: "` → `XMParser`, SCRM-Header → `S3MParser`, sonst `ModParser`).
 
 **S3M — bewusste Vereinfachungen** (nur exotische Module betroffen): AdLib-Instrumente stumm, Stereo-Samples nur linker Kanal, 16-Bit-Samples auf 8 Bit reduziert (High-Byte), Qxy ohne Volume-Modifier, kein Tempo-Slide (Txx mit x<2), keine ST3.00-„Fast Volume Slides".
 
@@ -140,6 +141,7 @@ p_savage_modplayer/
 - **Sequenzierung**: `swift test --filter CoordinatorSequencingTests` — Pattern-Break-Hang (Dxx > 63), In-Range-Break-Ziel, hardware-freier Demo-Render-Smoke. Läuft ohne `audio/` und ohne Audio-Gerät.
 - **JS↔Swift-Parität (headless)**: `node Tests/js/worklet-timing.mjs` — prüft, dass die Browser-Worklet-DSP dieselben Tick-/Amplituden-/Offset-Werte liefert wie `DSPChannel.swift`. Nach jeder DSP-Änderung in EINER Variante beide angleichen (siehe Synchronisierungsregel oben). Die Parität gilt für den gemeinsamen 4-Kanal-MOD-Kern; Multichannel/S3M sind Swift-only.
 - **Multiformat**: `swift test --filter MultiFormatTests` — Multichannel-MOD (6CHN/8CHN/xxCH/FLT8), Soundtracker-15-Heuristik, S3M-Parsing (synthetisch + echte Dateien aus `audio/`), S3M-DSP (Perioden, Slides mit Memory, Tremor, Fine-Porta) und WAV-Offline-Render (RIFF-Validität, Nicht-Stille).
+- **XM**: `swift test --filter XMParserTests` — Header/Pattern-Entpacker (gepackt + leer), Delta-Dekodierung 8/16-Bit, Keymap/Envelopes/Auto-Vibrato/Fadeout, Effekt-/Volume-Column-Übersetzung, Garbage-Ablehnung; plus Realwelt-Test über alle `.xm` aus `audio/`. XM-DSP (lineare Frequenz, Key-Off, Fadeout, Envelope-Interpolation, Volume-Column) in `DSPChannelTimingTests`.
 - **Native App-Build**: Nach jedem Swift-Fix zusätzlich `./build_app.sh` ausführen, nicht nur `swift build` (baut auch die Quick-Look-Extension).
 - **Quick Look (manuell)**: Nach App-Build/-Installation im Finder Leertaste auf einer `.mod`/`.s3m` — Audio-Player-Preview muss erscheinen und abspielen. Headless nur teilverifizierbar (Appex-Registrierung via `pluginkit -m -p com.apple.quicklook.preview`).
 
@@ -192,6 +194,25 @@ Report `2026-07-05` (MiniMax-Audit, gegen aktuellen Code verifiziert): von 11 re
 - **#11** Live-Render-Block und `advanceRowForProbe` sind ~80 Zeilen duplizierte Sequencer-Logik (Pattern-Break/Position-Jump/Loop/Delay), subtil auseinandergelaufen — Zusammenführen ist audio-korrektheits-riskant, eigener Task mit Tests.
 
 Hinfällig im Report: #4 (bereits gefixt), #5 (Fehlalarm), #8 (Playlist-UI umgebaut).
+
+## XM-Ausbau 2026-07-09 (FastTracker II)
+
+Swift-Variante um das XM-Format erweitert — eine eigene Instrument-Engine (Entscheidung 2026-07-09: **Float-Sample-Engine projektweit + volles XM in einem Zug**, IT bewusst NICHT). In Meilensteinen, je committet + getestet:
+
+- **M0 — Fundament (Datenmodell + Float):** Neues `Sample` (Float-PCM statt `[Int8]`, Loop inkl. Ping-Pong, Tuning) ist die Wiedergabe-Einheit; `Instrument` bündelt jetzt `[Sample]` + 96er-Keymap + Volume-/Panning-Hüllkurve + Fadeout + Auto-Vibrato. MOD/S3M = Instrument mit genau einem Sample über einen Convenience-Init (alte Signatur), Amplitude bitgleich (int8/256) → MOD-Wiedergabe und JS↔Swift-Parität unverändert. Sample-Felder (finetune/volume/loop/c2spd) liegen jetzt auf `Sample`, nicht mehr auf `Instrument` (`inst.primarySample`).
+- **M1 — Parser (`XMParser`):** Header, gepackte Patterns (Bit7 + unkomprimiert, leere Patterns, abw. numRows), strikt über Längenfelder geseekt; Instrumente mit Keymap/Envelopes/Auto-Vibrato/Fadeout; Samples delta-dekodiert + normalisiert (8/16-Bit), Loop in Frames; Noten → `key` (1..96→key-1, 97→`Note.keyOff`), roher `volCmd`; Effekt-Übersetzung inkl. E-Serie + G/H/K/L/P/R/T/X.
+- **M2 — Frequenz:** `DSPChannel.xmLinearMode` — lineare Periode (`7680 - realNote*64 - finetune/2`) + exponentielle Frequenz (`8363·2^((4608-period)/768)`, C-4 = 8363 Hz verifiziert).
+- **M3 — Voice-Engine:** Volume-/Panning-Hüllkurve (Sustain + Loop, pro Tick interpoliert), Volume-Fadeout (Key-Off, FT2-Quirk: ohne Volume-Hüllkurve sofort still), Auto-Vibrato (Sine/Square/Ramp + Sweep), Ping-Pong-Loop. Renderer: Ausgabe · `xmVolumeScale`, Panning = `effectivePanning` (beide für MOD/S3M neutral).
+- **M4 — Effekte:** Volume-Column vollständig (Set Vol/Panning, Vol-/Pan-Slides, Fine-Vol, Vibrato, Tone-Porta), plus Kxx/Lxx/Pxy/X1x/X2x.
+- **M5 — Integration:** `ModuleLoader`-Dispatch, `supportedExtensions += xm`, Datei-Importer, Info.plist-UTIs (`com.viben.savage-modplayer.xm` + `org.videolan.xm`) und Quick-Look-`QLSupportedContentTypes`.
+
+**Bewusst vereinfacht / offen (dokumentiert im Code):**
+- **Amiga-Frequenz-XMs** (`flags` Bit0 = 0, selten) werden vorerst über das lineare Modell approximiert — echte Amiga-Periodentabelle ist ein Feinschliff (TODO in `configure`).
+- **Hxy** (globales Volume-Slide, braucht einen Per-Tick-Hook im Coordinator) und **Rxy** (Multi-Retrig mit Volume-Modi) noch nicht umgesetzt; **Gxx** (Set Global Volume) läuft.
+- **restartPos** ignoriert (Song wrappt auf 0); Order-Einträge ≥ numPatterns → leeres Pattern.
+- XM-Effekt-Memory für 1xx/2xx/Axy nutzt vorerst die MOD-Semantik (kein Param-0-Memory).
+
+**Test-Korpus:** 8 echte XM von Battle of the Bits liegen (gitignored) in `audio/` — der Realwelt-Test `XMParserTests/testRealXMFilesParseAndRender` parst + rendert sie (8–32 Kanäle, alle liefern hörbares Signal).
 
 ## Fallen / Agent-Hinweise
 
