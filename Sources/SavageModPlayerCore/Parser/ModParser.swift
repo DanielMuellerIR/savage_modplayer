@@ -275,6 +275,9 @@ public struct Mod: Sendable, Codable {
     public let initialGlobalVolume: Int
     // Start-Panning pro Kanal (0 = links, 1 = rechts). Immer channelCount Einträge.
     public let channelPannings: [Float]
+    // XM: true = lineare Frequenztabelle, false = Amiga-Periodentabelle. Andere
+    // Formate lassen es false (sie nutzen ihr eigenes Perioden-/Clock-Modell).
+    public let linearFrequency: Bool
 
     public init(
         name: String,
@@ -287,8 +290,10 @@ public struct Mod: Sendable, Codable {
         initialSpeed: Int = 6,
         initialTempo: Int = 125,
         initialGlobalVolume: Int = 64,
-        channelPannings: [Float] = []
+        channelPannings: [Float] = [],
+        linearFrequency: Bool = false
     ) {
+        self.linearFrequency = linearFrequency
         self.name = name
         self.length = length
         self.patternTable = patternTable
