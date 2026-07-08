@@ -1191,7 +1191,7 @@ struct MainView: View {
                                                     .lineLimit(1)
                                                 Spacer()
                                                 
-                                                if inst.length > 0 {
+                                                if (inst.primarySample?.pcm.count ?? 0) > 0 {
                                                     // Save individual instrument to WAV
                                                     Button(action: { runInstrumentSampleExport(index: i) }) {
                                                         Image(systemName: "square.and.arrow.down")
@@ -1204,7 +1204,7 @@ struct MainView: View {
                                             
                                             // Visual progress bar of length
                                             GeometryReader { geo in
-                                                let lengthRatio = min(1.0, Double(inst.length) / 65536.0)
+                                                let lengthRatio = min(1.0, Double(inst.primarySample?.pcm.count ?? 0) / 65536.0)
                                                 ZStack(alignment: .leading) {
                                                     Rectangle()
                                                         .fill(theme == .workbench ? Color.lightTextPrimary.opacity(0.1) : Color.white.opacity(0.03))
@@ -1216,7 +1216,7 @@ struct MainView: View {
                                             .frame(height: 3)
                                             .cornerRadius(1)
                                             
-                                            Text(String(format: "Len: %d B | Fine: %d | Vol: %d", inst.length, inst.finetune, inst.volume))
+                                            Text(String(format: "Len: %d B | Fine: %d | Vol: %d", inst.primarySample?.pcm.count ?? 0, inst.primarySample?.finetune ?? 0, inst.primarySample?.volume ?? 0))
                                                 .font(.system(size: 8.5, design: .monospaced))
                                                 .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.6) : .spaceTextSecondary)
                                         }

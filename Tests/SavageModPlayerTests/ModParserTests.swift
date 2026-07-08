@@ -4,8 +4,10 @@ import XCTest
 final class ModParserTests: XCTestCase {
     
     func testMockModParsing() throws {
-        // Create 2108 bytes for a mock MOD file (1084 header + 1024 pattern 0)
-        var data = Data(repeating: 0, count: 2108)
+        // 1084 Header + 1024 Pattern 0 + 2 Sample-Bytes (Instrument 1 deklariert
+        // Länge 2). Die 2 Sample-Bytes müssen real in der Datei liegen, weil das
+        // Sample-Modell die Länge aus den tatsächlichen PCM-Daten ableitet.
+        var data = Data(repeating: 0, count: 2108 + 2)
         
         // 1. Song Title (Offset 0..20) -> "Test Mod Title"
         let title = "Test Mod Title"
@@ -67,9 +69,10 @@ final class ModParserTests: XCTestCase {
             return
         }
         XCTAssertEqual(inst.name, "Inst 1")
-        XCTAssertEqual(inst.length, 2)
-        XCTAssertEqual(inst.volume, 64)
-        XCTAssertEqual(inst.isLooped, true)
+        let smp = try XCTUnwrap(inst.primarySample)
+        XCTAssertEqual(smp.pcm.count, 2)
+        XCTAssertEqual(smp.volume, 64)
+        XCTAssertEqual(smp.isLooped, true)
         
         // Note assertions
         XCTAssertEqual(mod.patterns.count, 1)
@@ -117,8 +120,10 @@ final class ModParserTests: XCTestCase {
     
     func testDSPChannelSafety() {
         let channel = DSPChannel(index: 1)
-        let bytes: [Int8] = [0, 10, 20, 30, 40, 50]
-        
+        // PCM ist jetzt normalisierter Float (int8/256) — dieselben Stützwerte wie
+        // zuvor, nur schon geteilt, damit die Interpolations-Erwartung 15/256 hält.
+        let bytes: [Float] = [0, 10, 20, 30, 40, 50].map { Float($0) / 256.0 }
+
         // 1. Valid index interpolation
         let val1 = channel.getInterpolatedSample(from: bytes, index: 1.5)
         XCTAssertEqual(val1, 15.0 / 256.0, accuracy: 0.0001)
@@ -173,7 +178,7 @@ final class ModParserTests: XCTestCase {
         }
 
         XCTAssertGreaterThan(channel.sampleIndex, 0)
-        XCTAssertLessThan(Int(channel.sampleIndex), instrument.length)
+        XCTAssertLessThan(Int(channel.sampleIndex), instrument.primarySample?.pcm.count ?? 0)
     }
 
     @MainActor
@@ -344,7 +349,7 @@ final class ModParserTests: XCTestCase {
         data[46] = 0x00; data[47] = 0x03
         data[48] = 0x00; data[49] = 0x01
         let mod = try ModParser.parse(data: data)
-        XCTAssertEqual(mod.instruments[1]?.isLooped, false,
+        XCTAssertEqual(mod.instruments[1]?.primarySample?.isLooped, false,
                        "repeatLength 1 Word (Sentinel) darf trotz repeatOffset>0 nicht loopen")
     }
 

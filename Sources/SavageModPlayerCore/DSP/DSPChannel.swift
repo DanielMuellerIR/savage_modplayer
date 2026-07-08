@@ -28,7 +28,11 @@ public final class DSPChannel: Sendable {
     }
 
     // Nonisolated unsafe to bypass strict concurrency warnings inside lock-free real-time audio thread
+    // instrument = aktuelles Instrument (für XM-Hüllkurven/Fadeout/Auto-Vibrato).
+    // sample = das gerade klingende Sample (PCM/Loop/Tuning) — bei XM per Keymap
+    // aus dem Instrument gewählt, bei MOD/S3M immer dessen einziges Sample.
     nonisolated(unsafe) public var instrument: Instrument?
+    nonisolated(unsafe) public var sample: Sample?
     nonisolated(unsafe) public var playing: Bool = false
     nonisolated(unsafe) public var period: Float = 0
     nonisolated(unsafe) public var currentPeriod: Float = 0
@@ -100,6 +104,7 @@ public final class DSPChannel: Sendable {
     
     // Temp-Zustände für Ticks
     nonisolated(unsafe) public var setInstrument: Instrument?
+    nonisolated(unsafe) public var setSample: Sample?
     nonisolated(unsafe) public var setVolume: Float?
     nonisolated(unsafe) public var setPeriod: Float?
     nonisolated(unsafe) public var setCurrentPeriod: Bool = false
@@ -115,6 +120,7 @@ public final class DSPChannel: Sendable {
     
     public func reset() {
         instrument = nil
+        sample = nil
         playing = false
         period = 0
         currentPeriod = 0
@@ -156,6 +162,7 @@ public final class DSPChannel: Sendable {
         s3mEffectMemory = 0
 
         setInstrument = nil
+        setSample = nil
         setVolume = nil
         setPeriod = nil
         setCurrentPeriod = false
@@ -163,55 +170,57 @@ public final class DSPChannel: Sendable {
         portamento = false
     }
     
+    // PCM ist bereits normalisiert (int8/256 bzw. int16/65536), daher hier kein
+    // /256 mehr — direkt lesen. Signatur [Float] statt [Int8] (Float-Engine).
     @inline(__always)
-    public func getNearestSample(from bytes: [Int8], index: Double) -> Float {
-        let size = bytes.count
+    public func getNearestSample(from pcm: [Float], index: Double) -> Float {
+        let size = pcm.count
         guard size > 0, index.isFinite, !index.isNaN else { return 0.0 }
-        
+
         let idx = Int(index)
         guard idx >= 0 && idx < size else { return 0.0 }
-        return Float(bytes[idx]) / 256.0
+        return pcm[idx]
     }
-    
+
     @inline(__always)
-    public func getInterpolatedSample(from bytes: [Int8], index: Double) -> Float {
-        let size = bytes.count
+    public func getInterpolatedSample(from pcm: [Float], index: Double) -> Float {
+        let size = pcm.count
         guard size > 0, index.isFinite, !index.isNaN else { return 0.0 }
-        
+
         let idx = Int(index)
         guard idx >= 0 && idx < size else { return 0.0 }
-        
-        let sampleCurrent = Float(bytes[idx]) / 256.0
+
+        let sampleCurrent = pcm[idx]
         let frac = Float(index - Double(idx))
-        
+
         let nextIdx = idx + 1
         if nextIdx < size {
-            let sampleNext = Float(bytes[nextIdx]) / 256.0
+            let sampleNext = pcm[nextIdx]
             return sampleCurrent + frac * (sampleNext - sampleCurrent)
         } else {
             return sampleCurrent
         }
     }
-    
+
     @inline(__always)
-    public func getInterpolatedSampleLooped(from bytes: [Int8], index: Double, repeatOffset: Int, repeatLength: Int) -> Float {
-        let size = bytes.count
+    public func getInterpolatedSampleLooped(from pcm: [Float], index: Double, repeatOffset: Int, repeatLength: Int) -> Float {
+        let size = pcm.count
         guard size > 0, index.isFinite, !index.isNaN else { return 0.0 }
-        
+
         let idx = Int(index)
         guard idx >= 0 && idx < size else { return 0.0 }
-        
-        let sampleCurrent = Float(bytes[idx]) / 256.0
+
+        let sampleCurrent = pcm[idx]
         let frac = Float(index - Double(idx))
-        
+
         var nextIdx = idx + 1
         let loopEnd = repeatOffset + repeatLength
         if nextIdx >= loopEnd {
             nextIdx = repeatOffset
         }
-        
+
         if nextIdx >= 0 && nextIdx < size {
-            let sampleNext = Float(bytes[nextIdx]) / 256.0
+            let sampleNext = pcm[nextIdx]
             return sampleCurrent + frac * (sampleNext - sampleCurrent)
         } else {
             return sampleCurrent
@@ -220,23 +229,28 @@ public final class DSPChannel: Sendable {
     
     public func playNote(_ note: Note, instruments: [Instrument?]) {
         self.setInstrument = nil
+        self.setSample = nil
         self.setVolume = nil
         self.setPeriod = nil
         self.delayNote = -1
         self.cutNoteTick = -1
-        
+
         var hasSetInstrument = false
         if note.instrument > 0 {
             hasSetInstrument = true
             if note.instrument < instruments.count, let inst = instruments[note.instrument] {
                 self.setInstrument = inst
-                self.setVolume = Float(inst.volume)
+                // Sample über Keymap+Note wählen (MOD/S3M: immer Sample 0).
+                let noteForMap = (note.key >= 0 && note.key < 96) ? note.key : 0
+                self.setSample = inst.sample(forNote: noteForMap)
+                self.setVolume = Float(self.setSample?.volume ?? 0)
             } else {
                 self.setInstrument = nil
+                self.setSample = nil
                 self.setVolume = 0
             }
         }
-        
+
         self.setSampleIndex = nil
         self.setCurrentPeriod = false
 
@@ -244,8 +258,9 @@ public final class DSPChannel: Sendable {
             // S3M-Note-Cut (^^): Sample sofort stoppen.
             self.playing = false
         } else if note.period > 0 {
-            let activeInst = self.setInstrument ?? self.instrument
-            let finetune = Float(activeInst?.finetune ?? 0)
+            // Finetune vom aktiven Sample (neu getriggert oder laufend).
+            let activeSample = self.setSample ?? self.sample
+            let finetune = Float(activeSample?.finetune ?? 0)
             // Gleiche Finetune-Näherung wie im HTML-Worklet: Period minus
             // signed nibble. Das hält Swift und Browser klanglich synchron.
             self.setPeriod = Float(note.period) - finetune
@@ -253,9 +268,9 @@ public final class DSPChannel: Sendable {
             self.setSampleIndex = 0.0
         } else if note.key >= 0 {
             // S3M: Period aus Halbton-Key + C2Spd des (neuen oder laufenden)
-            // Instruments berechnen.
-            let activeInst = self.setInstrument ?? self.instrument
-            self.setPeriod = DSPChannel.s3mPeriod(key: note.key, c2spd: activeInst?.c2spd ?? 8363)
+            // Samples berechnen.
+            let activeSample = self.setSample ?? self.sample
+            self.setPeriod = DSPChannel.s3mPeriod(key: note.key, c2spd: activeSample?.c2spd ?? 8363)
             self.setCurrentPeriod = true
             self.setSampleIndex = 0.0
         }
@@ -273,8 +288,9 @@ public final class DSPChannel: Sendable {
         
         if hasSetInstrument {
             self.instrument = self.setInstrument
+            self.sample = self.setSample
         }
-        
+
         if let vol = self.setVolume {
             self.volume = vol
             self.currentVolume = vol
@@ -579,6 +595,7 @@ public final class DSPChannel: Sendable {
         }
         else if self.delayNote >= 0 && self.delayNote == tick {
             self.instrument = self.setInstrument
+            self.sample = self.setSample
             if let vol = self.setVolume {
                 self.volume = vol
                 self.currentVolume = vol

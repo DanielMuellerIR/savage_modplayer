@@ -874,24 +874,28 @@ public final class ModPlayerCoordinator: ObservableObject {
     // niemals einen Song-Kanal (frueher wurde channels.last uebernommen und dabei
     // dessen Mute/Solo geloescht).
     public func previewInstrument(index: Int) {
-        guard let mod = activeMod, index >= 1 && index < mod.instruments.count, let inst = mod.instruments[index], inst.bytes.count > 0 else { return }
+        guard let mod = activeMod, index >= 1 && index < mod.instruments.count,
+              let inst = mod.instruments[index],
+              // C-4-Sample über die Keymap (MOD/S3M: das einzige Sample).
+              let smp = inst.sample(forNote: 48), smp.pcm.count > 0 else { return }
 
         // Laufende Vorschau zuerst abbauen — erneuter Klick startet frisch.
         stopPreview()
 
         // Eigener Kanal, nur fuer die Vorschau. Kein configure()/performTick noetig:
-        // renderChannelSample braucht bloss Instrument, Periode, sampleSpeed und
+        // renderChannelSample braucht bloss Sample, Periode, sampleSpeed und
         // Lautstaerke — es gibt keinen Sequencer und keine Effekte in der Vorschau.
         let ch = DSPChannel(index: 1)
         ch.instrument = inst
-        ch.volume = Float(inst.volume)
-        ch.currentVolume = Float(inst.volume)
+        ch.sample = smp
+        ch.volume = Float(smp.volume)
+        ch.currentVolume = Float(smp.volume)
         if mod.format == .s3m {
             // C-4 im ST3-Periodenmodell (Key 48) mit Instrument-C2Spd.
-            ch.period = DSPChannel.s3mPeriod(key: 48, c2spd: inst.c2spd)
+            ch.period = DSPChannel.s3mPeriod(key: 48, c2spd: smp.c2spd)
         } else {
             // C-3 note period = 214
-            ch.period = 214.0 - Float(inst.finetune)
+            ch.period = 214.0 - Float(smp.finetune)
         }
         ch.currentPeriod = ch.period
         ch.sampleIndex = 0.0
@@ -1234,43 +1238,43 @@ public final class ModPlayerCoordinator: ObservableObject {
 
     @inline(__always)
     nonisolated private static func renderChannelSample(channel ch: DSPChannel, useInterpolation: Bool) -> Float {
-        guard let inst = ch.instrument, inst.bytes.count > 0, ch.currentPeriod > 0 else { return 0.0 }
+        guard let smp = ch.sample, smp.pcm.count > 0, ch.currentPeriod > 0 else { return 0.0 }
         guard ch.sampleIndex.isFinite, !ch.sampleIndex.isNaN else { return 0.0 }
 
-        if inst.isLooped {
-            wrapLoopedSampleIndexIfNeeded(channel: ch, instrument: inst)
+        if smp.isLooped {
+            wrapLoopedSampleIndexIfNeeded(channel: ch, sample: smp)
         }
 
         let idx = Int(ch.sampleIndex)
-        guard idx >= 0, idx < min(inst.length, inst.bytes.count) else { return 0.0 }
+        guard idx >= 0, idx < smp.pcm.count else { return 0.0 }
 
         let sampleVal: Float
-        if inst.isLooped && useInterpolation {
+        if smp.isLooped && useInterpolation {
             sampleVal = ch.getInterpolatedSampleLooped(
-                from: inst.bytes,
+                from: smp.pcm,
                 index: ch.sampleIndex,
-                repeatOffset: inst.repeatOffset,
-                repeatLength: inst.repeatLength
+                repeatOffset: smp.loopStart,
+                repeatLength: smp.loopLength
             )
         } else if useInterpolation {
-            sampleVal = ch.getInterpolatedSample(from: inst.bytes, index: ch.sampleIndex)
+            sampleVal = ch.getInterpolatedSample(from: smp.pcm, index: ch.sampleIndex)
         } else {
-            sampleVal = ch.getNearestSample(from: inst.bytes, index: ch.sampleIndex)
+            sampleVal = ch.getNearestSample(from: smp.pcm, index: ch.sampleIndex)
         }
 
         ch.sampleIndex += ch.sampleSpeed
-        if inst.isLooped {
-            wrapLoopedSampleIndexIfNeeded(channel: ch, instrument: inst)
+        if smp.isLooped {
+            wrapLoopedSampleIndexIfNeeded(channel: ch, sample: smp)
         }
 
         return sampleVal * ch.currentVolume / 64.0
     }
 
-    nonisolated private static func wrapLoopedSampleIndexIfNeeded(channel ch: DSPChannel, instrument inst: Instrument) {
-        let byteCount = inst.bytes.count
-        let loopStart = max(0, min(inst.repeatOffset, byteCount - 1))
-        let declaredLoopEnd = inst.repeatOffset + inst.repeatLength
-        let loopEnd = max(loopStart + 1, min(declaredLoopEnd, byteCount))
+    nonisolated private static func wrapLoopedSampleIndexIfNeeded(channel ch: DSPChannel, sample smp: Sample) {
+        let frameCount = smp.pcm.count
+        let loopStart = max(0, min(smp.loopStart, frameCount - 1))
+        let declaredLoopEnd = smp.loopStart + smp.loopLength
+        let loopEnd = max(loopStart + 1, min(declaredLoopEnd, frameCount))
         guard loopEnd > loopStart else { return }
 
         let start = Double(loopStart)
@@ -1284,8 +1288,11 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
     
     public func exportInstrumentToWav(index: Int, destinationURL: URL) throws {
-        guard let mod = activeMod, index >= 1 && index < mod.instruments.count, let inst = mod.instruments[index], inst.bytes.count > 0 else { return }
-        
+        guard let mod = activeMod, index >= 1 && index < mod.instruments.count,
+              let inst = mod.instruments[index],
+              let smp = inst.primarySample, smp.pcm.count > 0 else { return }
+        let pcm = smp.pcm
+
         let sampleRate = 22050.0 // Standard Amiga sample rate
         guard let monoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
             throw NSError(domain: "ModPlayer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Konnte Mono-Format nicht erstellen"])
@@ -1304,14 +1311,15 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
         let audioFile = try AVAudioFile(forWriting: destinationURL, settings: monoFormat.settings)
         
-        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: UInt32(inst.bytes.count)) else {
+        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: UInt32(pcm.count)) else {
             throw NSError(domain: "ModPlayer", code: 2, userInfo: [NSLocalizedDescriptionKey: "Konnte Buffer nicht erstellen"])
         }
-        
-        pcmBuffer.frameLength = UInt32(inst.bytes.count)
+
+        pcmBuffer.frameLength = UInt32(pcm.count)
         if let channelData = pcmBuffer.floatChannelData?[0] {
-            for i in 0..<inst.bytes.count {
-                channelData[i] = Float(inst.bytes[i]) / 256.0
+            // PCM ist bereits normalisiert (Float-Engine) — direkt schreiben.
+            for i in 0..<pcm.count {
+                channelData[i] = pcm[i]
             }
         }
         

@@ -98,7 +98,7 @@ final class MultiFormatTests: XCTestCase {
         XCTAssertEqual(mod.format, .soundtracker)
         XCTAssertEqual(mod.channelCount, 4)
         XCTAssertEqual(mod.instruments.count, 16) // nil + 15
-        XCTAssertEqual(mod.instruments[1]?.volume, 64)
+        XCTAssertEqual(mod.instruments[1]?.primarySample?.volume, 64)
         XCTAssertEqual(mod.patterns[0].rows[0].notes[0].period, 428)
         XCTAssertEqual(mod.patterns[0].rows[0].notes[0].instrument, 1)
     }
@@ -184,11 +184,13 @@ final class MultiFormatTests: XCTestCase {
         XCTAssertEqual(mod.channelPannings[0], 0.2, accuracy: 0.001)
         XCTAssertEqual(mod.channelPannings[1], 0.8, accuracy: 0.001)
 
-        // Instrument: c2spd + unsigned->signed-Wandlung
+        // Instrument: c2spd + unsigned->signed-Wandlung (jetzt als normalisierter
+        // Float, int8/256 — 0x80,0xFF,0x80,0x00 unsigned -> 0,127,0,-128 signed).
         let inst = try XCTUnwrap(mod.instruments[1])
-        XCTAssertEqual(inst.c2spd, 8363)
-        XCTAssertEqual(inst.volume, 64)
-        XCTAssertEqual(Array(inst.bytes), [0, 127, 0, -128])
+        let smp = try XCTUnwrap(inst.primarySample)
+        XCTAssertEqual(smp.c2spd, 8363)
+        XCTAssertEqual(smp.volume, 64)
+        XCTAssertEqual(smp.pcm, [0, 127.0 / 256.0, 0, -128.0 / 256.0])
 
         // Note: Key, Volume-Column, uebersetzter Effekt
         let note = mod.patterns[0].rows[0].notes[0]
@@ -364,6 +366,9 @@ final class MultiFormatTests: XCTestCase {
                               isLooped: false, c2spd: 8363)
         let ch = DSPChannel(index: 1)
         ch.instrument = inst
+        // Renderer liest jetzt ch.sample (Float-PCM) — beim manuellen Kanal-Setup
+        // mitsetzen, wie es playNote/previewInstrument im echten Pfad tun.
+        ch.sample = inst.primarySample
         ch.volume = 64
         ch.currentVolume = 64
         ch.period = 214
