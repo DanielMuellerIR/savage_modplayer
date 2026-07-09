@@ -294,34 +294,26 @@ struct MainView: View {
                     self.errorMessage = "Fehler beim Laden: \(error.localizedDescription)"
                 }
             }
-            .onDrop(of: ["public.file-url"], isTargeted: $dragOver) { providers in
+            .onDrop(of: [UTType.fileURL], isTargeted: $dragOver) { providers in
+                // WICHTIG: `loadObject(ofClass: URL.self)` dekodiert die Datei-URL
+                // korrekt. Der frühere Weg (loadItem + Data manuell parsen) baute
+                // die URL mit `URL(fileURLWithPath:)` aus einem "file:///…"-STRING
+                // — das interpretiert den String als PFAD, nicht als URL, sodass
+                // die Datei nie gefunden wurde (Drop tat scheinbar nichts). macOS
+                // liefert `public.file-url` heute als URL-String-Data, nicht mehr
+                // als Plist mit rohem Pfad wie früher.
                 let container = DropURLsContainer()
                 let dispatchGroup = DispatchGroup()
-                
+
                 for provider in providers {
+                    guard provider.canLoadObject(ofClass: URL.self) else { continue }
                     dispatchGroup.enter()
-                    provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, error in
-                        if let data = item as? Data {
-                            if let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) {
-                                if let path = plist as? String {
-                                    container.append(URL(fileURLWithPath: path))
-                                } else if let array = plist as? [String] {
-                                    for path in array {
-                                        container.append(URL(fileURLWithPath: path))
-                                    }
-                                }
-                            } else if let path = String(data: data, encoding: .utf8) {
-                                container.append(URL(fileURLWithPath: path))
-                            }
-                        } else if let url = item as? URL {
-                            container.append(url)
-                        } else if let string = item as? String {
-                            container.append(URL(fileURLWithPath: string))
-                        }
+                    _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                        if let url, url.isFileURL { container.append(url) }
                         dispatchGroup.leave()
                     }
                 }
-                
+
                 dispatchGroup.notify(queue: .main) {
                     let urls = container.urls
                     if !urls.isEmpty {
