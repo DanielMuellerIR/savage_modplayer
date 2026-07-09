@@ -159,6 +159,12 @@ public final class DSPChannel: Sendable {
     // ST3 teilt EIN Parameter-Memory pro Kanal über D/E/F/I (Parameter 0 =
     // letzten Wert wiederholen).
     nonisolated(unsafe) public var s3mEffectMemory: Int = 0
+    // FT2/XM-Effekt-Memory pro Kanal: 100/200/A00/500/600 wiederholen den
+    // letzten passenden Nicht-Null-Parameter. Starfish nutzt 105,100,100,100
+    // als Pitch-Rampe am Ende des ersten Patterns.
+    nonisolated(unsafe) public var xmPortaUpMemory: Int = 0
+    nonisolated(unsafe) public var xmPortaDownMemory: Int = 0
+    nonisolated(unsafe) public var xmVolumeSlideMemory: Int = 0
     
     // Temp-Zustände für Ticks
     nonisolated(unsafe) public var setInstrument: Instrument?
@@ -233,6 +239,9 @@ public final class DSPChannel: Sendable {
         tremorOff = 1
         tremorCount = 0
         s3mEffectMemory = 0
+        xmPortaUpMemory = 0
+        xmPortaDownMemory = 0
+        xmVolumeSlideMemory = 0
 
         setInstrument = nil
         setSample = nil
@@ -538,9 +547,15 @@ public final class DSPChannel: Sendable {
                 self.arpY = effectLow
             }
         case 0x01: // SLIDE_UP
-            self.periodDelta = -Float(effectData) * portaScale
+            let p = xmLinearMode
+                ? xmRememberedParam(effectData, memory: &xmPortaUpMemory)
+                : effectData
+            self.periodDelta = -Float(p) * portaScale
         case 0x02: // SLIDE_DOWN
-            self.periodDelta = Float(effectData) * portaScale
+            let p = xmLinearMode
+                ? xmRememberedParam(effectData, memory: &xmPortaDownMemory)
+                : effectData
+            self.periodDelta = Float(p) * portaScale
         case 0x03: // TONE_PORTAMENTO
             self.portamento = true
             if effectData > 0 {
@@ -562,24 +577,26 @@ public final class DSPChannel: Sendable {
             self.setCurrentPeriod = false
             self.setSampleIndex = nil
             self.periodDelta = self.portamentoSpeed
+            let slideParam = xmLinearMode
+                ? xmRememberedParam(effectData, memory: &xmVolumeSlideMemory)
+                : effectData
             if s3mMode {
                 // S3M Lxy: Volume-Slide-Teil mit voller Dxy-Semantik (Memory,
                 // Fine-Slides).
-                applyS3MVolumeSlide(param: effectData)
-            } else if effectHigh > 0 {
-                self.volumeSlide = Float(effectHigh)
-            } else if effectLow > 0 {
-                self.volumeSlide = -Float(effectLow)
+                applyS3MVolumeSlide(param: slideParam)
+            } else {
+                applyStandardVolumeSlide(param: slideParam)
             }
         case 0x06: // VIBRATO_WITH_VOLUME_SLIDE
             self.vibrato = true
+            let slideParam = xmLinearMode
+                ? xmRememberedParam(effectData, memory: &xmVolumeSlideMemory)
+                : effectData
             if s3mMode {
                 // S3M Kxy: analog zu Lxy.
-                applyS3MVolumeSlide(param: effectData)
-            } else if effectHigh > 0 {
-                self.volumeSlide = Float(effectHigh)
-            } else if effectLow > 0 {
-                self.volumeSlide = -Float(effectLow)
+                applyS3MVolumeSlide(param: slideParam)
+            } else {
+                applyStandardVolumeSlide(param: slideParam)
             }
         case 0x07: // TREMOLO
             if effectHigh > 0 { self.tremoloSpeed = Float(effectHigh) }
@@ -596,10 +613,11 @@ public final class DSPChannel: Sendable {
         case 0x0A: // VOLUME_SLIDE
             if s3mMode {
                 applyS3MVolumeSlide(param: effectData)
-            } else if effectHigh > 0 {
-                self.volumeSlide = Float(effectHigh)
-            } else if effectLow > 0 {
-                self.volumeSlide = -Float(effectLow)
+            } else {
+                let p = xmLinearMode
+                    ? xmRememberedParam(effectData, memory: &xmVolumeSlideMemory)
+                    : effectData
+                applyStandardVolumeSlide(param: p)
             }
         case 0x0B: // POSITION_JUMP
             // Handled at PlayerCoordinator level
@@ -755,6 +773,28 @@ public final class DSPChannel: Sendable {
             self.volumeSlide = Float(x)
         } else if y > 0 {
             self.volumeSlide = -Float(y)
+        }
+    }
+
+    // FT2/XM: Parameter 0 wiederholt den letzten Nicht-Null-Parameter dieses
+    // Effekt-Typs. Ohne gespeicherten Wert bleibt der Effekt wirkungslos.
+    private func xmRememberedParam(_ param: Int, memory: inout Int) -> Int {
+        if param != 0 {
+            memory = param
+            return param
+        }
+        return memory
+    }
+
+    // Gemeinsame ProTracker/XM-Volume-Slide-Auswertung für Axy/5xy/6xy.
+    // XM ruft diese Funktion bereits mit aufgelöstem Effekt-Memory auf.
+    private func applyStandardVolumeSlide(param: Int) {
+        let high = (param >> 4) & 0x0F
+        let low = param & 0x0F
+        if high > 0 {
+            self.volumeSlide = Float(high)
+        } else if low > 0 {
+            self.volumeSlide = -Float(low)
         }
     }
 

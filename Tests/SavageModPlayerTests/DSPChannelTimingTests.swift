@@ -354,6 +354,46 @@ final class DSPChannelTimingTests: XCTestCase {
         XCTAssertEqual(ch.currentVolume, 35, accuracy: 0.001, "Tick 1: +3")
     }
 
+    /// XM 1xx nutzt Effekt-Memory: 100 wiederholt den letzten 1xx-Parameter.
+    /// Starfish Row 60..63 im ersten Pattern ist 105,100,100,100; ohne Memory
+    /// steigt die Tonhöhe nur eine Row und bleibt dann hörbar falsch stehen.
+    func testXMPortaUpZeroReusesPreviousParameter() {
+        let ch = makeXMChannel()
+        ch.period = 4608
+        ch.currentPeriod = 4608
+
+        ch.playNote(Note(instrument: 0, period: 0, effectId: 0x01, effectData: 0x05),
+                    instruments: [nil])
+        playRow(ch, ticksPerRow: 4)
+        XCTAssertEqual(ch.currentPeriod, 4548, accuracy: 0.001,
+                       "105: XM-Slide-Up macht bei Speed 4 drei Schritte à 5*4")
+
+        ch.playNote(Note(instrument: 0, period: 0, effectId: 0x01, effectData: 0x00),
+                    instruments: [nil])
+        playRow(ch, ticksPerRow: 4)
+        XCTAssertEqual(ch.currentPeriod, 4488, accuracy: 0.001,
+                       "100 muss den gespeicherten 05-Parameter weiterverwenden")
+    }
+
+    /// XM A00 wiederholt analog den letzten Axy-Parameter. Das verhindert, dass
+    /// kombinierte FT2-Volume-Slide-Folgen nach einer Row abbrechen.
+    func testXMVolumeSlideZeroReusesPreviousParameter() {
+        let ch = makeXMChannel()
+        ch.volume = 32
+        ch.currentVolume = 32
+
+        ch.playNote(Note(instrument: 0, period: 0, effectId: 0x0A, effectData: 0x20),
+                    instruments: [nil])
+        playRow(ch, ticksPerRow: 4)
+        XCTAssertEqual(ch.currentVolume, 38, accuracy: 0.001)
+
+        ch.playNote(Note(instrument: 0, period: 0, effectId: 0x0A, effectData: 0x00),
+                    instruments: [nil])
+        playRow(ch, ticksPerRow: 4)
+        XCTAssertEqual(ch.currentVolume, 44, accuracy: 0.001,
+                       "A00 muss den gespeicherten A20-Parameter weiterverwenden")
+    }
+
     /// Volume-Column Set Panning (0xC0..0xCF) setzt das Panorama (y<<4)/255.
     func testXMVolumeColumnSetPanning() {
         let ch = makeXMChannel()

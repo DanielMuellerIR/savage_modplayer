@@ -212,7 +212,9 @@ Swift-Variante um das XM-Format erweitert — eine eigene Instrument-Engine (Ent
 - **Amiga-Frequenz-XMs** (`flags` Bit0 = 0, selten) werden vorerst über das lineare Modell approximiert — echte Amiga-Periodentabelle ist ein Feinschliff (TODO in `configure`).
 - **Hxy** (globales Volume-Slide, braucht einen Per-Tick-Hook im Coordinator) und **Rxy** (Multi-Retrig mit Volume-Modi) noch nicht umgesetzt; **Gxx** (Set Global Volume) läuft.
 - **restartPos** ignoriert (Song wrappt auf 0); Order-Einträge ≥ numPatterns → leeres Pattern.
-- XM-Effekt-Memory für 1xx/2xx/Axy nutzt vorerst die MOD-Semantik (kein Param-0-Memory).
+- XM-Effekt-Memory für 1xx/2xx/Axy/5xy/6xy ist implementiert (Param 0 =
+  letzter Nicht-Null-Parameter dieses Effekt-Typs); Hxy/Pxy/Rxy-Memory bleibt
+  optionaler Feinschliff mit den noch offenen Effekten.
 
 **Test-Korpus:** 8 echte XM von Battle of the Bits liegen (gitignored) in `audio/` — der Realwelt-Test `XMParserTests/testRealXMFilesParseAndRender` parst + rendert sie (8–32 Kanäle, alle liefern hörbares Signal).
 
@@ -303,7 +305,7 @@ Nebenbei: XM-Key-Off wird im Grid jetzt als `===` gezeigt (vorher „C#21", Key 
 spielt sofort (MainView.onAppear liest `CommandLine.arguments`); Finder-„Öffnen mit"
 via `.onOpenURL`. Ermöglicht headless CPU-/GUI-Tests OHNE Klicken.
 
-## GUI-/DSP-Fix-Runde 2026-07-09 (Abend) — Release BLOCKIERT
+## GUI-/DSP-Fix-Runde 2026-07-09 (Abend) — Starfish-Blocker gelöst
 
 Große Bug-Fix-Runde aus Daniels GUI-Review (alle committet, 87 Tests grün, NICHTS
 auf GitHub). Erledigt:
@@ -323,19 +325,39 @@ auf GitHub). Erledigt:
   `seek(toPosition:row:)` rekonstruiert Speed/Tempo/GlobalVolume (`reconstructGlobalParams`).
 - **Seek stummschaltung** (`2b27a57`): `applySeek` setzt `ch.playing=false` gegen hängende Kanäle.
 
-**RELEASE-BLOCKER (verifiziert per Daniels Ohr, NICHT lösbar bisher):**
-Die **letzten ~2 Sekunden von Pattern 1** (_Starfish – Life Support_, Order-Pos 0 =
-Pattern 26, Speed 8, letzte Reihen ~22–29) klingen im Original wie ein **rapider
-Speedup / „Schallplatte ganz schnell drehen"** (schnell ansteigende Tonhöhe). Dieser
-Effekt **fehlt bei uns komplett** und macht den Song hörbar kaputt. **Rätsel:** Pattern
-26 hat in den Reihen 15–29 NACHWEISLICH KEINE Effekte (nur inst-01-Melodienoten) —
-woher kommt der Speedup in der korrekten Wiedergabe? Kandidaten fürs Weiterforschen:
-(a) ein Effekt, den wir falsch/gar nicht parsen (Volume-Column? E-Serie?); (b) inst 01
-hat eine Ping-Pong-Loop [14..2350] + Zerfalls-Hüllkurve — evtl. entsteht der „Speedup"
-aus dem Sample-Playback bei den dichten hohen Noten; (c) Auto-Vibrato/Pitch-Envelope.
-Methodik: MP3-Referenz liegt in `~/Downloads/BotB 9805 Starfish - Life Support.xm.mp3`
-(= openmpt, bestätigt korrekt); `savage-cli --pattern 26` + openmpt123-A/B + venv/compare.py
-im Scratchpad der Vorsession. **Erst lösen, DANN Release** (Daniels Ansage 2026-07-09).
+**GELÖST — Starfish-Pitch-Rampe am Ende des ersten Patterns (2026-07-09):**
+Der hörbare Fehler in _BotB 9805 Starfish - Life Support.xm_ war kein Ping-Pong-,
+Envelope- oder Auto-Vibrato-Problem, sondern **fehlendes XM-Effekt-Memory für 1xx**.
+Wichtiges Debugging-Detail: `savage-cli --pattern N` nimmt einen **Order-Index**,
+keinen rohen Pattern-Index. Die frühere Analyse mit `--pattern 26` dumpte deshalb
+Order 26 → Pattern 21 (30 Reihen) und sah die echte Stelle nicht. Der erste
+abgespielte Pattern ist Order 0 → Pattern 26 (64 Reihen). Dort stehen auf den ersten
+zwei Kanälen:
+
+```text
+60| ... 0105 | ... 0105
+61| ... 0100 | ... 0100
+62| ... 0100 | ... 0100
+63| ... 0100 | ... 0100
+```
+
+In FastTracker II bedeutet `100`: **den letzten 1xx-Parameter wiederholen**. Unser
+DSP behandelte den Parameter 0 als echten Wert 0; dadurch machte Row 60 mit `105`
+einen kurzen Pitch-Slide-Up, ab Row 61 wurde `periodDelta` aber 0 und die Rampe blieb
+stehen. Das klang wie „geht ein Stück hoch und bleibt dann dort".
+
+Fix in `DSPChannel`: pro Kanal eigener XM-Memory für `1xx`, `2xx` und
+`Axy/5xy/6xy` (`xmPortaUpMemory`, `xmPortaDownMemory`, `xmVolumeSlideMemory`),
+zurückgesetzt in `reset()`. Aktiv nur in `xmLinearMode`; MOD und S3M bleiben auf
+ihren bisherigen Pfaden. `portaScale` ×4 bleibt erhalten, d. h. Starfish macht bei
+Speed 4 pro Row drei Schritte à `5*4` Periodeneinheiten und die Tonhöhe steigt über
+Rows 60–63 weiter bis zum Pattern-Wechsel.
+
+Regression: `DSPChannelTimingTests/testXMPortaUpZeroReusesPreviousParameter`
+bildet exakt `105,100` nach; `testXMVolumeSlideZeroReusesPreviousParameter`
+deckt `A00` analog ab. Verifiziert mit `swift test --filter DSPChannelTimingTests`,
+komplettem `swift test` (89 Tests inkl. Starfish-Real-XM-Render),
+`node Tests/js/worklet-timing.mjs`, `git diff --check` und `./build_app.sh`.
 
 Bekannter Rest im Seek-Feature: Per-Kanal-Slide-/Sustain-Zustände werden beim Sprung
 NICHT rekonstruiert → gehaltene Noten von vor dem Sprung fehlen (bewusster Kompromiss).
@@ -350,15 +372,16 @@ XM-Kern (M0–M5) steht, committet, getestet; im echten App-GUI verifiziert (spi
    Zeilen werden in einem fix-hohen Canvas gezeichnet, vertikal gescrollt. Das alte
    Equatable-VStack-Clipping ist damit hinfällig. Falls Daniel im Screenshot noch
    fehlende Reihen sieht: gegen die neue Canvas-Höhe (`rowCount*(fontSize+6)`) prüfen.
-2. **XM-Song-Korrektheit** — ✅ WEITGEHEND ERLEDIGT (2026-07-09, siehe Abschnitt oben):
-   Kern-Fehler (Minimal-Header-Instrument-Garbage) gefunden + gefixt + gegen openmpt123
-   verifiziert (alle 8 XM Timbre-korrekt). Rest: nur noch subtile Envelope-/Volume-
-   Column-Feinheiten bei den 2 dichtesten 32-Kanal-Songs (dokumentiert oben, kein „kaputt").
+2. **XM-Song-Korrektheit** — ✅ ERLEDIGT für den Release-Blocker (2026-07-09):
+   Minimal-Header-Instrument-Garbage behoben; Starfish-Pitch-Rampe durch XM-1xx-
+   Effekt-Memory behoben und per Regressionstest abgesichert. Rest: nur noch
+   subtile Envelope-/Volume-Column-Feinheiten bei den 2 dichtesten 32-Kanal-Songs
+   (dokumentiert oben, kein „kaputt").
 3. **CPU-Optimierung (Kern)** — ✅ ERLEDIGT (2026-07-09, siehe Abschnitt oben): CPU
    ~halbiert (32ch 127 → 63 %, 4ch 65 → 37 %). Kernursachen (Disc-Timer-@State,
    2048-Zellen-Grid-ScrollView, 32 Streifen-Buttons) per Profiler gefunden + gefixt
    (Grid + Scopes als je EIN Canvas; VisualizerState/TransportState-Split).
-4. **Deferred aus den Meilensteinen:** Amiga-Frequenz-XMs (echte Periodentabelle statt linearer Näherung); XM-Effekte **Hxy** (globales Vol-Slide, braucht Per-Tick-Hook im Coordinator) + **Rxy** (Multi-Retrig); XM-Effekt-Memory für 1xx/2xx/Axy (nutzt MOD-Semantik).
+4. **Deferred aus den Meilensteinen:** Amiga-Frequenz-XMs (echte Periodentabelle statt linearer Näherung); XM-Effekte **Hxy** (globales Vol-Slide, braucht Per-Tick-Hook im Coordinator) + **Rxy** (Multi-Retrig); Memory/Feinheiten für die noch offenen XM-Effekte.
 5. **Länge-1-Modul: Headless-Test** — ✅ ERLEDIGT (2026-07-09). Die Crash-verhindernde Arithmetik wurde aus `PositionSlider` in den pure Core-Helfer `SongPositionScale` ausgelagert (der eigentliche SwiftUI-`Slider`-Crash bei `mod.length == 1` ist selbst nicht headless reproduzierbar). Regressionstest `LengthOneModuleTests` — Invariante „Slider-Range nie leer" (Längen 0/1/2/…) + Länge-1-Modul parst/rendert/seekt ohne Crash. Repro-Datei `audio/_ZZ_len1_crashtest.xm` entfernt.
 6. **Release** (erst nach 1+2): VERSION-Bump (1.4.4 → 1.5.0), danach `python3 build.py` (Publish-Guard), README/README.de auf XM (github-publish-Skill), dann GitHub-Release. Popo-Backup ist laufend aktuell.
 
