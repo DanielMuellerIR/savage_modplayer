@@ -254,10 +254,18 @@ global-Spektrum-Cosine 0.94–1.0 (Timbre korrekt). Kontrolle openmpt-vs-openmpt
 (Frame-Cosine ~0.78) — ein diffuser, breitbandiger (±1–2,6 dB), zeitlich konstanter
 Rest (kein Timing-Drift, kein Interpolations-/Limiter-/Detune-Effekt nachweisbar; per
 Ausschluss geprüft). Vermutlich die Summe vieler kleiner FT2-Envelope-/Volume-Column-
-Mikroquirks, die erst bei 32 Kanälen sichtbar werden. Kandidaten für später: Instrument-
-ohne-Note-Envelope-Reset (FT2 startet Vol-Envelope neu, wir nicht), XM-Perioden-Slide-
+Mikroquirks, die erst bei 32 Kanälen sichtbar werden. Kandidaten für später: XM-Perioden-Slide-
 Skalierung (1xx/2xx/3xx ×4? — Experiment war ergebnislos, unverifiziert), Volume-Column-
 Fine-Slide-Basis (currentVolume vs. volume).
+
+**GETESTET & VERWORFEN (2026-07-09):** Der Kandidat „Instrument-ohne-Note-Envelope-Reset"
+(FT2-Quirk: ein Instrument-Eintrag ohne neue Note triggert Volume-/Panning-Hüllkurve neu
++ Fadeout zurück, ohne Sample-Neuanschlag) wurde in `DSPChannel.playNote` implementiert und
+per A/B gegen openmpt123 über ALLE 8 Test-XM gemessen — Ergebnis **byte-identisch**
+(env-Korr/Frame-Cosine unverändert, u. a. Galgox 0.556, Xemogasa 0.710). Keine dieser
+XM nutzt die Technik mit einem Hüllkurven-Instrument → null Effekt. Als spekulative
+Echtzeit-Audio-Thread-Änderung ohne messbaren Nutzen wieder entfernt. Der diffuse Rest
+liegt NICHT an diesem Quirk (bestätigt die „zeitlich konstant, kein Envelope-Timing"-Diagnose).
 
 ## CPU-Optimierung + Auto-Play-Argument (2026-07-09)
 
