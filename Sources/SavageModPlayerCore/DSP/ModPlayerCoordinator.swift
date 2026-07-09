@@ -601,6 +601,12 @@ public final class ModPlayerCoordinator: ObservableObject {
         for ch in channels {
             ch.patternLoopCount = -1
             ch.patternLoopStartRow = 0
+            // Alle Kanaele stummschalten: vor dem Seek laufende Noten sollen an der
+            // Zielstelle NICHT weiterklingen (sonst "haengende" Kanaele). Ab der
+            // Zielzeile getriggerte Noten spielen normal. Per-Kanal-Slide-/Sustain-
+            // Zustaende werden (noch) nicht rekonstruiert -> gehaltene Noten von vor
+            // dem Sprung fehlen; das ist der bewusste Kompromiss fuer Test-Spruenge.
+            ch.playing = false
         }
         // Defensiv: ein laufender Pattern-Delay (EEx) wuerde sonst die erste Row
         // nach dem Seek unerwartet verzoegern.
