@@ -1352,10 +1352,13 @@ public final class ModPlayerCoordinator: ObservableObject {
 
         if smp.loopType == .pingpong {
             // Ping-Pong: an den Loop-Grenzen die Richtung umkehren und den
-            // Überschuss zurückreflektieren.
+            // Überschuss zurückreflektieren. Spiegel um die Grenze (2·Grenze−pos)
+            // OHNE Endpunkt-Duplizierung — wie openmpt/FT2. (Früher `end-1-over`:
+            // spiegelte einen Sample zu tief und wiederholte den Endpunkt, was bei
+            // langen gehaltenen Ping-Pong-Noten einen Timbre-Drift akkumulierte.)
             if ch.sampleDirection > 0, ch.sampleIndex >= end {
                 let over = (ch.sampleIndex - end).truncatingRemainder(dividingBy: length)
-                ch.sampleIndex = end - 1 - over
+                ch.sampleIndex = end - over
                 ch.sampleDirection = -1
             } else if ch.sampleDirection < 0, ch.sampleIndex < start {
                 let under = (start - ch.sampleIndex).truncatingRemainder(dividingBy: length)
