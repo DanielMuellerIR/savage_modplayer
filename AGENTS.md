@@ -258,17 +258,60 @@ ohne-Note-Envelope-Reset (FT2 startet Vol-Envelope neu, wir nicht), XM-Perioden-
 Skalierung (1xx/2xx/3xx ×4? — Experiment war ergebnislos, unverifiziert), Volume-Column-
 Fine-Slide-Basis (currentVolume vs. volume).
 
+## CPU-Optimierung + Auto-Play-Argument (2026-07-09)
+
+Die App-CPU bei Wiedergabe wurde ~HALBIERT (gemessen, sichtbares GUI, `top`):
+**32-Kanal-XM 127 % → 63 %**, **4-Kanal-MOD 65 % → 37 %**. Methodik: App mit Song-
+Argument headless starten (siehe unten), Fenster sichtbar, `sample <pid>` + `top`.
+
+**Kette der Ursachen (per `sample`-Profiler gefunden, nicht geraten):**
+1. **Disc-Rotation-Timer**: Ein 30-Hz-Timer erhöhte `diskRotation` als **@State auf
+   MainView** → die ganze `MainView.body` (2000+ Zeilen) rerenderte 30×/s. Fix:
+   `SpinningDiskButton` mit LOKALEM Rotations-State (TransportViews.swift).
+2. **Tracker-Grid**: 64×32 = bis 2048 **SwiftUI-Text-Views** in einer ScrollView
+   wurden bei jedem Zeilenwechsel (~20×/s bei schnellen Songs) neu gelayoutet
+   (`ScrollView.sizeThatFits` sättigte den Main-Thread — der GRÖSSTE Posten). Fix:
+   **alle Zellen in EINEM `Canvas`** (`ChannelCellsCanvas`), Equatable OHNE
+   currentRow → nur bei Pattern-Wechsel neu gezeichnet, sonst bloß verschoben; die
+   aktuelle Zeile ist ein separates Highlight-Band. Row-Nummern bleiben leichte
+   Views (mit `.id` für scrollTo).
+3. **32 Kanal-Streifen**: je (VU-Canvas + Scope-Canvas + 2 SwiftUI-Buttons), 30×/s.
+   Fix: **alle VU+Oszilloskope in EINEM `Canvas`** (`ChannelScopesCanvas`); die
+   Mute/Solo-Footer beobachten den visualizerState NICHT (kein 30-Hz-Rerender) und
+   nutzen `onTapGesture` statt des teuren SwiftUI-Button.
+
+**Architektur-Split (State vom Coordinator getrennt, damit MainView nicht bei jeder
+Änderung neu evaluiert — klassisches ObservableObject invalidiert ALLE Beobachter):**
+- `VisualizerState` (30 Hz: VU, Oszis, Spielzeit) — beobachten nur die Scope-/Zeit-Subviews.
+- `TransportState` (row-rate: currentPosition/currentRow) — beobachten nur Grid,
+  Positions-Slider, PAT-Anzeige, Marker-Map. `coordinator.currentPosition/-Row`
+  bleiben als Convenience-Accessoren (leiten auf `transport` um).
+- MainView beobachtet nur noch den Coordinator (seltene Änderungen).
+
+Nebenbei: XM-Key-Off wird im Grid jetzt als `===` gezeigt (vorher „C#21", Key 253).
+
+**Auto-Play per Argument / Öffnen-mit:** `SavageModPlayer <song.xm|ordner>` lädt und
+spielt sofort (MainView.onAppear liest `CommandLine.arguments`); Finder-„Öffnen mit"
+via `.onOpenURL`. Ermöglicht headless CPU-/GUI-Tests OHNE Klicken.
+
 ## Offene Punkte / Nächste Schritte (Stand 2026-07-09)
 
 XM-Kern (M0–M5) steht, committet, getestet; im echten App-GUI verifiziert (spielt
 32-Kanal-XM). Aus dem GUI-Test offen (Reihenfolge = Priorität):
 
-1. **Pattern-Grid zeichnet evtl. nicht alle Reihen** (Daniel im Screenshot bemerkt, 2026-07-09). Zuerst prüfen, ob es eine Regression des `TrackerGridView`-`Equatable`-Fixes (`89d0072`, CPU-WIP) ist — notfalls `.equatable()`/Equatable-Conformance zurücknehmen — oder ein vorbestehendes Clipping der 64-Zeilen-VStack im fix-hohen Scroll-Container. **Zuerst reproduzieren (fensterspezifischer Screenshot), dann fixen.**
+1. **Pattern-Grid zeichnet evtl. nicht alle Reihen** — der `TrackerGridView` wurde
+   2026-07-09 komplett auf einen Canvas umgebaut (siehe CPU-Abschnitt): alle 64
+   Zeilen werden in einem fix-hohen Canvas gezeichnet, vertikal gescrollt. Das alte
+   Equatable-VStack-Clipping ist damit hinfällig. Falls Daniel im Screenshot noch
+   fehlende Reihen sieht: gegen die neue Canvas-Höhe (`rowCount*(fontSize+6)`) prüfen.
 2. **XM-Song-Korrektheit** — ✅ WEITGEHEND ERLEDIGT (2026-07-09, siehe Abschnitt oben):
    Kern-Fehler (Minimal-Header-Instrument-Garbage) gefunden + gefixt + gegen openmpt123
    verifiziert (alle 8 XM Timbre-korrekt). Rest: nur noch subtile Envelope-/Volume-
    Column-Feinheiten bei den 2 dichtesten 32-Kanal-Songs (dokumentiert oben, kein „kaputt").
-3. **CPU-Optimierung (Kern)** — `MainView.body` rendert bei jedem 30-Hz-Scope-Update das ganze Fenster neu (Profil: SwiftUI-Layout dominiert, ~80–100 % bei 32-Kanal-XM). Echter Fix: die hochfrequenten Visualizer-`@Published` (vuLevels, channelWaveforms, masterSamples, elapsedTime) in ein eigenes `VisualizerState: ObservableObject` auslagern und die Scope-/VU-/Zeit-Subviews DORT beobachten lassen, damit MainView nur noch im Row-Takt rendert. Leaf-Canvas + 30 Hz + Equatable-Grid sind schon drin (`89d0072`), reichen aber nicht.
+3. **CPU-Optimierung (Kern)** — ✅ ERLEDIGT (2026-07-09, siehe Abschnitt oben): CPU
+   ~halbiert (32ch 127 → 63 %, 4ch 65 → 37 %). Kernursachen (Disc-Timer-@State,
+   2048-Zellen-Grid-ScrollView, 32 Streifen-Buttons) per Profiler gefunden + gefixt
+   (Grid + Scopes als je EIN Canvas; VisualizerState/TransportState-Split).
 4. **Deferred aus den Meilensteinen:** Amiga-Frequenz-XMs (echte Periodentabelle statt linearer Näherung); XM-Effekte **Hxy** (globales Vol-Slide, braucht Per-Tick-Hook im Coordinator) + **Rxy** (Multi-Retrig); XM-Effekt-Memory für 1xx/2xx/Axy (nutzt MOD-Semantik).
 5. **Länge-1-Modul: Headless-Test** ergänzen (der Crash war nur GUI-reproduzierbar). Repro-Datei liegt (gitignored) als `audio/_ZZ_len1_crashtest.xm` — kann weg, sobald ein Unit-Test das abdeckt.
 6. **Release** (erst nach 1+2): VERSION-Bump (1.4.4 → 1.5.0), danach `python3 build.py` (Publish-Guard), README/README.de auf XM (github-publish-Skill), dann GitHub-Release. Popo-Backup ist laufend aktuell.

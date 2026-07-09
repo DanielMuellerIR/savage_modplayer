@@ -90,8 +90,20 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Kanäle, Effekt-Memory) bleibt erhalten — resume() spielt nahtlos weiter.
     // isPlaying bleibt dabei true (die Engine ist weiterhin alloziert).
     @Published public var isPaused = false
-    @Published public var currentPosition = 0
-    @Published public var currentRow = 0
+    // Song-Position + aktuelle Zeile leben in einem EIGENEN ObservableObject
+    // (row-rate), damit die ~20-Hz-Zeilenwechsel NICHT die ganze MainView.body neu
+    // evaluieren — nur die positionsabhängigen Subviews beobachten `transport`.
+    // War die eigentliche CPU-Grundlast (2026-07-09). Convenience-Accessoren unten
+    // halten bestehende Aufrufer (seek etc.) unverändert.
+    public let transport = TransportState()
+    public var currentPosition: Int {
+        get { transport.currentPosition }
+        set { transport.currentPosition = newValue }
+    }
+    public var currentRow: Int {
+        get { transport.currentRow }
+        set { transport.currentRow = newValue }
+    }
     // Die BPM-/Speed-Stepper in der UI schreiben in diese beiden Properties.
     // Damit eine Aenderung auch wirklich die laufende Wiedergabe beeinflusst,
     // muss sie an den Echtzeit-Zustand (`playbackState`) durchgereicht werden —
@@ -123,9 +135,12 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Die UI leitet daraus Grid-Spalten, VU-Meter und Scopes ab.
     @Published public var channelCount = 4
 
-    // Realtime VU Levels (für SwiftUI gebunden) — immer channelCount Einträge.
-    @Published public var vuLevels: [Float] = [0.0, 0.0, 0.0, 0.0]
-    
+    // Hochfrequenter (30 Hz) Visualisierungs-Zustand (VU, Oszilloskope, Spielzeit)
+    // in EIGENEM ObservableObject — damit die 30-Hz-Updates NICHT die ganze
+    // MainView.body neu evaluieren, sondern nur die beobachtenden Scope-/VU-/Zeit-
+    // Subviews. War die Haupt-CPU-Last (2026-07-09). `let`: stabile Referenz.
+    public let visualizerState = VisualizerState()
+
     // New parameters for user controls
     @Published public var stereoSeparation: Float = 0.8 {
         didSet {
@@ -143,8 +158,6 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
     }
     
-    @Published public var elapsedTime: Double = 0.0
-    @Published public var totalDuration: Double = 0.0
 
     // Zaehlt bei jedem erreichten Songende hoch. Die UI beobachtet das per
     // onChange und wertet dort den loopMode aus (stop / Song wiederholen / naechster).
@@ -164,15 +177,6 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
     }
     
-    @Published public var channelWaveforms: [[Float]] = [
-        [Float](repeating: 0, count: 32),
-        [Float](repeating: 0, count: 32),
-        [Float](repeating: 0, count: 32),
-        [Float](repeating: 0, count: 32)
-    ]
-
-    @Published public var masterSamples: [Float] = [Float](repeating: 0, count: 128)
-
     // Obergrenze der unterstützten Kanäle — bestimmt die Größe der
     // vorallozierten VU-/Waveform-Puffer (S3M erlaubt bis zu 32 Kanäle).
     nonisolated public static let maxChannels = 32
@@ -235,8 +239,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         self.channels = (1...count).map { DSPChannel(index: $0) }
         Self.configure(channels: self.channels, for: mod)
         self.channelCount = count
-        self.vuLevels = [Float](repeating: 0, count: count)
-        self.channelWaveforms = (0..<count).map { _ in [Float](repeating: 0, count: 32) }
+        self.visualizerState.resize(channelCount: count)
 
         self.currentPosition = 0
         self.currentRow = 0
@@ -529,12 +532,17 @@ public final class ModPlayerCoordinator: ObservableObject {
         guard channelIndex >= 0 && channelIndex < channels.count else { return }
         channels[channelIndex].isMuted.toggle()
         objectWillChange.send()
+        // Die Kanal-Streifen beobachten den visualizerState (nicht den Coordinator).
+        // Ohne diesen Anstoß aktualisierte sich die M/S-Optik im gestoppten Zustand
+        // erst beim nächsten Play (dann tickt der VU-Timer wieder).
+        visualizerState.nudge()
     }
 
     public func toggleSolo(channelIndex: Int) {
         guard channelIndex >= 0 && channelIndex < channels.count else { return }
         channels[channelIndex].isSoloed.toggle()
         objectWillChange.send()
+        visualizerState.nudge()
     }
 
     public func isMuted(channelIndex: Int) -> Bool {
@@ -549,11 +557,14 @@ public final class ModPlayerCoordinator: ObservableObject {
 
     @MainActor
     private func updateVULevelsTick() {
+        // Hochfrequente Puffer landen im getrennten visualizerState (nicht mehr auf
+        // self), damit dieser 30-Hz-Tick nur die Scope-/VU-/Zeit-Subviews neu rendert.
+        let vis = self.visualizerState
         let count = min(channelCount, Self.maxChannels)
         var newLevels = [Float](repeating: 0, count: count)
         for i in 0..<count {
             let rawPeak = self.peakLevelsPointer[i]
-            let prev = i < self.vuLevels.count ? self.vuLevels[i] : 0
+            let prev = i < vis.vuLevels.count ? vis.vuLevels[i] : 0
             let attack: Float = 0.35
             let release: Float = 0.08
 
@@ -563,7 +574,7 @@ public final class ModPlayerCoordinator: ObservableObject {
             // Reset raw peak in the C-pointer
             self.peakLevelsPointer[i] = 0.0
         }
-        self.vuLevels = newLevels
+        vis.vuLevels = newLevels
 
         // Update true channel waveforms from channelWavesPointer
         var newWaves = (0..<count).map { _ in [Float](repeating: 0.0, count: 32) }
@@ -572,15 +583,15 @@ public final class ModPlayerCoordinator: ObservableObject {
                 newWaves[i][j] = self.channelWavesPointer[i * 32 + j]
             }
         }
-        self.channelWaveforms = newWaves
-        
+        vis.channelWaveforms = newWaves
+
         // Update true master oscilloscope samples from masterWavesPointer
         var newMasterOsc = [Float](repeating: 0.0, count: 128)
         for j in 0..<128 {
             newMasterOsc[j] = self.masterWavesPointer[j]
         }
-        self.masterSamples = newMasterOsc
-        
+        vis.masterSamples = newMasterOsc
+
         // Read progress directly from shared state (100% lock-free, allocation-free)
         if let state = self.playbackState {
             // Songende-Signal aus dem Renderblock auf den MainActor heben.
@@ -601,8 +612,8 @@ public final class ModPlayerCoordinator: ObservableObject {
             if self.speed != sp { self.speed = sp }
             
             let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
-            self.elapsedTime = Double(state.elapsedFrames) / sampleRate
-            
+            vis.elapsedTime = Double(state.elapsedFrames) / sampleRate
+
             if let mod = self.activeMod {
                 // Schaetzung ueber die aktuelle Zeilendauer: Ticks/Zeile *
                 // Tickdauer (60/(BPM*24)). Die alte Formel nahm implizit
@@ -610,7 +621,7 @@ public final class ModPlayerCoordinator: ObservableObject {
                 // ueber die angezeigte Gesamtdauer hinaus.
                 let currentBpm = state.bpm > 0 ? Double(state.bpm) : 125.0
                 let ticksPerRow = Double(max(1, state.ticksPerRow))
-                self.totalDuration = Double(mod.length * 64) * ticksPerRow * 60.0 / (currentBpm * 24.0)
+                vis.totalDuration = Double(mod.length * 64) * ticksPerRow * 60.0 / (currentBpm * 24.0)
             }
         }
     }
@@ -634,7 +645,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     private func stopVUUpdates() {
         vuUpdateTimer?.invalidate()
         vuUpdateTimer = nil
-        self.vuLevels = [Float](repeating: 0, count: channelCount)
+        self.visualizerState.vuLevels = [Float](repeating: 0, count: channelCount)
     }
     
     // MARK: - Safe Real-Time Audio Block Construction

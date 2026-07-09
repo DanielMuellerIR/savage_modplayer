@@ -1,0 +1,150 @@
+import SwiftUI
+import SavageModPlayerCore
+
+// Positions-/Zeilen-abhängige Subviews, die den row-rate `TransportState`
+// beobachten — herausgezogen aus MainView, damit die ~20-Hz-Zeilenwechsel NICHT
+// die große MainView.body neu evaluieren. Das war die eigentliche CPU-Grundlast
+// (2026-07-09, gemessen: ~74 % „Floor" auch bei ausgeblendetem Grid/Oszilloskop).
+
+// Tracker-Grid inkl. Pattern-Auswahl aus der aktuellen Song-Position. Beobachtet
+// `transport`; das restliche MainView bleibt vom Zeilentakt entkoppelt.
+struct TrackerGridContainer: View {
+    @ObservedObject var transport: TransportState
+    let mod: Mod
+    let theme: PlayerTheme
+
+    var body: some View {
+        // Defensiv wie zuvor: length/patternTable/patternIndex vor dem Zugriff klemmen.
+        let tableIdx = max(0, min(mod.length - 1, transport.currentPosition))
+        let patternIndex = mod.patternTable[max(0, min(mod.patternTable.count - 1, tableIdx))]
+        if patternIndex >= 0, patternIndex < mod.patterns.count {
+            TrackerGridView(pattern: mod.patterns[patternIndex], patternIndex: patternIndex,
+                            currentRow: transport.currentRow, theme: theme)
+        } else {
+            Color.clear
+        }
+    }
+}
+
+// „PAT: n/N" — aktuelle Song-Position im Header.
+struct PatPositionText: View {
+    @ObservedObject var transport: TransportState
+    let length: Int
+    var body: some View {
+        Text(String(format: "PAT: %d/%d", transport.currentPosition + 1, length))
+            .fixedSize()
+    }
+}
+
+// Pattern-Mini-Map: Order-Positionen als anklickbare Marker; hebt die aktuelle hervor.
+struct PatternMarkerMap: View {
+    @ObservedObject var transport: TransportState
+    let mod: Mod
+    let theme: PlayerTheme
+    let onSeek: (Int) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(0..<mod.length, id: \.self) { idx in
+                    let isCurrent = idx == transport.currentPosition
+                    let patNum = mod.patternTable[idx]
+                    Button(action: { onSeek(idx) }) {
+                        VStack(spacing: 2) {
+                            Text(String(format: "%02d", idx))
+                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            Text("P\(patNum)")
+                                .font(.system(size: 7, design: .monospaced))
+                        }
+                        .frame(width: 24, height: 26)
+                        .background(
+                            isCurrent
+                            ? Color.accent(theme)
+                            : (theme == .workbench ? Color.lightSurfaceAlt : Color.spaceSurface)
+                        )
+                        .foregroundColor(isCurrent ? .white : .spaceTextSecondary)
+                        .cornerRadius(3)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+}
+
+// Rotierende Play/Pause-Disk mit EIGENEM Rotations-State + Timer. Früher lag der
+// 30-Hz-Timer und `diskRotation` als @State auf MainView — jeder Tick rerenderte
+// damit die GESAMTE MainView.body (2000+ Zeilen) 30×/s. Das war DIE CPU-Ursache
+// (2026-07-09, per `sample` gefunden). Als eigener View betrifft die Rotation nur
+// noch diese kleine Disk. Die Drehung wird Frame für Frame selbst hochgezählt (nicht
+// per .repeatForever), damit sie bei Pause/Stop exakt stehen bleibt.
+struct SpinningDiskButton: View {
+    let isPlaying: Bool
+    let isPaused: Bool
+    let enabled: Bool
+    let theme: PlayerTheme
+    let onTap: () -> Void
+
+    @State private var rotation: Double = 0
+    private let spinTimer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
+    // Eine volle Umdrehung in 2,7 s bei 30 fps.
+    private let degreesPerTick: Double = 360.0 / (2.7 * 30.0)
+
+    var body: some View {
+        Button(action: onTap) {
+            ZStack {
+                Circle()
+                    .fill(theme == .workbench ? Color.lightTextPrimary.opacity(0.12) : Color.spaceSurface)
+                    .frame(width: 40, height: 40)
+                    .shadow(color: theme == .workbench ? Color.clear : Color.spaceAccent.opacity(0.3), radius: 5)
+                Image(systemName: "opticaldisc.fill")
+                    .font(.system(size: 30))
+                    .foregroundColor(Color.accent(theme))
+                    .rotationEffect(.degrees(rotation))
+                Circle()
+                    .fill(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground)
+                    .frame(width: 6, height: 6)
+                Image(systemName: isPlaying && !isPaused ? "pause.fill" : "play.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.white.opacity(0.9))
+                    .shadow(color: .black.opacity(0.6), radius: 1)
+            }
+            .opacity(isPlaying ? 1.0 : 0.6)
+            .animation(.easeInOut, value: isPlaying)
+            .contentShape(Circle())
+        }
+        .buttonStyle(PlainButtonStyle())
+        .disabled(!enabled)
+        .help(isPlaying && !isPaused
+              ? "Pause — an derselben Stelle fortsetzbar (Leertaste)."
+              : "Abspielen bzw. pausierte Wiedergabe fortsetzen (Leertaste).")
+        .onReceive(spinTimer) { _ in
+            if isPlaying && !isPaused { rotation += degreesPerTick }
+        }
+    }
+}
+
+// Positions-Slider (Song-Position wählen; funktioniert auch im gestoppten Zustand).
+struct PositionSlider: View {
+    @ObservedObject var transport: TransportState
+    let mod: Mod
+    let theme: PlayerTheme
+    let onSeek: (Int) -> Void
+
+    var body: some View {
+        // WICHTIG: Range nie leer (mod.length == 1 -> 0...0 crasht SwiftUIs Slider).
+        let lastPosition = max(0, mod.length - 1)
+        Slider(
+            value: Binding(
+                get: { Double(min(max(0, transport.currentPosition), lastPosition)) },
+                set: { onSeek(Int($0)) }
+            ),
+            in: 0...Double(max(1, lastPosition)),
+            step: 1.0
+        )
+        .accentColor(Color.accent(theme))
+        .disabled(mod.length <= 1)
+        .help("Song-Position wählen — funktioniert auch bei gestoppter Wiedergabe: Play startet dann ab dieser Stelle.")
+    }
+}

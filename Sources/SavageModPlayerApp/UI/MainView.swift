@@ -92,16 +92,10 @@ struct MainView: View {
     @State private var exportStatusMessage: String? = nil
     
     // Disk rotation state
-    @State private var diskRotation: Double = 0.0
+    // Steuert die Rotation der Drop-Zone-Disc (nur wenn kein Song läuft). Die
+    // Play/Pause-Transport-Disk dreht sich in ihrem eigenen View (SpinningDiskButton)
+    // mit lokalem State — nicht mehr über ein @State auf MainView (CPU, 2026-07-09).
     @State private var isDiskAnimating = false
-    // Treibt die Disc-Rotation Frame fuer Frame selbst. SwiftUIs
-    // .repeatForever-Animation liess sich nicht zuverlaessig stoppen — die Disc
-    // drehte nach Pause/Stop ungleichmaessig weiter. Dieser Timer erhoeht den
-    // Winkel nur, solange Wiedergabe laeuft; bei Pause/Stop bleibt die Disc exakt
-    // stehen (kein Reset, kein Sprung beim Fortsetzen), und die Drehung ist gleichmaessig.
-    private let diskSpinTimer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
-    // Winkel-Zuwachs pro Timer-Tick: eine volle Umdrehung in 2,7 s bei 30 fps.
-    private let diskDegreesPerTick: Double = 360.0 / (2.7 * 30.0)
     // Fokus-Steuerung des Playlist-Suchfelds (kein Autofokus beim Start).
     @FocusState private var searchFieldFocused: Bool
     // MPRemoteCommandCenter nur einmal verdrahten (onAppear kann mehrfach feuern).
@@ -205,9 +199,11 @@ struct MainView: View {
                     Divider()
                         .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.2))
                     
-                    // Pattern Position Marker Map list
+                    // Pattern Position Marker Map list — beobachtet transport (nicht
+                    // coordinator), damit die Positions-Marker MainView nicht neu rendern.
                     if let mod = coordinator.activeMod {
-                        patternMarkerMap(mod: mod)
+                        PatternMarkerMap(transport: coordinator.transport, mod: mod, theme: theme,
+                                         onSeek: { coordinator.seek(toPosition: $0) })
                             .padding(.horizontal)
                             .padding(.vertical, 4)
                             .background(theme == .workbench ? Color.lightSurface.opacity(0.3) : Color.spaceBackground.opacity(0.4))
@@ -233,16 +229,10 @@ struct MainView: View {
                         if let mod = coordinator.activeMod,
                            mod.length > 0,
                            !mod.patternTable.isEmpty {
-                            let tableIdx = max(0, min(mod.length - 1, coordinator.currentPosition))
-                            let patternIndex = mod.patternTable[max(0, min(mod.patternTable.count - 1, tableIdx))]
-                            if patternIndex >= 0, patternIndex < mod.patterns.count {
-                                TrackerGridView(pattern: mod.patterns[patternIndex], patternIndex: patternIndex, currentRow: coordinator.currentRow, theme: theme)
-                                    .equatable()
-                                    .padding()
-                            } else {
-                                dropZonePrompt
-                                    .padding()
-                            }
+                            // Grid + Zeilenmarkierung beobachten transport (row-rate),
+                            // damit die Zeilenwechsel MainView nicht neu evaluieren.
+                            TrackerGridContainer(transport: coordinator.transport, mod: mod, theme: theme)
+                                .padding()
                         } else {
                             dropZonePrompt
                                 .padding()
@@ -321,6 +311,11 @@ struct MainView: View {
                 }
                 return true
             }
+            // Finder „Öffnen mit" / Doppelklick auf eine .mod/.s3m/.xm: die App
+            // erhält die URL hierüber (nicht als argv) — direkt laden und abspielen.
+            .onOpenURL { url in
+                handleDroppedURLs([url], autoPlay: true)
+            }
             .onAppear {
                 isDiskAnimating = coordinator.isPlaying
                 setupNotifications()
@@ -329,7 +324,15 @@ struct MainView: View {
                 // Gespeicherte Lautstaerke in den Coordinator spiegeln, damit der
                 // erste play()-Aufruf sie auf den Mixer anwenden kann.
                 coordinator.setVolume(Float(volume))
-                loadLocalAudioFolder()
+                // Datei/Ordner als Startargument (z.B. `SavageModPlayer <song.xm>`
+                // oder Öffnen-mit) hat Vorrang vor dem Autoplay-Ordner: direkt laden
+                // und abspielen — praktisch für headless Tests/CPU-Messungen ohne
+                // Klicken. Sonst wie bisher den konfigurierten Autoplay-Ordner laden.
+                if let launchURL = Self.launchFileArgument() {
+                    handleDroppedURLs([launchURL], autoPlay: true)
+                } else {
+                    loadLocalAudioFolder()
+                }
                 // Autofokus des Suchfelds wieder wegnehmen — macOS setzt den
                 // First Responder erst nach dem Fensteraufbau, daher verzoegert.
                 DispatchQueue.main.async {
@@ -346,13 +349,6 @@ struct MainView: View {
             // Pause haelt auch die Disk-Animation an (isPlaying bleibt true).
             .onChange(of: coordinator.isPaused) { isPaused in
                 isDiskAnimating = coordinator.isPlaying && !isPaused
-            }
-            // Frame-Takt der Disc-Rotation: nur weiterdrehen, solange Wiedergabe
-            // laeuft — bei Pause/Stop bleibt der Winkel unveraendert stehen.
-            .onReceive(diskSpinTimer) { _ in
-                guard isDiskAnimating else { return }
-                diskRotation = (diskRotation + diskDegreesPerTick)
-                    .truncatingRemainder(dividingBy: 360)
             }
             .onChange(of: coordinator.trackName) { newTrackName in
                 if coordinator.isPlaying {
@@ -682,82 +678,24 @@ struct MainView: View {
         coordinator.play()
     }
 
-    // Ein Kanal-Streifen (VU-Meter, Mini-Oszilloskop, Mute/Solo) — von der
-    // dynamischen Kanal-Leiste pro Kanal aufgerufen. Die Index-Guards fangen
-    // den kurzen Moment ab, in dem channelCount schon aktualisiert ist, aber
-    // vuLevels/channelWaveforms noch die alte Länge haben.
-    @ViewBuilder
-    private func channelStripView(_ i: Int, width stripWidth: CGFloat) -> some View {
-        // VU-Breite schrumpft mit der Streifenbreite mit: bei breiten Streifen
-        // die volle LED-Saeule (24), bei vielen schmalen Kanaelen bis auf ~1/4
-        // (6) — das Oszi bekommt den Rest.
-        let vuWidth = min(24, max(6, stripWidth * 0.20))
-        VStack(spacing: 4) {
-            HStack(alignment: .bottom, spacing: 4) {
-                // VU segmented LED
-                VUMeterView(value: i < coordinator.vuLevels.count ? coordinator.vuLevels[i] : 0, theme: theme)
-                    .frame(width: vuWidth, height: 50)
-
-                // Rolling channel oscilloscope — in EINEM Canvas gezeichnet statt
-                // GeometryReader+Path (spart bei vielen Kanälen je einen
-                // GeometryReader-Layout-Knoten pro Kanal, 30×/s).
-                Canvas { ctx, size in
-                    guard i < coordinator.channelWaveforms.count else { return }
-                    let history = coordinator.channelWaveforms[i]
-                    guard history.count > 1 else { return }
-                    var path = Path()
-                    let step = size.width / CGFloat(history.count - 1)
-                    path.move(to: CGPoint(x: 0, y: size.height * CGFloat(0.5 - history[0] * 0.5)))
-                    for idx in 1..<history.count {
-                        path.addLine(to: CGPoint(x: CGFloat(idx) * step, y: size.height * CGFloat(0.5 - history[idx] * 0.5)))
-                    }
-                    ctx.stroke(path, with: .color(Color.accent(theme)), lineWidth: 1.2)
-                }
-                // Breite flexibel: die adaptive Kanal-Leiste gibt jedem Streifen
-                // per .frame(width:) seine Breite vor, das Oszi fuellt sie aus.
-                .frame(maxWidth: .infinity, minHeight: 50, maxHeight: 50)
-                // Wie das Master-Oszilloskop: im Light-Mode weisser Hintergrund
-                // mit dezentem Rahmen (einheitliche Scope-Optik).
-                .background(theme == .workbench ? Color.white : Color.black.opacity(0.2))
-                .cornerRadius(3)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 3)
-                        .stroke(theme == .workbench ? Color.lightTextSecondary.opacity(0.35) : Color.clear, lineWidth: 1)
-                )
-            }
-
-            HStack(spacing: 4) {
-                // Nur die Kanalnummer (ohne "CH"-Praefix), damit der Fuss auch
-                // bei vielen schmalen Streifen passt.
-                Text("\(i + 1)")
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.7) : .spaceTextSecondary)
-                    .lineLimit(1)
-
-                // MUTE / SOLO buttons
-                Button("M") {
-                    coordinator.toggleMute(channelIndex: i)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                .padding(.horizontal, 3)
-                .background(coordinator.isMuted(channelIndex: i) ? Color.red : Color.clear)
-                .foregroundColor(coordinator.isMuted(channelIndex: i) ? .white : .red)
-                .cornerRadius(2)
-
-                Button("S") {
-                    coordinator.toggleSolo(channelIndex: i)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                .padding(.horizontal, 3)
-                .background(coordinator.isSoloed(channelIndex: i) ? Color.green : Color.clear)
-                .foregroundColor(coordinator.isSoloed(channelIndex: i) ? .white : .green)
-                .cornerRadius(2)
+    // Erstes Datei-/Ordner-Argument von der Kommandozeile (`SavageModPlayer <pfad>`).
+    // Ignoriert Flags und die Prozess-Serial-Args (`-psn_…`, `-NSDocument…`), die
+    // macOS beim Bundle-Start injiziert; nimmt den ersten existierenden Pfad mit
+    // unterstützter Endung oder ein Verzeichnis. Ermöglicht headless Auto-Play
+    // (Tests/CPU-Messung) ohne GUI-Bedienung.
+    private static func launchFileArgument() -> URL? {
+        for arg in CommandLine.arguments.dropFirst() {
+            guard !arg.hasPrefix("-") else { continue }
+            let url = URL(fileURLWithPath: arg)
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }
+            if isDir.boolValue || ModuleLoader.supportedExtensions.contains(url.pathExtension.lowercased()) {
+                return url
             }
         }
+        return nil
     }
-    
+
     // MARK: - Keyboard handling (Leertaste/Pfeile/ESC aus dem HUD)
     private func installKeyMonitor() {
         #if os(macOS)
@@ -851,8 +789,8 @@ struct MainView: View {
         let activelyPlaying = coordinator.isPlaying && !coordinator.isPaused
         infoCenter.nowPlayingInfo = [
             MPMediaItemPropertyTitle: coordinator.trackName,
-            MPMediaItemPropertyPlaybackDuration: coordinator.totalDuration,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: coordinator.elapsedTime,
+            MPMediaItemPropertyPlaybackDuration: coordinator.visualizerState.totalDuration,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: coordinator.visualizerState.elapsedTime,
             MPNowPlayingInfoPropertyPlaybackRate: activelyPlaying ? 1.0 : 0.0
         ]
         infoCenter.playbackState = coordinator.isPlaying
@@ -946,15 +884,7 @@ struct MainView: View {
             }
         }
     }
-    
-    // MARK: - Time helper
-    private func formatTime(_ sec: Double) -> String {
-        guard sec.isFinite && !sec.isNaN else { return "00:00" }
-        let m = Int(sec) / 60
-        let s = Int(sec) % 60
-        return String(format: "%02d:%02d", m, s)
-    }
-    
+
     // MARK: - UI Components
     
     // Eine Zeile der Playlist: Ordner-Zeile (klick = auf-/zuklappen) oder
@@ -1351,8 +1281,7 @@ struct MainView: View {
                     if let mod = coordinator.activeMod {
                         HStack(spacing: 4) {
                             Image(systemName: "music.note.list")
-                            Text(String(format: "PAT: %d/%d", coordinator.currentPosition + 1, mod.length))
-                                .fixedSize()
+                            PatPositionText(transport: coordinator.transport, length: mod.length)
                         }
                         .fixedSize()
                         .help("Pattern-Position: aktuelles Pattern und Gesamtzahl in der Abspielliste des Songs. Ein Pattern ist ein Notenblock (meist 64 Zeilen); der Song spielt sie in dieser Reihenfolge ab.")
@@ -1450,30 +1379,14 @@ struct MainView: View {
             // — wenige Kanaele => breite Oszis, viele => schmaler, bis zu einer
             // Mindestbreite; darunter (sehr viele Kanaele) wird dezent horizontal
             // gescrollt.
-            GeometryReader { geo in
-                let count = max(1, coordinator.channelCount)
-                let spacing: CGFloat = count > 8 ? 6 : 12
-                let minStripWidth: CGFloat = 26
-                let ideal = (geo.size.width - spacing * CGFloat(count - 1)) / CGFloat(count)
-                if ideal >= minStripWidth {
-                    HStack(spacing: spacing) {
-                        ForEach(0..<count, id: \.self) { i in
-                            channelStripView(i, width: ideal).frame(width: ideal)
-                        }
-                    }
-                    .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
-                } else {
-                    ScrollView(.horizontal, showsIndicators: true) {
-                        HStack(spacing: spacing) {
-                            ForEach(0..<count, id: \.self) { i in
-                                channelStripView(i, width: minStripWidth).frame(width: minStripWidth)
-                            }
-                        }
-                    }
-                    .frame(height: geo.size.height)
-                }
-            }
-            .frame(height: 70)
+            // Kanal-Oszilloskope + VU: eigener 30-Hz-Beobachter (ChannelStripsView),
+            // damit die Scope-Updates nicht die ganze MainView.body neu rendern.
+            ChannelStripsView(
+                visualizer: coordinator.visualizerState,
+                coordinator: coordinator,
+                channelCount: coordinator.channelCount,
+                theme: theme
+            )
 
             // Untere Zeile: kompakte Optionsleiste (aus der oberen Zeile
             // ausgelagert, damit die Oszis dort die volle Breite bekommen).
@@ -1513,38 +1426,6 @@ struct MainView: View {
         .background(theme == .workbench ? Color.lightSurface.opacity(0.3) : Color.spaceSurface.opacity(0.5))
         .cornerRadius(theme == .workbench ? 0 : 8)
     }
-    
-    // Pattern playlist mini-map visualizer
-    private func patternMarkerMap(mod: Mod) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(0..<mod.length, id: \.self) { idx in
-                    let isCurrent = idx == coordinator.currentPosition
-                    let patNum = mod.patternTable[idx]
-                    
-                    Button(action: { coordinator.seek(toPosition: idx) }) {
-                        VStack(spacing: 2) {
-                            Text(String(format: "%02d", idx))
-                                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                            Text("P\(patNum)")
-                                .font(.system(size: 7, design: .monospaced))
-                        }
-                        .frame(width: 24, height: 26)
-                        .background(
-                            isCurrent
-                            ? (Color.accent(theme))
-                            : (theme == .workbench ? Color.lightSurfaceAlt : Color.spaceSurface)
-                        )
-                        .foregroundColor(isCurrent ? .white : .spaceTextSecondary)
-                        .cornerRadius(3)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                }
-            }
-            .padding(.vertical, 2)
-        }
-    }
-    
     private var dropZonePrompt: some View {
         VStack(spacing: 24) {
             Spacer()
@@ -1661,30 +1542,8 @@ struct MainView: View {
                 .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
                 .frame(width: 140, alignment: .leading)
             
-            GeometryReader { geo in
-                Path { path in
-                    let samples = coordinator.masterSamples
-                    guard samples.count > 0 else { return }
-                    let step = geo.size.width / CGFloat(samples.count - 1)
-                    
-                    path.move(to: CGPoint(x: 0, y: geo.size.height * CGFloat(0.5 - Double(samples[0]) * 0.5)))
-                    for idx in 1..<samples.count {
-                        let val = Double(samples[idx])
-                        let x = CGFloat(idx) * step
-                        let y = geo.size.height * CGFloat(0.5 - val * 0.5)
-                        path.addLine(to: CGPoint(x: x, y: y))
-                    }
-                }
-                .stroke(Color.accent(theme), lineWidth: 1.5)
-            }
-            .frame(height: 32)
-            // Light-Mode: weisser Hintergrund statt des dunklen Streifens.
-            .background(theme == .workbench ? Color.white : Color.black.opacity(0.3))
-            .cornerRadius(4)
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(theme == .workbench ? Color.lightTextSecondary.opacity(0.35) : Color.spaceAccent.opacity(0.15), lineWidth: 1)
-            )
+            // Master-Oszilloskop: eigener 30-Hz-Beobachter (siehe ChannelStripsView).
+            MasterScopeCanvas(visualizer: coordinator.visualizerState, theme: theme)
             
             // Stereo Separation bleed adjustment slider
             HStack(spacing: 8) {
@@ -1734,36 +1593,16 @@ struct MainView: View {
         HStack(spacing: 24) {
             // Left block: Play controls
             HStack(spacing: 8) {
-                // Play/Pause = rotierende Disk (mit dezentem Symbol) — sitzt hier
-                // bei den anderen Transport-Buttons; oben bleibt so die volle
-                // Breite fuer die Oszis.
-                Button(action: { togglePlayback() }) {
-                    ZStack {
-                        Circle()
-                            .fill(theme == .workbench ? Color.lightTextPrimary.opacity(0.12) : Color.spaceSurface)
-                            .frame(width: 40, height: 40)
-                            .shadow(color: theme == .workbench ? Color.clear : Color.spaceAccent.opacity(0.3), radius: 5)
-                        Image(systemName: "opticaldisc.fill")
-                            .font(.system(size: 30))
-                            .foregroundColor(Color.accent(theme))
-                            .rotationEffect(.degrees(diskRotation))
-                        Circle()
-                            .fill(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground)
-                            .frame(width: 6, height: 6)
-                        Image(systemName: coordinator.isPlaying && !coordinator.isPaused ? "pause.fill" : "play.fill")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(.white.opacity(0.9))
-                            .shadow(color: .black.opacity(0.6), radius: 1)
-                    }
-                    .opacity(coordinator.isPlaying ? 1.0 : 0.6)
-                    .animation(.easeInOut, value: coordinator.isPlaying)
-                    .contentShape(Circle())
-                }
-                .buttonStyle(PlainButtonStyle())
-                .disabled(coordinator.activeMod == nil)
-                .help(coordinator.isPlaying && !coordinator.isPaused
-                      ? "Pause — an derselben Stelle fortsetzbar (Leertaste)."
-                      : "Abspielen bzw. pausierte Wiedergabe fortsetzen (Leertaste).")
+                // Play/Pause = rotierende Disk (eigener View mit lokalem Rotations-
+                // State + Timer, damit die 30-Hz-Drehung NICHT die ganze MainView.body
+                // neu rendert — das war die CPU-Hauptursache, 2026-07-09).
+                SpinningDiskButton(
+                    isPlaying: coordinator.isPlaying,
+                    isPaused: coordinator.isPaused,
+                    enabled: coordinator.activeMod != nil,
+                    theme: theme,
+                    onTap: { togglePlayback() }
+                )
 
                 // Stop button (setzt an den Songanfang zurueck)
                 Button(action: {
@@ -1832,9 +1671,9 @@ struct MainView: View {
             // Middle block: Progress Timeline
             if let mod = coordinator.activeMod {
                 HStack(spacing: 12) {
-                    Text(formatTime(coordinator.elapsedTime))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.spaceTextSecondary)
+                    // Verstrichene Zeit: eigener 30-Hz-Beobachter (tickt ohne die
+                    // MainView.body neu zu rendern).
+                    ElapsedTimeText(visualizer: coordinator.visualizerState)
 
                     // Zeitsprung zurueck — bequeme Alternative zum Slider.
                     Button(action: { coordinator.seek(bySeconds: -15) }) {
@@ -1856,18 +1695,9 @@ struct MainView: View {
                     // aufgedeckt). Darum untere Grenze < obere garantieren
                     // (max(1, …)), den Wert in den Bereich klemmen und den Slider
                     // bei nur einer Position deaktivieren (es gibt nichts zu wählen).
-                    let lastPosition = max(0, mod.length - 1)
-                    Slider(
-                        value: Binding(
-                            get: { Double(min(max(0, coordinator.currentPosition), lastPosition)) },
-                            set: { coordinator.seek(toPosition: Int($0)) }
-                        ),
-                        in: 0...Double(max(1, lastPosition)),
-                        step: 1.0
-                    )
-                    .accentColor(Color.accent(theme))
-                    .disabled(mod.length <= 1)
-                    .help("Song-Position wählen — funktioniert auch bei gestoppter Wiedergabe: Play startet dann ab dieser Stelle.")
+                    // Positions-Slider beobachtet transport (row-rate), nicht coordinator.
+                    PositionSlider(transport: coordinator.transport, mod: mod, theme: theme,
+                                   onSeek: { coordinator.seek(toPosition: $0) })
 
                     // Zeitsprung vor.
                     Button(action: { coordinator.seek(bySeconds: 30) }) {
@@ -1879,9 +1709,7 @@ struct MainView: View {
                     .disabled(!coordinator.isPlaying)
                     .help("30 Sekunden vorspringen (zeilengenau; bei Tempo-Wechseln näherungsweise).")
 
-                    Text(formatTime(coordinator.totalDuration))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.spaceTextSecondary)
+                    TotalTimeText(visualizer: coordinator.visualizerState)
                 }
                 .frame(maxWidth: .infinity)
             } else {

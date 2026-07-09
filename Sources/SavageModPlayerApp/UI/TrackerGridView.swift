@@ -1,174 +1,167 @@
 import SwiftUI
 import SavageModPlayerCore
 
-struct TrackerRowView: View {
+// Feststehende Zeilennummer (scrollt NICHT horizontal mit den Kanaelen). Statisch
+// (ohne aktuelle-Zeile-Hervorhebung) — die Markierung übernimmt jetzt ein separates
+// Highlight-Band, damit der Zellenblock beim Zeilenwechsel unverändert bleibt.
+struct RowIndexCell: View {
     let rIdx: Int
-    let notes: [Note]           // Eine Note pro Kanal (dynamische Kanalzahl)
-    let isCurrent: Bool
     let theme: PlayerTheme
-    // Ab 5 Kanälen bekommt jede Zelle eine feste Breite und das Grid scrollt
-    // horizontal — sonst würden die Zellen unleserlich zusammengequetscht.
-    let fixedCellWidth: CGFloat?
-    // S3M-Patterns haben eine eigene Volume-Column; bei MOD bleibt sie weg.
-    let showVolume: Bool
-    // Schriftgroesse der Pattern-Zellen; die Zeilenhoehe haengt daran (kompakt).
     let fontSize: CGFloat
 
-    // Nur noch die Kanal-Zellen — die Zeilennummer sitzt in einer eigenen, beim
-    // horizontalen Scrollen FESTSTEHENDEN Spalte (siehe TrackerGridView).
     var body: some View {
-        let rowBg: Color = isCurrent ? (theme == .workbench ? Color.lightAccent.opacity(0.35) : Color.spaceAccent.opacity(0.18)) : Color.clear
-
-        HStack(spacing: 0) {
-            ForEach(0..<notes.count, id: \.self) { c in
-                separator
-
-                if let width = fixedCellWidth {
-                    channelCell(note: notes[c])
-                        .frame(width: width)
-                } else {
-                    channelCell(note: notes[c])
-                        .frame(maxWidth: .infinity)
-                }
-            }
-        }
-        // Zeilenhoehe = Schrift + 6 (frueher fixe 24): halbiert den Abstand
-        // zwischen den 3-Zeichen-Reihen, zeigt so mehr Zeilen gleichzeitig.
-        .frame(height: fontSize + 6)
-        .background(rowBg)
+        Text(String(format: "%02d", rIdx))
+            .font(.system(size: fontSize - 1, weight: .semibold, design: .monospaced))
+            .foregroundColor(theme == .workbench ? .lightAccent : .spaceAccentGlow)
+            .frame(width: 38, height: fontSize + 6, alignment: .center)
     }
+}
 
-    // Kein Abstand mehr zwischen den Kanaelen — nur eine 1-pt-Trennlinie, dafuer
-    // deutlich heller, damit sie klar trennt (Wunsch: Kanaele dichter, Linie
-    // sichtbarer).
-    private var separator: some View {
-        Rectangle()
-            .fill(theme == .workbench ? Color.lightTextPrimary.opacity(0.55) : Color.spaceAccent.opacity(0.45))
-            .frame(width: 1)
-            .frame(maxHeight: .infinity)
-    }
+// Zeichnet ALLE Kanalzellen (bis zu 64 × 32) in EINEM Canvas statt als 2048
+// SwiftUI-Views. Der Canvas wird nur bei Pattern-/Layout-Wechsel neu gezeichnet
+// (Equatable ohne currentRow) — beim Scrollen/Zeilenwechsel wird er nur verschoben
+// (CoreAnimation), NICHT neu gelayoutet. Das ersetzt den mit Abstand teuersten
+// Posten: die 2048-Zellen-ScrollView-Layout-Rekursion pro Zeilenwechsel (2026-07-09,
+// per `sample` verifiziert — ScrollView-`sizeThatFits` sättigte den Main-Thread).
+struct ChannelCellsCanvas: View, Equatable {
+    let pattern: SavageModPlayerCore.Pattern
+    let patternIndex: Int
+    let channelCount: Int
+    let rowCount: Int
+    let cellWidth: CGFloat
+    let showVolume: Bool
+    let fontSize: CGFloat
+    let theme: PlayerTheme
 
-    private func channelCell(note: Note) -> some View {
-        let hasNote = note.period > 0 || note.key >= 0
-        let hasInst = note.instrument > 0
-        let hasEff = note.hasEffect
-
-        let noteStr = hasNote ? noteName(note) : "---"
-        let instStr = hasInst ? String(format: "%02X", note.instrument) : "--"
-
-        var effStr = "..."
-        if hasEff {
-            if note.effectId >= 0x100 {
-                // Interne S3M-Effekte als ScreamTracker-Buchstabe anzeigen.
-                effStr = String(format: "%@%02X", s3mEffectLetter(note.effectId), note.effectData)
-            } else if note.effectId >= 0xE0 {
-                let subEff = note.effectId & 0x0F
-                effStr = String(format: "E%X%X", subEff, note.effectData)
-            } else {
-                effStr = String(format: "%01X%02X", note.effectId, note.effectData)
-            }
-        }
-
-        let noteColor: Color = hasNote ? (theme == .workbench ? .lightTextPrimary : .codeNote) : (theme == .workbench ? .lightTextPrimary.opacity(0.3) : .codeDim)
-        let instColor: Color = hasInst ? (theme == .workbench ? .lightTextSecondary : .codeInstrument) : (theme == .workbench ? .lightTextPrimary.opacity(0.3) : .codeDim)
-        let effColor: Color = hasEff ? (theme == .workbench ? .lightAccent : .codeEffect) : (theme == .workbench ? .lightTextPrimary.opacity(0.3) : .codeDim)
-
-        // Volume-Column (nur S3M): "v40" bzw. gedimmtes "..." ohne Angabe.
-        let hasVol = note.volume >= 0
-        let volStr = hasVol ? String(format: "v%02d", note.volume) : "..."
-        let volColor: Color = hasVol ? (theme == .workbench ? .lightTextSecondary : .codeInstrument) : (theme == .workbench ? .lightTextPrimary.opacity(0.3) : .codeDim)
-
-        return HStack(spacing: 4) {
-            Text(noteStr).foregroundColor(noteColor)
-            Text(instStr).foregroundColor(instColor)
-            if showVolume {
-                Text(volStr).foregroundColor(volColor)
-            }
-            Text(effStr).foregroundColor(effColor)
-        }
-        .font(.system(size: fontSize, weight: isCurrent ? .bold : .semibold, design: .monospaced))
+    nonisolated static func == (lhs: ChannelCellsCanvas, rhs: ChannelCellsCanvas) -> Bool {
+        lhs.patternIndex == rhs.patternIndex && lhs.channelCount == rhs.channelCount
+            && lhs.rowCount == rhs.rowCount && lhs.cellWidth == rhs.cellWidth
+            && lhs.showVolume == rhs.showVolume && lhs.fontSize == rhs.fontSize && lhs.theme == rhs.theme
     }
 
     private static let noteNames = ["C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-"]
 
-    private func noteName(_ note: Note) -> String {
-        // S3M: Halbton-Key direkt (Oktave*12 + Note); ^^^ = Note-Cut.
-        if note.key == Note.keyCut { return "^^^" }
-        if note.key >= 0 {
-            let name = Self.noteNames[note.key % 12]
-            return "\(name)\(note.key / 12)"
+    var body: some View {
+        let rowHeight = fontSize + 6
+        let charW = fontSize * 0.62   // Monospaced-Vorschub (SF Mono ~0.6·pt)
+        let sepColor = theme == .workbench ? Color.lightTextPrimary.opacity(0.55) : Color.spaceAccent.opacity(0.45)
+        let dim = theme == .workbench ? Color.lightTextPrimary.opacity(0.3) : Color.codeDim
+        let font = Font.system(size: fontSize, weight: .semibold, design: .monospaced)
+
+        return Canvas { ctx, size in
+            for r in 0..<rowCount {
+                let y = CGFloat(r) * rowHeight
+                let notes = pattern.rows[r].notes
+                for c in 0..<min(channelCount, notes.count) {
+                    let colX = CGFloat(c) * cellWidth
+                    // Kanal-Trennlinie.
+                    ctx.fill(Path(CGRect(x: colX, y: y, width: 1, height: rowHeight)), with: .color(sepColor))
+
+                    let n = notes[c]
+                    let hasNote = n.period > 0 || n.key >= 0
+                    let hasInst = n.instrument > 0
+                    let hasEff = n.hasEffect
+                    let hasVol = n.volume >= 0
+
+                    let noteStr = hasNote ? Self.noteName(n) : "---"
+                    let instStr = hasInst ? String(format: "%02X", n.instrument) : "--"
+                    let effStr = Self.effString(n)
+                    let volStr = hasVol ? String(format: "v%02d", n.volume) : "..."
+
+                    let noteColor = hasNote ? (theme == .workbench ? Color.lightTextPrimary : .codeNote) : dim
+                    let instColor = hasInst ? (theme == .workbench ? Color.lightTextSecondary : .codeInstrument) : dim
+                    let effColor = hasEff ? (theme == .workbench ? Color.lightAccent : .codeEffect) : dim
+                    let volColor = hasVol ? (theme == .workbench ? Color.lightTextSecondary : .codeInstrument) : dim
+
+                    var tx = colX + 5
+                    let cy = y + rowHeight / 2
+                    func put(_ s: String, _ col: Color, _ chars: Int) {
+                        ctx.draw(Text(s).font(font).foregroundColor(col), at: CGPoint(x: tx, y: cy), anchor: .leading)
+                        tx += CGFloat(chars) * charW + 4
+                    }
+                    put(noteStr, noteColor, 3)
+                    put(instStr, instColor, 2)
+                    if showVolume { put(volStr, volColor, 3) }
+                    put(effStr, effColor, 3)
+                }
+            }
         }
-        return periodToNoteName(note.period)
     }
 
-    // Interne ModuleEffect-IDs zurück auf den S3M-Anzeigebuchstaben mappen.
-    private func s3mEffectLetter(_ effectId: Int) -> String {
-        switch effectId {
-        case ModuleEffect.setSpeed: return "A"
-        case ModuleEffect.setTempo: return "T"
-        case ModuleEffect.globalVolume: return "V"
-        case ModuleEffect.tremor: return "I"
-        case ModuleEffect.fineVibrato: return "U"
-        case ModuleEffect.volumeSlideS3M: return "D"
-        case ModuleEffect.portaDownS3M: return "E"
-        case ModuleEffect.portaUpS3M: return "F"
-        default: return "?"
-        }
+    private static func noteName(_ note: Note) -> String {
+        if note.key == Note.keyCut { return "^^^" }   // S3M Note-Cut
+        if note.key == Note.keyOff { return "===" }   // XM Key-Off (Note 97) korrekt zeigen
+        if note.key >= 0 { return "\(noteNames[note.key % 12])\(note.key / 12)" }
+        // MOD: aus der Amiga-Periode.
+        guard note.period >= 113 && note.period <= 856 else { return "---" }
+        let idx = Int(round(24.0 + 12.0 * log2(428.0 / Double(note.period))))
+        guard idx >= 0 else { return "---" }
+        return "\(noteNames[idx % 12])\((idx / 12) + 1)"
     }
 
-    private func periodToNoteName(_ period: Int) -> String {
-        guard period >= 113 && period <= 856 else { return "---" }
-
-        // Logarithmic calculation from modplayer.js
-        let noteIndexDouble = 24.0 + 12.0 * log2(428.0 / Double(period))
-        let noteIndex = Int(round(noteIndexDouble))
-
-        guard noteIndex >= 0 else { return "---" }
-
-        let noteName = Self.noteNames[noteIndex % 12]
-        let octave = (noteIndex / 12) + 1
-        return "\(noteName)\(octave)"
+    private static func effString(_ n: Note) -> String {
+        guard n.hasEffect else { return "..." }
+        if n.effectId >= 0x100 {
+            let letter: String
+            switch n.effectId {
+            case ModuleEffect.setSpeed: letter = "A"
+            case ModuleEffect.setTempo: letter = "T"
+            case ModuleEffect.globalVolume: letter = "V"
+            case ModuleEffect.tremor: letter = "I"
+            case ModuleEffect.fineVibrato: letter = "U"
+            case ModuleEffect.volumeSlideS3M: letter = "D"
+            case ModuleEffect.portaDownS3M: letter = "E"
+            case ModuleEffect.portaUpS3M: letter = "F"
+            default: letter = "?"
+            }
+            return String(format: "%@%02X", letter, n.effectData)
+        }
+        if n.effectId >= 0xE0 { return String(format: "E%X%X", n.effectId & 0x0F, n.effectData) }
+        return String(format: "%01X%02X", n.effectId, n.effectData)
     }
 }
 
-struct TrackerGridView: View, Equatable {
+// Der komplette (statische) Zellen-Block: feststehende Nummern-Spalte + horizontal
+// scrollbare Kanalspalten für ALLE 64 Zeilen. WICHTIG — Equatable OHNE currentRow:
+// So überspringt SwiftUI beim Zeilenwechsel den GESAMTEN Layout-/Zeichen-Aufwand
+// dieses Blocks (bis zu 64×32 Zellen). Vorher legte der Layout-Engine bei JEDEM
+// Zeilenwechsel (~20×/s bei schnellen Songs) das ganze Grid neu aus — DAS war der
+// mit Abstand größte CPU-Posten (2026-07-09, per `sample` verifiziert: SwiftUI-
+// ScrollView-`sizeThatFits` sättigte den Main-Thread). Die aktuelle Zeile markiert
+// jetzt ein separates Highlight-Band (siehe TrackerGridView), das sich bewegt, ohne
+// die Zellen anzufassen.
+struct GridCellsBlock: View, Equatable {
     let pattern: SavageModPlayerCore.Pattern
-    // Nur zum billigen Gleichheitsvergleich: das Pattern selbst zu vergleichen
-    // (64 Zeilen × bis 32 Noten) wäre teuer; der Index identifiziert es eindeutig.
     let patternIndex: Int
-    let currentRow: Int
     let theme: PlayerTheme
+    let cellStride: CGFloat        // Spaltenbreite je Kanal (inkl. Trennlinie)
+    let canvasWidth: CGFloat       // Gesamtbreite der Kanal-Zeichenfläche
+    let showVolume: Bool
+    let fontSize: CGFloat
+    let rowCount: Int
+    let channelCount: Int
+    // Für die eigene H-Scrollbar in TrackerGridView: der GeometryReader schreibt den
+    // aktuellen Offset hierhin. NICHT im == — Scroll-Updates laufen über die
+    // ScrollView-Geometrie, nicht über einen Block-Rerender.
+    @Binding var hScrollOffset: CGFloat
 
-    // Equatable, damit SwiftUI (via .equatable()) Body UND Layout des Grids
-    // überspringt, solange sich weder Pattern, aktuelle Zeile noch Theme ändern.
-    // Ohne das legt der Layout-Engine das 64×N-Grid bei JEDEM 50-Hz-Oszilloskop-
-    // Update neu aus — der mit Abstand größte CPU-Posten (2026-07-09).
-    nonisolated static func == (lhs: TrackerGridView, rhs: TrackerGridView) -> Bool {
+    nonisolated static func == (lhs: GridCellsBlock, rhs: GridCellsBlock) -> Bool {
         lhs.patternIndex == rhs.patternIndex
-            && lhs.currentRow == rhs.currentRow
             && lhs.theme == rhs.theme
+            && lhs.cellStride == rhs.cellStride
+            && lhs.canvasWidth == rhs.canvasWidth
+            && lhs.showVolume == rhs.showVolume
+            && lhs.fontSize == rhs.fontSize
+            && lhs.rowCount == rhs.rowCount
+            && lhs.channelCount == rhs.channelCount
     }
 
-    // Aktueller horizontaler Scroll-Offset (nur bei >4 Kanaelen relevant).
-    @State private var hScrollOffset: CGFloat = 0
-
-    // Kanalzahl aus den Pattern-Daten (jede Row hat channelCount Noten).
-    private var channelCount: Int {
-        pattern.rows.first?.notes.count ?? 4
-    }
-
-    // Horizontaler Scroll-Container fuer die Kanalspalten (nur bei >4 Kanaelen).
-    // Traegt KEINE Scrollbar — die wird in body an den unteren SICHTBAREN Rand
-    // gepinnt (hier laege sie am Ende des langen 64-Zeilen-Inhalts).
     @ViewBuilder
     private func horizontalWrapper<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         if channelCount > 4 {
             ScrollView(.horizontal, showsIndicators: false) {
                 content()
                     .background(
-                        // Offset bei JEDER Layout-Auswertung direkt in den State
-                        // schreiben (async, um "State waehrend View-Update"-Warnung
-                        // zu vermeiden) — folgt dem Scrollen kontinuierlich.
                         GeometryReader { g -> Color in
                             let x = -g.frame(in: .named("patternH")).minX
                             DispatchQueue.main.async {
@@ -184,9 +177,41 @@ struct TrackerGridView: View, Equatable {
         }
     }
 
-    // Eigene horizontale Scrollbar: duenn, mit einem mittleren Grau, das sonst
-    // nirgends vorkommt — faellt auf, bleibt aber dezent. Nur sichtbar, wenn der
-    // Inhalt breiter als die Ansicht ist.
+    var body: some View {
+        let contentHeight = CGFloat(rowCount) * (fontSize + 6)
+        HStack(alignment: .top, spacing: 0) {
+            // Feststehende Nummern-Spalte (scrollt nur vertikal mit) — 64 leichte
+            // Views mit .id für scrollTo.
+            VStack(spacing: 0) {
+                ForEach(0..<rowCount, id: \.self) { rIdx in
+                    RowIndexCell(rIdx: rIdx, theme: theme, fontSize: fontSize).id(rIdx)
+                }
+            }
+            // Horizontal scrollbare Kanalspalten — ALLE Zellen in EINEM Canvas.
+            horizontalWrapper {
+                ChannelCellsCanvas(
+                    pattern: pattern, patternIndex: patternIndex, channelCount: channelCount,
+                    rowCount: rowCount, cellWidth: cellStride, showVolume: showVolume,
+                    fontSize: fontSize, theme: theme
+                )
+                .frame(width: canvasWidth, height: contentHeight)
+            }
+        }
+    }
+}
+
+struct TrackerGridView: View {
+    let pattern: SavageModPlayerCore.Pattern
+    let patternIndex: Int
+    let currentRow: Int
+    let theme: PlayerTheme
+
+    @State private var hScrollOffset: CGFloat = 0
+
+    private var channelCount: Int { pattern.rows.first?.notes.count ?? 4 }
+    private var rowCount: Int { min(64, pattern.rows.count) }
+
+    // Eigene horizontale Scrollbar: duenn, dezent, nur wenn Inhalt breiter als View.
     @ViewBuilder
     private func hScrollBar(viewport: CGFloat, contentWidth: CGFloat) -> some View {
         if contentWidth > viewport && viewport > 0 {
@@ -201,84 +226,58 @@ struct TrackerGridView: View, Equatable {
         }
     }
 
-    // Feststehende Zeilennummer (scrollt NICHT horizontal mit den Kanaelen).
-    @ViewBuilder
-    private func rowIndexCell(_ rIdx: Int, isCurrent: Bool, fontSize: CGFloat) -> some View {
-        let color: Color = isCurrent ? .lightAccent : (theme == .workbench ? .lightAccent : .spaceAccentGlow)
-        let bg: Color = isCurrent ? (theme == .workbench ? Color.lightAccent.opacity(0.35) : Color.spaceAccent.opacity(0.18)) : Color.clear
-        Text(String(format: "%02d", rIdx))
-            .font(.system(size: fontSize - 1, weight: .semibold, design: .monospaced))
-            .foregroundColor(color)
-            .frame(width: 38, height: fontSize + 6, alignment: .center)
-            .background(bg)
-    }
-
-    // S3M-Patterns tragen eine Volume-Column (Note.volume >= 0 irgendwo im
-    // Pattern) — dann bekommt jede Zelle das zusätzliche Volume-Feld.
+    // S3M-Patterns tragen eine Volume-Column (Note.volume >= 0 irgendwo im Pattern).
     private var hasVolumeColumn: Bool {
         pattern.rows.contains { $0.notes.contains { $0.volume >= 0 } }
     }
 
     var body: some View {
-        // Bis 4 Kanäle füllen die Zellen die Breite (klassisches Layout);
-        // darüber feste Zellbreite + horizontales Scrollen (mit Volume-Column
-        // entsprechend breiter).
         let showVolume = hasVolumeColumn
 
         GeometryReader { geo in
-            // Zellbreite/Font: bei >4 Kanaelen feste Zellen; muesste dann eine
-            // horizontale Scrollbar noetig sein, wird die Schrift um 1 verkleinert
-            // (Entscheidung auf Font-12-Basis -> stabil, kein Flackern). Zellbreiten
-            // eng an den Inhalt (nur ein Hauch Rand um die Trennlinie).
             let rowIndexWidth: CGFloat = 38
             let baseCell: CGFloat = showVolume ? 98 : 72
-            let sepGap: CGFloat = 1          // Kanal-Trennlinie (siehe separator)
+            let sepGap: CGFloat = 1
             let channelsViewport = geo.size.width - rowIndexWidth
             let neededAtBase = CGFloat(channelCount) * (baseCell + sepGap)
             let needsScroll = channelCount > 4 && neededAtBase > channelsViewport
             let fontSize: CGFloat = needsScroll ? 11 : 12
-            let fixedCellWidth: CGFloat? = channelCount > 4 ? baseCell * (fontSize / 12) : nil
-            // Inhaltsbreite NUR der Kanalspalten (die Nummern-Spalte steht fest).
-            let contentWidth = CGFloat(channelCount) * ((fixedCellWidth ?? 0) + sepGap)
+            // Spaltenbreite je Kanal: >4 Kanäle feste Zellbreite (+ Trennlinie) und
+            // H-Scroll; ≤4 Kanäle füllen die verfügbare Breite.
+            let cellStride: CGFloat = channelCount > 4
+                ? baseCell * (fontSize / 12) + sepGap
+                : channelsViewport / CGFloat(max(1, channelCount))
+            let contentWidth = CGFloat(channelCount) * cellStride
+            let rowHeight = fontSize + 6
 
-            // Vertikaler Scroll AUSSEN; darin die feststehende Nummern-Spalte plus
-            // die horizontal scrollbaren Kanaele. scrollTo() folgt so nur der
-            // Y-Achse, und die Nummern bleiben beim H-Scroll links stehen. Die
-            // eigene Scrollbar wird per ZStack an den unteren SICHTBAREN Rand
-            // gepinnt (nicht ans Ende des langen 64-Zeilen-Inhalts).
             ZStack(alignment: .bottomLeading) {
                 ScrollViewReader { proxy in
                     ScrollView(.vertical) {
-                        HStack(alignment: .top, spacing: 0) {
-                            // Feststehende Nummern-Spalte (scrollt nur vertikal mit).
-                            VStack(spacing: 0) {
-                                ForEach(0..<64, id: \.self) { rIdx in
-                                    if rIdx < pattern.rows.count {
-                                        rowIndexCell(rIdx, isCurrent: currentRow == rIdx, fontSize: fontSize)
-                                            .id(rIdx)
-                                    }
-                                }
-                            }
-                            // Horizontal scrollbare Kanalspalten.
-                            horizontalWrapper {
-                                // VStack statt LazyVStack: die ~64 Zeilen sind zu klein
-                                // für lazy rendering (scrollTo-Sprünge/Jitter sonst).
-                                VStack(spacing: 0) {
-                                    ForEach(0..<64, id: \.self) { rIdx in
-                                        if rIdx < pattern.rows.count {
-                                            TrackerRowView(
-                                                rIdx: rIdx,
-                                                notes: pattern.rows[rIdx].notes,
-                                                isCurrent: currentRow == rIdx,
-                                                theme: theme,
-                                                fixedCellWidth: fixedCellWidth,
-                                                showVolume: showVolume,
-                                                fontSize: fontSize
-                                            )
-                                        }
-                                    }
-                                }
-                            }
+                        ZStack(alignment: .topLeading) {
+                            // Highlight-Band der aktuellen Zeile (hinter den Zellen).
+                            // Bewegt sich pro Zeile, ohne den Zellen-Block anzufassen.
+                            Rectangle()
+                                .fill(theme == .workbench ? Color.lightAccent.opacity(0.35) : Color.spaceAccent.opacity(0.18))
+                                .frame(height: rowHeight)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .offset(y: CGFloat(currentRow) * rowHeight)
+                                .allowsHitTesting(false)
+
+                            // Der statische, equatable Zellen-Block (wird beim
+                            // Zeilenwechsel als Ganzes übersprungen).
+                            GridCellsBlock(
+                                pattern: pattern,
+                                patternIndex: patternIndex,
+                                theme: theme,
+                                cellStride: cellStride,
+                                canvasWidth: contentWidth,
+                                showVolume: showVolume,
+                                fontSize: fontSize,
+                                rowCount: rowCount,
+                                channelCount: channelCount,
+                                hScrollOffset: $hScrollOffset
+                            )
+                            .equatable()
                         }
                     }
                     .onChange(of: currentRow) { newRow in
@@ -287,8 +286,6 @@ struct TrackerGridView: View, Equatable {
                     }
                 }
 
-                // Scrollbar am unteren SICHTBAREN Rand, rechts neben der fixen
-                // Nummern-Spalte.
                 hScrollBar(viewport: channelsViewport, contentWidth: contentWidth)
                     .padding(.leading, rowIndexWidth)
             }
