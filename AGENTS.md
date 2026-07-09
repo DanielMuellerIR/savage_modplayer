@@ -214,6 +214,20 @@ Swift-Variante um das XM-Format erweitert — eine eigene Instrument-Engine (Ent
 
 **Test-Korpus:** 8 echte XM von Battle of the Bits liegen (gitignored) in `audio/` — der Realwelt-Test `XMParserTests/testRealXMFilesParseAndRender` parst + rendert sie (8–32 Kanäle, alle liefern hörbares Signal).
 
+## Offene Punkte / Nächste Schritte (Stand 2026-07-09)
+
+XM-Kern (M0–M5) steht, committet, getestet; im echten App-GUI verifiziert (spielt
+32-Kanal-XM). Aus dem GUI-Test offen (Reihenfolge = Priorität):
+
+1. **Pattern-Grid zeichnet evtl. nicht alle Reihen** (Daniel im Screenshot bemerkt, 2026-07-09). Zuerst prüfen, ob es eine Regression des `TrackerGridView`-`Equatable`-Fixes (`89d0072`, CPU-WIP) ist — notfalls `.equatable()`/Equatable-Conformance zurücknehmen — oder ein vorbestehendes Clipping der 64-Zeilen-VStack im fix-hohen Scroll-Container. **Zuerst reproduzieren (fensterspezifischer Screenshot), dann fixen.**
+2. **XM-Song-Korrektheit prüfen** — bisher nur „liefert hörbares Signal" (Render-Probe) + Formel-Tests. Nächste Session: einen bekannten XM gegen eine Referenz (MilkyTracker/libxmp-Render oder Gehör) gegenprüfen — stimmen Tonhöhe, Hüllkurven, Effekte, Timing wirklich? Verdächtige Stellen zuerst: Volume-Column-Vibrato-Skalierung (nutzt MOD-Vibrato), Auto-Vibrato-Waveform-Labels (Referenz markierte Ramp-Vorzeichen als unsicher).
+3. **CPU-Optimierung (Kern)** — `MainView.body` rendert bei jedem 30-Hz-Scope-Update das ganze Fenster neu (Profil: SwiftUI-Layout dominiert, ~80–100 % bei 32-Kanal-XM). Echter Fix: die hochfrequenten Visualizer-`@Published` (vuLevels, channelWaveforms, masterSamples, elapsedTime) in ein eigenes `VisualizerState: ObservableObject` auslagern und die Scope-/VU-/Zeit-Subviews DORT beobachten lassen, damit MainView nur noch im Row-Takt rendert. Leaf-Canvas + 30 Hz + Equatable-Grid sind schon drin (`89d0072`), reichen aber nicht.
+4. **Deferred aus den Meilensteinen:** Amiga-Frequenz-XMs (echte Periodentabelle statt linearer Näherung); XM-Effekte **Hxy** (globales Vol-Slide, braucht Per-Tick-Hook im Coordinator) + **Rxy** (Multi-Retrig); XM-Effekt-Memory für 1xx/2xx/Axy (nutzt MOD-Semantik).
+5. **Länge-1-Modul: Headless-Test** ergänzen (der Crash war nur GUI-reproduzierbar). Repro-Datei liegt (gitignored) als `audio/_ZZ_len1_crashtest.xm` — kann weg, sobald ein Unit-Test das abdeckt.
+6. **Release** (erst nach 1+2): VERSION-Bump (1.4.4 → 1.5.0), danach `python3 build.py` (Publish-Guard), README/README.de auf XM (github-publish-Skill), dann GitHub-Release. Popo-Backup ist laufend aktuell.
+
+**Hinweis Standard-Playlist-Ordner:** Durch das App-Starten aus dem Repo wurde der Auto-Load-/Standard-Ordner auf `audio/` gezogen; Daniel hatte einen anderen gesetzt. Nächste Session ggf. zurückstellen anbieten (Wert steckt in `@AppStorage`).
+
 ## Fallen / Agent-Hinweise
 
 - **Notarisierung ist pro-Mac (verifiziert 2026-07-03)**: Das notarytool-Keychain-Profil wird nicht über iCloud gesynct. Der in `build_dmg.sh` hartkodierte Default-Profilname existiert nicht zwangsläufig auf dem gerade genutzten Mac — dann bricht `--notarize` mit „Notary-Keychain-Profil nicht gefunden" ab. Lösung: ein vorhandenes Profil per `NOTARY_PROFILE=<profil> bash build_dmg.sh --notarize` übergeben (oder das bereits gebaute, signierte DMG direkt mit `xcrun notarytool submit … --keychain-profile <profil> --wait` + `xcrun stapler staple`). Die konkreten Profilnamen pro Mac stehen in der privaten Setup-Notiz, nicht hier (Public-Repo).
