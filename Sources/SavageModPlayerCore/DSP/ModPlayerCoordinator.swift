@@ -616,7 +616,9 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
     
     private func startVUUpdates() {
-        let timer = Timer(timeInterval: 0.02, repeats: true) { [weak self] _ in
+        // 30 Hz statt 50 Hz: VU/Oszilloskope bleiben flüssig, aber jeder Tick
+        // stößt SwiftUI-Layout an — 30 Hz senkt die UI-CPU spürbar (2026-07-09).
+        let timer = Timer(timeInterval: 0.033, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in
                 self.updateVULevelsTick()

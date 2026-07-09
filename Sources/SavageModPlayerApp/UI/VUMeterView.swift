@@ -5,23 +5,26 @@ struct VUMeterView: View {
     let theme: PlayerTheme
     
     var body: some View {
-        GeometryReader { geo in
-            // Segmentierter LED-Peak-Meter in beiden Themes — der frühere
-            // flache Block im Light-Mode wirkte im Vergleich altbacken. Die
-            // Farben sind pro Theme gewählt: Light nutzt den Blau-Akzent und
-            // helle inaktive Segmente, Dark bleibt beim Glow-Cyan.
-            VStack(spacing: 2) {
-                ForEach((0..<12).reversed(), id: \.self) { idx in
-                    let threshold = Float(idx) / 12.0
-                    let isActive = value >= threshold
-
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(isActive ? ledColor(for: threshold) : inactiveColor)
-                        .shadow(color: isActive ? ledColor(for: threshold).opacity(theme == .workbench ? 0.3 : 0.5) : Color.clear, radius: theme == .workbench ? 2 : 4)
-                        .frame(height: (geo.size.height - 22) / 12)
-                }
+        // Segmentierter LED-Peak-Meter, gezeichnet in EINEM Canvas statt als
+        // VStack aus 12 schattierten Rechtecken. Bei vielen Kanälen (XM/S3M bis
+        // 32) sparte der frühere View-Baum-Ansatz ~12 Layout-Knoten pro Kanal —
+        // 32 Kanäle × 12 = ~380 Knoten, 30×/s neu gelayoutet (Haupt-CPU-Posten,
+        // 2026-07-09). Canvas zeichnet immediate-mode: 1 Knoten pro Meter.
+        // (Der frühere dezente LED-Schein/Shadow entfällt bewusst — er war teuer.)
+        Canvas { ctx, size in
+            let count = 12
+            let gap: CGFloat = 2
+            let segH = (size.height - 4 - gap * CGFloat(count - 1)) / CGFloat(count)
+            guard segH > 0 else { return }
+            for idx in 0..<count {
+                let threshold = Float(idx) / Float(count)
+                let isActive = value >= threshold
+                // idx 0 = unterstes Segment.
+                let y = size.height - 2 - CGFloat(idx + 1) * segH - CGFloat(idx) * gap
+                let rect = CGRect(x: 0, y: y, width: size.width, height: segH)
+                let color = isActive ? ledColor(for: threshold) : inactiveColor
+                ctx.fill(Path(roundedRect: rect, cornerRadius: 1.5), with: .color(color))
             }
-            .padding(.vertical, 2)
         }
     }
 

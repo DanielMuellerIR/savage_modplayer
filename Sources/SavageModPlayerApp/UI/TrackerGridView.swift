@@ -131,10 +131,23 @@ struct TrackerRowView: View {
     }
 }
 
-struct TrackerGridView: View {
+struct TrackerGridView: View, Equatable {
     let pattern: SavageModPlayerCore.Pattern
+    // Nur zum billigen Gleichheitsvergleich: das Pattern selbst zu vergleichen
+    // (64 Zeilen × bis 32 Noten) wäre teuer; der Index identifiziert es eindeutig.
+    let patternIndex: Int
     let currentRow: Int
     let theme: PlayerTheme
+
+    // Equatable, damit SwiftUI (via .equatable()) Body UND Layout des Grids
+    // überspringt, solange sich weder Pattern, aktuelle Zeile noch Theme ändern.
+    // Ohne das legt der Layout-Engine das 64×N-Grid bei JEDEM 50-Hz-Oszilloskop-
+    // Update neu aus — der mit Abstand größte CPU-Posten (2026-07-09).
+    nonisolated static func == (lhs: TrackerGridView, rhs: TrackerGridView) -> Bool {
+        lhs.patternIndex == rhs.patternIndex
+            && lhs.currentRow == rhs.currentRow
+            && lhs.theme == rhs.theme
+    }
 
     // Aktueller horizontaler Scroll-Offset (nur bei >4 Kanaelen relevant).
     @State private var hScrollOffset: CGFloat = 0

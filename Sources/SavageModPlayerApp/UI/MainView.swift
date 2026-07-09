@@ -236,7 +236,8 @@ struct MainView: View {
                             let tableIdx = max(0, min(mod.length - 1, coordinator.currentPosition))
                             let patternIndex = mod.patternTable[max(0, min(mod.patternTable.count - 1, tableIdx))]
                             if patternIndex >= 0, patternIndex < mod.patterns.count {
-                                TrackerGridView(pattern: mod.patterns[patternIndex], currentRow: coordinator.currentRow, theme: theme)
+                                TrackerGridView(pattern: mod.patterns[patternIndex], patternIndex: patternIndex, currentRow: coordinator.currentRow, theme: theme)
+                                    .equatable()
                                     .padding()
                             } else {
                                 dropZonePrompt
@@ -697,19 +698,20 @@ struct MainView: View {
                 VUMeterView(value: i < coordinator.vuLevels.count ? coordinator.vuLevels[i] : 0, theme: theme)
                     .frame(width: vuWidth, height: 50)
 
-                // Rolling channel oscilloscope waveform path
-                GeometryReader { geo in
-                    Path { path in
-                        guard i < coordinator.channelWaveforms.count else { return }
-                        let history = coordinator.channelWaveforms[i]
-                        guard history.count > 0 else { return }
-                        let step = geo.size.width / CGFloat(history.count - 1)
-                        path.move(to: CGPoint(x: 0, y: geo.size.height * CGFloat(0.5 - history[0] * 0.5)))
-                        for idx in 1..<history.count {
-                            path.addLine(to: CGPoint(x: CGFloat(idx) * step, y: geo.size.height * CGFloat(0.5 - history[idx] * 0.5)))
-                        }
+                // Rolling channel oscilloscope — in EINEM Canvas gezeichnet statt
+                // GeometryReader+Path (spart bei vielen Kanälen je einen
+                // GeometryReader-Layout-Knoten pro Kanal, 30×/s).
+                Canvas { ctx, size in
+                    guard i < coordinator.channelWaveforms.count else { return }
+                    let history = coordinator.channelWaveforms[i]
+                    guard history.count > 1 else { return }
+                    var path = Path()
+                    let step = size.width / CGFloat(history.count - 1)
+                    path.move(to: CGPoint(x: 0, y: size.height * CGFloat(0.5 - history[0] * 0.5)))
+                    for idx in 1..<history.count {
+                        path.addLine(to: CGPoint(x: CGFloat(idx) * step, y: size.height * CGFloat(0.5 - history[idx] * 0.5)))
                     }
-                    .stroke(Color.accent(theme), lineWidth: 1.2)
+                    ctx.stroke(path, with: .color(Color.accent(theme)), lineWidth: 1.2)
                 }
                 // Breite flexibel: die adaptive Kanal-Leiste gibt jedem Streifen
                 // per .frame(width:) seine Breite vor, das Oszi fuellt sie aus.
@@ -1268,6 +1270,7 @@ struct MainView: View {
     private var formatBadgeText: String {
         switch coordinator.activeMod?.format {
         case .s3m: return "S3M"
+        case .xm: return "FASTTRACKER II"
         case .multichannel: return "MULTICHANNEL"
         case .soundtracker: return "SOUNDTRACKER"
         default: return "PROTRACKER"
@@ -1846,15 +1849,24 @@ struct MainView: View {
                     // Der Slider springt pro Song-Position und funktioniert auch
                     // im gestoppten Zustand: Play startet dann ab der gewaehlten
                     // Stelle.
+                    // WICHTIG: Der Range darf NIE leer sein. Bei Modulen mit nur
+                    // EINER Song-Position (mod.length == 1) ergäbe 0...0 einen
+                    // leeren Bereich — SwiftUIs Slider löst dann eine precondition
+                    // aus und die App STÜRZT AB (2026-07-09, durch kurze XM
+                    // aufgedeckt). Darum untere Grenze < obere garantieren
+                    // (max(1, …)), den Wert in den Bereich klemmen und den Slider
+                    // bei nur einer Position deaktivieren (es gibt nichts zu wählen).
+                    let lastPosition = max(0, mod.length - 1)
                     Slider(
                         value: Binding(
-                            get: { Double(coordinator.currentPosition) },
+                            get: { Double(min(max(0, coordinator.currentPosition), lastPosition)) },
                             set: { coordinator.seek(toPosition: Int($0)) }
                         ),
-                        in: 0...Double(max(0, mod.length - 1)),
+                        in: 0...Double(max(1, lastPosition)),
                         step: 1.0
                     )
                     .accentColor(Color.accent(theme))
+                    .disabled(mod.length <= 1)
                     .help("Song-Position wählen — funktioniert auch bei gestoppter Wiedergabe: Play startet dann ab dieser Stelle.")
 
                     // Zeitsprung vor.
