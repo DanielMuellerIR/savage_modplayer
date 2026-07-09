@@ -55,6 +55,14 @@ struct MainView: View {
     // im Einstellungs-Fenster (SettingsView, gleicher Schluessel).
     @AppStorage("savage.autoplayFolder") private var autoplayFolderPath: String = ""
 
+    // Breite der Playlist-Sidebar (ziehbar per Trenn-Handle). Persistiert, damit
+    // lange Dateinamen dauerhaft sichtbar bleiben (LIDA-XM-Problem: 260 pt fix war
+    // zu schmal, um das Datei-Ende je zu sehen). Geklemmt in sidebarWidthRange.
+    @AppStorage("savage.sidebarWidth") private var sidebarWidth: Double = 260
+
+    // Höhe der "ZULETZT GESPIELT"-Sektion unten in der Sidebar (ziehbar, persistiert).
+    @AppStorage("savage.recentHeight") private var recentHeight: Double = 96
+
     // Sidebar tabs
     @State private var selectedSidebarTab: Int = 0 // 0 = Playlist, 1 = Instrumente
     
@@ -80,6 +88,11 @@ struct MainView: View {
     @State private var showFileImporter = false
     @State private var dragOver = false
     @State private var errorMessage: String? = nil
+    // Wurde beim Start bereits Inhalt über ein Startargument oder „Öffnen mit"
+    // (.onOpenURL) geladen? Dann NICHT zusätzlich den Autoplay-Ordner laden —
+    // sonst überschrieb/übertönte der Default-Ordner den bewusst geöffneten
+    // Titel (Race zwischen onAppear und onOpenURL beim Kaltstart).
+    @State private var didLoadInitialContent = false
     
     // Keyboard HUD & About Overlay Modals
     @State private var showKeyboardHUD = false
@@ -181,14 +194,20 @@ struct MainView: View {
                         instrumentsSidebar
                     }
                 }
-                .frame(width: 260)
+                .frame(width: CGFloat(sidebarWidth))
                 .background(
                     theme == .workbench ? Color.lightSurface : Color.spaceSurface
                 )
-                
-                Divider()
-                    .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.3))
-                
+
+                // Ziehbarer Trenn-Handle zwischen Playlist und Hauptbereich:
+                // erlaubt, die Sidebar breit genug zu ziehen, um lange Dateinamen
+                // vollständig zu lesen. Breite wird persistiert.
+                ResizableDivider(
+                    width: $sidebarWidth,
+                    range: 200...640,
+                    theme: theme
+                )
+
                 // Main Panel
                 VStack(spacing: 0) {
                     // Header (Track Title and Metadata)
@@ -262,7 +281,7 @@ struct MainView: View {
             }
             .frame(minWidth: 1080, minHeight: 720)
             .foregroundColor(theme == .workbench ? Color.lightTextPrimary : Color.spaceTextPrimary)
-            .font(theme == .workbench ? .system(.body, design: .monospaced) : .body)
+            .font(theme == .workbench ? .system(.body) : .body)
             .fileImporter(
                 isPresented: $showFileImporter,
                 allowedContentTypes: [.data, UTType(filenameExtension: "mod"), UTType(filenameExtension: "s3m"), UTType(filenameExtension: "xm")].compactMap { $0 },
@@ -306,7 +325,9 @@ struct MainView: View {
                 dispatchGroup.notify(queue: .main) {
                     let urls = container.urls
                     if !urls.isEmpty {
-                        handleDroppedURLs(urls)
+                        // Ein Drop aufs Fenster startet die Wiedergabe sofort — der
+                        // Nutzer hat die Datei/den Ordner bewusst reingezogen.
+                        handleDroppedURLs(urls, autoPlay: true)
                     }
                 }
                 return true
@@ -314,6 +335,10 @@ struct MainView: View {
             // Finder „Öffnen mit" / Doppelklick auf eine .mod/.s3m/.xm: die App
             // erhält die URL hierüber (nicht als argv) — direkt laden und abspielen.
             .onOpenURL { url in
+                // „Öffnen mit" / Dock-Drop / Doppelklick: bewusst geöffneten Titel
+                // laden + abspielen und den Autoplay-Ordner unterdrücken (auch
+                // wenn onAppear leicht später feuert).
+                didLoadInitialContent = true
                 handleDroppedURLs([url], autoPlay: true)
             }
             .onAppear {
@@ -329,9 +354,16 @@ struct MainView: View {
                 // und abspielen — praktisch für headless Tests/CPU-Messungen ohne
                 // Klicken. Sonst wie bisher den konfigurierten Autoplay-Ordner laden.
                 if let launchURL = Self.launchFileArgument() {
+                    didLoadInitialContent = true
                     handleDroppedURLs([launchURL], autoPlay: true)
                 } else {
-                    loadLocalAudioFolder()
+                    // Verzögert, damit ein beim Kaltstart über „Öffnen mit"
+                    // eintreffendes .onOpenURL zuerst greifen kann (setzt das Flag).
+                    // Dann laden wir NICHT zusätzlich den Autoplay-Ordner.
+                    DispatchQueue.main.async {
+                        guard !didLoadInitialContent else { return }
+                        loadLocalAudioFolder()
+                    }
                 }
                 // Autofokus des Suchfelds wieder wegnehmen — macOS setzt den
                 // First Responder erst nach dem Fensteraufbau, daher verzoegert.
@@ -598,14 +630,7 @@ struct MainView: View {
             // im pausierten Zustand ungewollt die Wiedergabe.
             if autoPlay { coordinator.play() }
         }
-        
-        // Add to history
-        if !recentSongs.contains(songUrl) {
-            recentSongs.insert(songUrl, at: 0)
-            if recentSongs.count > 10 {
-                recentSongs.removeLast()
-            }
-        }
+        // "Zuletzt gespielt" wird zentral in loadModFile gepflegt (alle Ladepfade).
     }
     
     @discardableResult
@@ -624,6 +649,13 @@ struct MainView: View {
             coordinator.setMod(mod, fallbackName: fallbackName)
             // Stabilen Namen fuer "zuletzt gespielt" merken (ueberlebt Neustart).
             self.lastPlayedSongName = cleanFilename(url)
+            // "ZULETZT GESPIELT"-Liste hier zentral pflegen, damit JEDER Ladepfad
+            // (Playlist-Klick, Weiter/Zurueck, Autostart, Drop, Recent-Klick) sie
+            // aktualisiert — vorher nur selectPlaylistSong, weshalb sie oft
+            // veraltet stehen blieb. Duplikat zuerst entfernen -> rueckt nach oben.
+            recentSongs.removeAll { $0 == url }
+            recentSongs.insert(url, at: 0)
+            if recentSongs.count > 10 { recentSongs.removeLast() }
             return true
         } catch {
             self.errorMessage = "Parser-Fehler bei '\(cleanFilename(url))': \(error.localizedDescription)"
@@ -907,7 +939,7 @@ struct MainView: View {
                         .font(.system(size: 11))
                         .foregroundColor(Color.accent(theme))
                     Text(name)
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -931,7 +963,7 @@ struct MainView: View {
                         .foregroundColor(isPlayingSong ? (Color.accent(theme)) : .spaceTextSecondary)
 
                     Text(cleanFilename(fileURL))
-                        .font(.system(size: 11, weight: isPlayingSong ? .bold : .medium, design: .monospaced))
+                        .font(.system(size: 11, weight: isPlayingSong ? .bold : .medium))
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -962,7 +994,7 @@ struct MainView: View {
                     .foregroundColor(.spaceTextSecondary)
                 TextField("Titel filtern...", text: $playlistSearchQuery)
                     .textFieldStyle(PlainTextFieldStyle())
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: 11))
                     // Kein Autofokus: macOS macht das erste Textfeld sonst zum
                     // First Responder und der Cursor blinkt dauerhaft in der
                     // Sidebar. Fokus bekommt das Feld erst per Klick.
@@ -988,10 +1020,10 @@ struct MainView: View {
                         .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.3) : .spaceAccent.opacity(0.4))
                     
                     Text("Playlist leer")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .font(.system(size: 13, weight: .bold))
                     
                     Text("Dateien oder Ordner per Drag & Drop reinziehen.")
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(size: 10))
                         .multilineTextAlignment(.center)
                         .foregroundColor(.spaceTextSecondary)
                         .padding(.horizontal, 12)
@@ -999,7 +1031,7 @@ struct MainView: View {
                     Button("Demo abspielen") {
                         triggerDemoPlay()
                     }
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .font(.system(size: 10, weight: .bold))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(Color.accent(theme))
@@ -1011,7 +1043,7 @@ struct MainView: View {
             } else {
                 HStack {
                     Text("TITEL (\(filteredPlaylist.count))")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .font(.system(size: 11, weight: .bold))
                         .foregroundColor(theme == .workbench ? .lightAccent : .spaceAccentGlow)
                     Spacer()
                     Button("Leeren") {
@@ -1022,7 +1054,7 @@ struct MainView: View {
                         folderPathByURL.removeAll()
                         currentPlaylistIndex = -1
                     }
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .font(.system(size: 10, weight: .bold))
                     .foregroundColor(theme == .workbench ? .lightAccent : .spaceTextSecondary)
                     .buttonStyle(PremiumHoverButtonStyle(theme: theme))
                 }
@@ -1059,42 +1091,54 @@ struct MainView: View {
                 }
                 
                 if !recentSongs.isEmpty {
-                    Divider().background(Color.spaceAccent.opacity(0.2))
+                    // Ziehbarer Trenner: nach oben ziehen vergrößert die "Zuletzt
+                    // gespielt"-Sektion (und schrumpft die Playlist darüber).
+                    ResizableDivider(width: $recentHeight, range: 48...360,
+                                     theme: theme, axis: .horizontal, inverted: true)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("ZULETZT GESPIELT")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .font(.system(size: 9, weight: .bold))
                             .foregroundColor(.spaceTextSecondary)
                             .padding(.horizontal, 8)
-                        
-                        ForEach(recentSongs.prefix(4), id: \.self) { url in
-                            Button(action: {
-                                // Veraltete Temp-URL (Datei weg)? Eintrag verwerfen statt
-                                // eine tote URL in die Playlist zu haengen.
-                                guard FileManager.default.fileExists(atPath: url.path) else {
-                                    recentSongs.removeAll { $0 == url }
-                                    return
-                                }
-                                if let idx = playlist.firstIndex(of: url) {
-                                    selectPlaylistSong(at: idx)
-                                } else {
-                                    // Titel ist nicht mehr Teil der Playlist (z.B. nach
-                                    // "Leeren") — direkt laden statt ihn in die
-                                    // hierarchische Liste zu zwaengen.
-                                    if loadModFile(from: url) {
-                                        currentPlaylistIndex = -1
-                                        coordinator.play()
+
+                        // Scrollbar, zeigt alle Einträge (früher fix nur 4). Höhe
+                        // per Handle oben einstellbar.
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(recentSongs, id: \.self) { url in
+                                    Button(action: {
+                                        // Veraltete Temp-URL (Datei weg)? Eintrag verwerfen statt
+                                        // eine tote URL in die Playlist zu haengen.
+                                        guard FileManager.default.fileExists(atPath: url.path) else {
+                                            recentSongs.removeAll { $0 == url }
+                                            return
+                                        }
+                                        if let idx = playlist.firstIndex(of: url) {
+                                            selectPlaylistSong(at: idx)
+                                        } else {
+                                            // Titel ist nicht mehr Teil der Playlist (z.B. nach
+                                            // "Leeren") — direkt laden statt ihn in die
+                                            // hierarchische Liste zu zwaengen.
+                                            if loadModFile(from: url) {
+                                                currentPlaylistIndex = -1
+                                                coordinator.play()
+                                            }
+                                        }
+                                    }) {
+                                        Text(cleanFilename(url))
+                                            .font(.system(size: 10))
+                                            .lineLimit(1)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .foregroundColor(.spaceTextSecondary.opacity(0.8))
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 2)
+                                            .contentShape(Rectangle())
                                     }
+                                    .buttonStyle(PlainButtonStyle())
                                 }
-                            }) {
-                                Text(cleanFilename(url))
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .lineLimit(1)
-                                    .foregroundColor(.spaceTextSecondary.opacity(0.8))
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 2)
                             }
-                            .buttonStyle(PlainButtonStyle())
                         }
+                        .frame(height: CGFloat(recentHeight))
                     }
                     .padding(.vertical, 8)
                 }
@@ -1113,13 +1157,13 @@ struct MainView: View {
                                     HStack(spacing: 8) {
                                         Text(String(format: "%02d", i))
                                             .foregroundColor(theme == .workbench ? .lightAccent : .codeInstrument)
-                                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                            .font(.system(size: 11, weight: .bold))
                                             .frame(width: 18)
                                         
                                         VStack(alignment: .leading, spacing: 2) {
                                             HStack {
                                                 Text(inst.name.isEmpty ? "Instrument \(i)" : inst.name)
-                                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                                    .font(.system(size: 11, weight: .bold))
                                                     .lineLimit(1)
                                                 Spacer()
                                                 
@@ -1149,7 +1193,7 @@ struct MainView: View {
                                             .cornerRadius(1)
                                             
                                             Text(String(format: "Len: %d B | Fine: %d | Vol: %d", inst.primarySample?.pcm.count ?? 0, inst.primarySample?.finetune ?? 0, inst.primarySample?.volume ?? 0))
-                                                .font(.system(size: 8.5, design: .monospaced))
+                                                .font(.system(size: 8.5))
                                                 .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.6) : .spaceTextSecondary)
                                         }
                                     }
@@ -1188,7 +1232,7 @@ struct MainView: View {
             } else {
                 Spacer()
                 Text("Kein Song geladen")
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(size: 12))
                     .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.4) : .spaceTextSecondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                 Spacer()
@@ -1212,7 +1256,7 @@ struct MainView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     let titleFont: Font = theme == .workbench
-                        ? .system(size: 20, weight: .bold, design: .monospaced) : .title2
+                        ? .system(size: 20, weight: .bold) : .title2
                     let titleColor: Color = theme == .workbench ? .lightAccent : .white
 
                     // Format-Badge LINKS vor dem Titel (feste Groesse). Bewusst vor
@@ -1221,7 +1265,7 @@ struct MainView: View {
                     // und ohne bei kurzen Titeln eine grosse Luecke zum Badge zu lassen.
                     if theme == .cyber {
                         Text(formatBadgeText)
-                            .font(.system(size: 8, weight: .black, design: .monospaced))
+                            .font(.system(size: 8, weight: .black))
                             .lineLimit(1)
                             .fixedSize()
                             .padding(.horizontal, 4)
@@ -1287,7 +1331,7 @@ struct MainView: View {
                         .help("Pattern-Position: aktuelles Pattern und Gesamtzahl in der Abspielliste des Songs. Ein Pattern ist ein Notenblock (meist 64 Zeilen); der Song spielt sie in dieser Reihenfolge ab.")
                     }
                 }
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.8) : .spaceTextSecondary)
             }
             // Der Titelblock ist das EINE flexible Element in der Kopfzeile und
@@ -1304,7 +1348,7 @@ struct MainView: View {
                 Button("PAL (3.546MHz)") {
                     coordinator.palClock = true
                 }
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: 9, weight: .bold))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
                 .background(coordinator.palClock ? (Color.accent(theme)) : Color.clear)
@@ -1318,7 +1362,7 @@ struct MainView: View {
                 Button("NTSC (3.580MHz)") {
                     coordinator.palClock = false
                 }
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: 9, weight: .bold))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
                 .background(!coordinator.palClock ? (Color.accent(theme)) : Color.clear)
@@ -1336,7 +1380,7 @@ struct MainView: View {
                 ForEach(PlayerTheme.allCases) { t in
                     Button(action: { theme = t }) {
                         Text(t == .workbench ? "LIGHT" : "DARK")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .font(.system(size: 10, weight: .bold))
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)
                             .background(
@@ -1364,7 +1408,7 @@ struct MainView: View {
                 .padding(.vertical, 6)
                 .background(Color.accent(theme))
                 .foregroundColor(.white)
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .font(.system(size: 11, weight: .bold))
             }
             .buttonStyle(PremiumHoverButtonStyle(theme: theme))
             .cornerRadius(theme == .workbench ? 0 : 6)
@@ -1419,7 +1463,7 @@ struct MainView: View {
 
                 Spacer()
             }
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .font(.system(size: 9, weight: .semibold))
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
@@ -1450,12 +1494,12 @@ struct MainView: View {
                 
                 VStack(spacing: 8) {
                     Text("PROTRACKER MOD PLAYER")
-                        .font(theme == .workbench ? .system(size: 16, weight: .bold, design: .monospaced) : .system(size: 18, weight: .bold, design: .default))
+                        .font(theme == .workbench ? .system(size: 16, weight: .bold) : .system(size: 18, weight: .bold, design: .default))
                         .foregroundColor(theme == .workbench ? .lightAccent : .white)
                         .tracking(theme == .cyber ? 2.0 : 0)
                     
                     Text("Ziehe .mod Dateien oder Ordner direkt in dieses Fenster")
-                        .font(theme == .workbench ? .system(size: 12, design: .monospaced) : .system(size: 13, weight: .medium))
+                        .font(theme == .workbench ? .system(size: 12) : .system(size: 13, weight: .medium))
                         .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.8) : .spaceTextSecondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 30)
@@ -1467,7 +1511,7 @@ struct MainView: View {
                             Image(systemName: "plus.rectangle.on.folder")
                             Text("DATEIEN AUSWÄHLEN")
                         }
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .font(.system(size: 11, weight: .bold))
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                         .background(Color.accent(theme))
@@ -1481,7 +1525,7 @@ struct MainView: View {
                             Image(systemName: "play.circle")
                             Text("DEMO ABSPIELEN")
                         }
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .font(.system(size: 11, weight: .bold))
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                         .background(Color.green)
@@ -1525,7 +1569,7 @@ struct MainView: View {
                     Text(errorMsg)
                         .foregroundColor(.red)
                 }
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: 11))
                 .padding(.top, 4)
             }
             
@@ -1538,7 +1582,7 @@ struct MainView: View {
     private var masterOscilloscopeView: some View {
         HStack(spacing: 16) {
             Text("MASTER OSCILLOSCOPE")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: 10, weight: .bold))
                 .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
                 .frame(width: 140, alignment: .leading)
             
@@ -1560,7 +1604,7 @@ struct MainView: View {
                     .help("Stereo-Separation: 100 % = hartes Amiga-Panning (Kanäle ganz links/rechts), 0 % = Mono. Dazwischen wird Übersprechen beigemischt, das Kopfhörer-Ermüdung vermeidet. Am deutlichsten mit Kopfhörern hörbar; über Laptop-Lautsprecher kaum.")
 
                 Text(String(format: "%d%%", Int(coordinator.stereoSeparation * 100)))
-                    .font(.system(size: 9, design: .monospaced))
+                    .font(.system(size: 9))
                     .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
                     .frame(width: 32, alignment: .trailing)
             }
@@ -1715,7 +1759,7 @@ struct MainView: View {
             } else {
                 Spacer()
                 Text("Kein Song geladen")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.4) : .spaceTextSecondary)
                 Spacer()
             }
@@ -1771,13 +1815,13 @@ struct MainView: View {
             
             VStack(spacing: 24) {
                 Text("SOFTWARE FAILURE. Click button to continue.")
-                    .font(.system(.body, design: .monospaced))
+                    .font(.system(.body))
                     .foregroundColor(.red)
                     .bold()
                 
                 VStack(spacing: 4) {
                     Text("Guru Meditation #00000004.0000404C")
-                        .font(.system(.title3, design: .monospaced))
+                        .font(.system(.title3))
                         .foregroundColor(.red)
                         .bold()
                 }
@@ -1808,7 +1852,7 @@ struct MainView: View {
                         .foregroundColor(.spaceAccentGlow)
                     Text("WTFPL — Quellcode: github.com/DanielMuellerIR/savage_modplayer")
                 }
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: 11))
                 .foregroundColor(.white)
                 .padding()
                 .background(Color.spaceSurface.opacity(0.4))
@@ -1817,7 +1861,7 @@ struct MainView: View {
                 Button("SCHLIESSEN") {
                     showAboutModal = false
                 }
-                .font(.system(.body, design: .monospaced))
+                .font(.system(.body))
                 .foregroundColor(.black)
                 .padding(.horizontal, 24)
                 .padding(.vertical, 8)
@@ -1839,7 +1883,7 @@ struct MainView: View {
             
             VStack(spacing: 20) {
                 Text("TASTATUR-KURZBEFEHLE")
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .font(.system(size: 14, weight: .bold))
                     .foregroundColor(Color.accent(theme))
                 
                 VStack(alignment: .leading, spacing: 12) {
@@ -1874,13 +1918,13 @@ struct MainView: View {
                         Text("Menüs schließen")
                     }
                 }
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: 11))
                 .padding()
                 
                 Button("SCHLIESSEN") {
                     showKeyboardHUD = false
                 }
-                .font(.system(.body, design: .monospaced))
+                .font(.system(.body))
                 .foregroundColor(.white)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 8)
@@ -1904,11 +1948,11 @@ struct MainView: View {
             
             VStack(spacing: 16) {
                 Text("OFFLINE-WAV-EXPORT")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .font(.system(size: 12, weight: .bold))
                     .foregroundColor(Color.accent(theme))
                 
                 Text("Exportiert den gesamten Track offline in eine WAV Datei.")
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.system(size: 10))
                     .multilineTextAlignment(.center)
                     .foregroundColor(.spaceTextSecondary)
                 
@@ -1919,19 +1963,19 @@ struct MainView: View {
                     Text("10 Minuten").tag(600.0)
                 }
                 .pickerStyle(DefaultPickerStyle())
-                .font(.system(size: 10, design: .monospaced))
+                .font(.system(size: 10))
                 
                 HStack(spacing: 12) {
                     Button("ABBRECHEN") {
                         showExportDialog = false
                     }
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.system(size: 10))
                     
                     Button("STARTEN") {
                         showExportDialog = false
                         runWavExport()
                     }
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.system(size: 10))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(Color.green)
@@ -1961,7 +2005,7 @@ struct MainView: View {
                     .font(.system(size: 48))
                     .foregroundColor(.spaceAccent)
                 Text("MOD DATEIEN HIER ABLEGEN")
-                    .font(.system(size: 16, weight: .bold, design: .monospaced))
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundColor(.white)
             }
         }
@@ -1980,7 +2024,7 @@ struct TabButton: View {
         Button(action: { selection = tag }) {
             VStack(spacing: 6) {
                 Text(title)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .font(.system(size: 11, weight: .bold))
                     .foregroundColor(
                         isSelected
                         ? (theme == .workbench ? Color.lightAccent : Color.white)

@@ -1,5 +1,57 @@
 import SwiftUI
 import SavageModPlayerCore
+#if canImport(AppKit)
+import AppKit
+#endif
+
+// Ziehbarer vertikaler Trenn-Handle für die Playlist-Sidebar-Breite. Portabel
+// (macOS/iOS); auf macOS zeigt er beim Überfahren den Links-/Rechts-Resize-Cursor.
+// Die Breite wird als Binding gehalten (in MainView per @AppStorage persistiert)
+// und beim Ziehen in `range` geklemmt.
+struct ResizableDivider: View {
+    @Binding var width: Double
+    let range: ClosedRange<Double>
+    let theme: PlayerTheme
+    // .vertical  = senkrechter Balken, horizontales Ziehen ändert eine BREITE.
+    // .horizontal = waagrechter Balken, senkrechtes Ziehen ändert eine HÖHE;
+    //   `inverted` (nach oben ziehen = größer) für unten angedockte Sektionen.
+    var axis: Axis = .vertical
+    var inverted: Bool = false
+    // Wert bei Gesten-Beginn, damit die Verschiebung relativ dazu rechnet
+    // (sonst springt der Handle bei jedem onChanged-Event).
+    @State private var startValue: Double? = nil
+
+    var body: some View {
+        Rectangle()
+            .fill(theme == .workbench ? Color.lightTextPrimary.opacity(0.5) : Color.spaceAccent.opacity(0.3))
+            .frame(width: axis == .vertical ? 5 : nil, height: axis == .horizontal ? 5 : nil)
+            .frame(maxWidth: axis == .horizontal ? .infinity : nil,
+                   maxHeight: axis == .vertical ? .infinity : nil)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        let base = startValue ?? width
+                        if startValue == nil { startValue = width }
+                        let raw = axis == .vertical ? Double(value.translation.width)
+                                                    : Double(value.translation.height)
+                        let delta = inverted ? -raw : raw
+                        width = min(range.upperBound, max(range.lowerBound, base + delta))
+                    }
+                    .onEnded { _ in startValue = nil }
+            )
+            .onHover { inside in
+                #if canImport(AppKit)
+                if inside {
+                    (axis == .vertical ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
+                } else { NSCursor.pop() }
+                #endif
+            }
+            .help(axis == .vertical
+                  ? "Ziehen, um die Playlist-Breite anzupassen (lange Dateinamen sichtbar machen)"
+                  : "Ziehen, um die Höhe der Liste anzupassen")
+    }
+}
 
 // Positions-/Zeilen-abhängige Subviews, die den row-rate `TransportState`
 // beobachten — herausgezogen aus MainView, damit die ~20-Hz-Zeilenwechsel NICHT

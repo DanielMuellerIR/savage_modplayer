@@ -23,11 +23,13 @@ struct SavageModPlayerApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        // Bewusst `Window` (Singleton) statt `WindowGroup`: Es gibt nur EIN
+        // Fenster. Man kann ohnehin nicht zwei Module gleichzeitig sinnvoll
+        // hören; ein „Öffnen mit"/Dock-Drop soll das bestehende Fenster nutzen
+        // (via .onOpenURL) statt ein zweites zu erzeugen. WindowGroup hatte pro
+        // geöffneter Datei ein neues, leeres Fenster gespawnt.
+        Window("Savage Mod Player", id: "main") {
             MainView()
-                #if os(macOS)
-                .navigationTitle("Savage Mod Player")
-                #endif
         }
         .commands {
             #if os(macOS)
