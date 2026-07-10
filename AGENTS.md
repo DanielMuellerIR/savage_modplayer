@@ -443,9 +443,16 @@ Wichtige Leitplanken:
   synthetischer Mehrkanal-Test rekonstruiert Panning/Mix und Int16-Ausgabe bis
   auf 1 LSB. Reviewer-`ACCEPT`, 94 Swift-Tests, JS-Parität und signierter
   App-/Quick-Look-Build sind grün.
-- M0 hat als verbleibende Vorarbeit reproduzierbare Referenzmetriken gegen
-  `openmpt123` offen. Das nächste Paket ist `IT-007` aus
-  `tasks/2026-07-10-it-support/handoff.md`; M1 startet erst nach diesem Gate.
+- **IT-007 (Version 1.5.8):** `tools/reference_compare.py` rendert MOD, S3M und
+  XM reproduzierbar mit `savage-cli` und der eingefrorenen `openmpt123`-Version
+  und schreibt deterministische JSON-Berichte mit Pegel-, RMS-Hüllkurven-,
+  Lag-, Onset-, Timing- und STFT-Metriken. Das Werkzeug nutzt ausschließlich
+  die Python-Standardbibliothek, lehnt `.it` vor jedem Unterprozess ab und
+  hält Module/WAVs/Berichte aus Git. 14 synthetische Tests, doppelte
+  Realwelt-Smokes für alle drei Formate, Reviewer-`ACCEPT`, 94 Swift-Tests,
+  JS-Parität und signierter App-/Quick-Look-Build sind grün. M0 ist damit
+  abgeschlossen; das nächste Paket `IT-008` eröffnet M1 erst nach neuem
+  read-only Paketvertrag.
 
 ## Fallen / Agent-Hinweise
 
