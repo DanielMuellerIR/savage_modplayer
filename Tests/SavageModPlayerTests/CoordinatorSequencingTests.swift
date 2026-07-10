@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 @testable import SavageModPlayerCore
 
 /// Regressionstests fuer die Song-Sequenzierung im Render-/Probe-Pfad des
@@ -38,6 +39,97 @@ final class CoordinatorSequencingTests: XCTestCase {
         data[noteOffset + 3] = b3
 
         return data
+    }
+
+    // Ein rein synthetischer Ablauf, der alle fuer IT-003 verpflichtenden
+    // Sequencer-Zweige wirklich erreicht: Tempo/Speed/Global Volume, Pattern-
+    // Loop, Pattern-Delay sowie kombinierten Position-Jump + Pattern-Break.
+    private func makeTraceMod() -> Mod {
+        let empty = Note(instrument: 0, period: 0, effectId: 0, effectData: 0)
+        func effect(_ id: Int, _ data: Int) -> Note {
+            Note(instrument: 0, period: 0, effectId: id, effectData: data)
+        }
+        func emptyRow() -> Row { Row(notes: [Note](repeating: empty, count: 4)) }
+
+        let pattern0 = Pattern(rows: [
+            Row(notes: [
+                effect(0x0F, 3),
+                effect(0x0F, 150),
+                effect(ModuleEffect.globalVolume, 32),
+                effect(0xE6, 0)
+            ]),
+            Row(notes: [empty, empty, empty, effect(0xE6, 1)]),
+            Row(notes: [effect(0xEE, 2), empty, empty, empty]),
+            Row(notes: [effect(0x0B, 1), effect(0x0D, 5), empty, empty])
+        ])
+        let pattern1 = Pattern(rows: (0..<8).map { _ in emptyRow() })
+        return Mod(
+            name: "sequencer-trace",
+            length: 2,
+            patternTable: [0, 1],
+            instruments: [nil],
+            patterns: [pattern0, pattern1],
+            channelCount: 4
+        )
+    }
+
+    // Treibt denselben Block wie App, WAV-Export und Quick Look ohne Engine oder
+    // Audiogeraet. Der erste Aufruf rendert Frame 0; danach folgen 256 Frames,
+    // sodass die Zustandsgrenzen exakt der bestehenden Probe-Abtastung entsprechen.
+    private func renderBlockTraces(
+        mod: Mod,
+        durationSeconds: Double,
+        sampleRate: Double = 44100.0
+    ) throws -> [SequencerTraceSnapshot] {
+        let channels = ModPlayerCoordinator.makeRenderChannels(for: mod)
+        let state = ModPlayerCoordinator.makeRenderState(for: mod, sampleRate: sampleRate)
+        state.stereoSeparation = 0.8
+        state.useInterpolation = true
+        state.palClock = true
+
+        let channelCount = channels.count
+        let peaks = UnsafeMutablePointer<Float>.allocate(capacity: channelCount)
+        defer { peaks.deallocate() }
+        peaks.initialize(repeating: 0, count: channelCount)
+        let waves = UnsafeMutablePointer<Float>.allocate(capacity: channelCount * 32)
+        defer { waves.deallocate() }
+        waves.initialize(repeating: 0, count: channelCount * 32)
+        let masterWaves = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+        defer { masterWaves.deallocate() }
+        masterWaves.initialize(repeating: 0, count: 128)
+
+        let block = ModPlayerCoordinator.createRenderBlock(
+            state: state,
+            vuBuffer: RealtimeVUBuffer(pointer: peaks),
+            waveBuffer: RealtimeWaveBuffer(channelWaves: waves, masterWaves: masterWaves),
+            dspChannels: channels,
+            mod: mod,
+            sampleRate: sampleRate
+        )
+        let format = try XCTUnwrap(AVAudioFormat(
+            standardFormatWithSampleRate: sampleRate, channels: 2))
+        let pcm = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: format, frameCapacity: 256))
+        var isSilence = ObjCBool(false)
+        var timestamp = AudioTimeStamp()
+        let totalFrames = Int(sampleRate * durationSeconds)
+        var renderedFrames = 0
+        var traces: [SequencerTraceSnapshot] = []
+
+        for frame in stride(from: 0, to: totalFrames, by: 256) {
+            let frameCount = frame + 1 - renderedFrames
+            pcm.frameLength = AVAudioFrameCount(frameCount)
+            let status = block(
+                &isSilence,
+                &timestamp,
+                UInt32(frameCount),
+                pcm.mutableAudioBufferList
+            )
+            XCTAssertEqual(status, noErr)
+            renderedFrames += frameCount
+            traces.append(SequencerTraceSnapshot(frame: frame, state: state, mod: mod))
+        }
+        return traces
     }
 
     /// Pause haelt die Engine an, ohne den Zustand zu verwerfen; resume() setzt
@@ -177,5 +269,54 @@ final class CoordinatorSequencingTests: XCTestCase {
         // Row 32 — diese Zeile muss in den Proben auftauchen.
         let reached = samples.contains { $0.position == 1 && $0.row == 32 }
         XCTAssertTrue(reached, "D32 muss Position 1 / Row 32 erreichen")
+    }
+
+    /// Friert die heutige doppelte Sequencer-Implementierung vor dem Refactor
+    /// zustandsgenau ein. Coverage-Marker verhindern, dass zwei wirkungslose
+    /// Pfade durch lauter identische Defaultwerte versehentlich bestehen.
+    @MainActor
+    func testRenderBlockAndProbeProduceIdenticalSequencerTrace() throws {
+        let mod = makeTraceMod()
+        let duration = 0.6
+        let coordinator = ModPlayerCoordinator()
+        let probe = coordinator.renderProbe(mod: mod, durationSeconds: duration)
+        let blockTraces = try renderBlockTraces(mod: mod, durationSeconds: duration)
+        let probeTraces = probe.map(\.trace)
+
+        XCTAssertEqual(probe.map(\.frame), Array(stride(from: 0, to: Int(44100 * duration), by: 256)),
+                       "Die bestehende 256-Frame-Abtastung darf sich nicht aendern")
+        XCTAssertEqual(blockTraces, probeTraces,
+                       "Live-/Offline-Block und Probe muessen elementweise gleich bleiben")
+
+        XCTAssertTrue(probeTraces.contains { $0.speed == 3 }, "F03/Speed nicht erreicht")
+        XCTAssertTrue(probeTraces.contains { $0.tempo == 150 }, "F96/Tempo nicht erreicht")
+        XCTAssertTrue(probeTraces.contains { $0.globalVolume == 32 }, "Global Volume nicht erreicht")
+        XCTAssertTrue(probeTraces.contains { $0.patternLoopRow == 0 }, "E61-Loopziel nicht erreicht")
+        XCTAssertTrue(probeTraces.contains { $0.patternDelay == 2 }, "EE2-Delay nicht erreicht")
+        XCTAssertTrue(probeTraces.contains { $0.patternDelayCounter > 0 }, "EE2-Counter nicht aktiv")
+        XCTAssertTrue(probeTraces.contains { $0.positionJump == 1 }, "B01-Jump nicht vorgemerkt")
+        XCTAssertTrue(probeTraces.contains { $0.patternBreak == 5 }, "D05-Break nicht vorgemerkt")
+        XCTAssertTrue(probeTraces.contains { $0.position == 1 && $0.pattern == 1 && $0.row == 5 },
+                      "B01 und D05 muessen gemeinsam Position 1 / Pattern 1 / Row 5 erreichen")
+
+        // E61 muss den vorgemerkten Wert auch wirklich verbrauchen: Zwischen
+        // zwei benachbarten Snapshots geht Position 0 von Row 1 zur Loop-Row 0.
+        let adjacentSnapshots = Array(zip(probeTraces, probeTraces.dropFirst()))
+        XCTAssertTrue(adjacentSnapshots.contains { before, after in
+            before.position == 0 && before.row == 1
+                && after.position == 0 && after.row == 0
+        }, "E61 muss innerhalb Position 0 tatsaechlich von Row 1 zu Row 0 springen")
+
+        // EE2 erzeugt im heutigen Sequencer exakt drei zusaetzliche Tick-Wraps
+        // von 2 auf 0, waehrend Position und Row unveraendert auf 0/2 bleiben.
+        // Mit 735 Frames pro Tick liegt zwischen zwei 256-Frame-Snapshots nie
+        // mehr als eine Tick-Grenze, daher kann die Abtastung keinen Wrap missen.
+        let delayWrapCounters = adjacentSnapshots.compactMap { before, after -> Int? in
+            guard before.position == 0, before.row == 2, before.tick == 2,
+                  after.position == 0, after.row == 2, after.tick == 0 else { return nil }
+            return after.patternDelayCounter
+        }
+        XCTAssertEqual(delayWrapCounters, [2, 1, 0],
+                       "EE2 muss die heutigen drei Row-2-Wiederholungen exakt bewahren")
     }
 }

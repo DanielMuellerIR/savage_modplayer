@@ -69,17 +69,59 @@ public final class RealtimeWaveBuffer: @unchecked Sendable {
     }
 }
 
+// Wertkopie des Sequencer-Zustands an einer festen Frame-Grenze. Sie enthaelt
+// bewusst keine Referenz auf den laufenden Zustand und kein endReached: Die
+// Probe setzt dieses Live-/Offline-Abbruchsignal heute nicht.
+struct SequencerTraceSnapshot: Sendable, Equatable {
+    let frame: Int
+    let position: Int
+    let pattern: Int
+    let row: Int
+    let tick: Int
+    let speed: Int
+    let tempo: Int
+    let globalVolume: Float
+    let positionJump: Int
+    let patternBreak: Int
+    let patternLoopRow: Int
+    let patternDelay: Int
+    let patternDelayCounter: Int
+
+    init(frame: Int, state: RealtimePlaybackState, mod: Mod) {
+        self.frame = frame
+        self.position = state.position
+        if mod.patternTable.isEmpty {
+            self.pattern = -1
+        } else {
+            let positionIndex = max(0, min(mod.patternTable.count - 1, state.position))
+            self.pattern = mod.patternTable[positionIndex]
+        }
+        self.row = state.rowIndex
+        self.tick = state.tick
+        self.speed = state.ticksPerRow
+        self.tempo = state.bpm
+        self.globalVolume = state.globalVolume
+        self.positionJump = state.positionJump
+        self.patternBreak = state.patternBreak
+        self.patternLoopRow = state.patternLoopRow
+        self.patternDelay = state.patternDelay
+        self.patternDelayCounter = state.patternDelayCounter
+    }
+}
+
 struct RenderProbeSample: Sendable {
     let frame: Int
     let position: Int
     let row: Int
     let channelOutputs: [Float]
+    let trace: SequencerTraceSnapshot
 
-    init(frame: Int, position: Int, row: Int, channelOutputs: [Float]) {
+    init(frame: Int, position: Int, row: Int, channelOutputs: [Float], trace: SequencerTraceSnapshot) {
         self.frame = frame
         self.position = position
         self.row = row
         self.channelOutputs = channelOutputs
+        self.trace = trace
     }
 }
 
@@ -1250,7 +1292,14 @@ public final class ModPlayerCoordinator: ObservableObject {
             }
 
             if frame % 256 == 0 {
-                samples.append(RenderProbeSample(frame: frame, position: state.position, row: state.rowIndex, channelOutputs: channelOutputs))
+                let trace = SequencerTraceSnapshot(frame: frame, state: state, mod: mod)
+                samples.append(RenderProbeSample(
+                    frame: frame,
+                    position: state.position,
+                    row: state.rowIndex,
+                    channelOutputs: channelOutputs,
+                    trace: trace
+                ))
             }
         }
 

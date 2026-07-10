@@ -417,9 +417,16 @@ Wichtige Leitplanken:
   Default/`true`-Output sowie hörbares, gleich langes, aber verschiedenes PCM
   mit `false`. Reviewer-`ACCEPT`, 91 Swift-Tests, CLI-Build, JS-Parität und
   signierter App-/Quick-Look-Build sind grün.
-- Nächstes Paket ist `IT-003` aus `tasks/2026-07-10-it-support/handoff.md`:
-  Die heutige Live-/Offline-/Probe-Sequencer-Semantik per Zustands-Trace
-  charakterisieren und einfrieren; noch kein Sequencer-Refactor.
+- **IT-003 (Version 1.5.4):** Ein wertbasierter Sequencer-Trace friert Frame,
+  Position/Pattern, Row/Tick, Speed/Tempo/Global Volume sowie Jump-, Break-,
+  Loop- und Delay-Zustände ein. Live-/Offline-Renderblock und Probe stimmen über
+  104 Abtastpunkte elementweise überein; Coverage beweist echte E61-Row-
+  Transition und drei EE2-Tick-Wraps. Reviewer-`ACCEPT`, 92 Swift-Tests,
+  JS-Parität und signierter App-/Quick-Look-Build sind grün.
+- Nächstes Paket ist `IT-004` aus `tasks/2026-07-10-it-support/handoff.md`:
+  Die doppelte Sequencer-Logik verhaltensgleich in einen internen,
+  allokationsfreien `SequencerCore` extrahieren. Die IT-003-Tests bleiben dabei
+  unverändert.
 
 ## Fallen / Agent-Hinweise
 
