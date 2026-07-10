@@ -19,6 +19,7 @@ Diese Datei ist die zentrale Projektdokumentation. Sie beschreibt die Architektu
 | [RELEASE_NOTES.md](RELEASE_NOTES.md) | Englische Versionsnotizen (Umbenennung Savage Protracker Player → Savage Mod Player). |
 | [RELEASE_NOTES.de.md](RELEASE_NOTES.de.md) | Deutsche Übersetzung der Versionsnotizen. |
 | [tasks/2026-07-05-linux-port/plan.md](tasks/2026-07-05-linux-port/plan.md) | Plan für den Linux-Port: CLI-Player auf Basis von `SavageModPlayerCore`. |
+| [tasks/2026-07-10-it-support/plan.md](tasks/2026-07-10-it-support/plan.md) | Verbindlicher Meilenstein- und Orchestrierungsplan für Impulse-Tracker-Unterstützung (`.it`). |
 
 ---
 
@@ -386,6 +387,26 @@ XM-Kern (M0–M5) steht, committet, getestet; im echten App-GUI verifiziert (spi
 6. **Release** — ✅ ERLEDIGT (2026-07-10): v1.5.0 auf GitHub veröffentlicht (Tag + notarisiertes DMG, Notary-Profil per `NOTARY_PROFILE`-Env). READMEs auf XM aktualisiert, neuer Screenshot (32-Kanal-XM „Razer City", Dark Mode), Release-Notes EN/DE neu geschrieben.
 
 **Hinweis Standard-Playlist-Ordner:** Durch das App-Starten aus dem Repo wurde der Auto-Load-/Standard-Ordner auf `audio/` gezogen; Daniel hatte einen anderen gesetzt. Nächste Session ggf. zurückstellen anbieten (Wert steckt in `@AppStorage`).
+
+## Geplanter IT-Ausbau (2026-07-10, Version 1.5.1)
+
+Daniel hat die schrittweise Unterstützung von Impulse Tracker (`.it`) freigegeben.
+Der verbindliche Langzeitplan liegt unter
+`tasks/2026-07-10-it-support/`; `state.md`, `decisions.md` und `handoff.md` sind
+die maßgebliche Übergabe zwischen Sessions.
+
+Wichtige Leitplanken:
+
+- IT ist ein eigener Wiedergabe-/Kompatibilitätsmodus, kein S3M-Untermodus.
+- Vor dem Parserausbau werden Renderer-Stopp-Semantik, A/B-Harness und der
+  duplizierte Sequencer in getrennten M0-Paketen abgesichert.
+- NNA erfordert getrennte Pattern-Kanal- und Voice-Zustände sowie einen
+  vorallokierten Voice-Pool.
+- `.it` wird erst nach dem abschließenden Integrations-Gate öffentlich in Loader,
+  App-UTI und Quick Look aktiviert.
+- Die Agentenzelle ist auf vier feste Subagenten-Identitäten begrenzt; kein
+  Subagent darf weitere Agenten erzeugen.
+- Nächstes Paket ist `IT-001` aus `tasks/2026-07-10-it-support/handoff.md`.
 
 ## Fallen / Agent-Hinweise
 
