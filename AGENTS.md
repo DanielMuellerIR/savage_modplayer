@@ -383,7 +383,7 @@ XM-Kern (M0–M5) steht, committet, getestet; im echten App-GUI verifiziert (spi
    (Grid + Scopes als je EIN Canvas; VisualizerState/TransportState-Split).
 4. **Deferred aus den Meilensteinen:** Amiga-Frequenz-XMs (echte Periodentabelle statt linearer Näherung); XM-Effekte **Hxy** (globales Vol-Slide, braucht Per-Tick-Hook im Coordinator) + **Rxy** (Multi-Retrig); Memory/Feinheiten für die noch offenen XM-Effekte.
 5. **Länge-1-Modul: Headless-Test** — ✅ ERLEDIGT (2026-07-09). Die Crash-verhindernde Arithmetik wurde aus `PositionSlider` in den pure Core-Helfer `SongPositionScale` ausgelagert (der eigentliche SwiftUI-`Slider`-Crash bei `mod.length == 1` ist selbst nicht headless reproduzierbar). Regressionstest `LengthOneModuleTests` — Invariante „Slider-Range nie leer" (Längen 0/1/2/…) + Länge-1-Modul parst/rendert/seekt ohne Crash. Repro-Datei `audio/_ZZ_len1_crashtest.xm` entfernt.
-6. **Release** (erst nach 1+2): VERSION-Bump (1.4.4 → 1.5.0), danach `python3 build.py` (Publish-Guard), README/README.de auf XM (github-publish-Skill), dann GitHub-Release. Popo-Backup ist laufend aktuell.
+6. **Release** — ✅ ERLEDIGT (2026-07-10): v1.5.0 auf GitHub veröffentlicht (Tag + notarisiertes DMG, Notary-Profil per `NOTARY_PROFILE`-Env). READMEs auf XM aktualisiert, neuer Screenshot (32-Kanal-XM „Razer City", Dark Mode), Release-Notes EN/DE neu geschrieben.
 
 **Hinweis Standard-Playlist-Ordner:** Durch das App-Starten aus dem Repo wurde der Auto-Load-/Standard-Ordner auf `audio/` gezogen; Daniel hatte einen anderen gesetzt. Nächste Session ggf. zurückstellen anbieten (Wert steckt in `@AppStorage`).
 
