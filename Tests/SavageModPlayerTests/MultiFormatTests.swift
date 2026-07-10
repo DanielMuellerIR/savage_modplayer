@@ -404,6 +404,47 @@ final class MultiFormatTests: XCTestCase {
         }
     }
 
+    // Ein gestoppter Kanal darf auch bei einem geloopten Sample nichts mehr
+    // ausgeben. Der Preview-Block ruft dafuer denselben privaten Sample-Renderer
+    // wie Live-, Probe- und Offline-Wiedergabe auf, braucht aber kein Audiogeraet.
+    func testStoppedLoopedSampleRendersSilence() throws {
+        let inst = Instrument(index: 1, name: "Loop", length: 8, finetune: 0, volume: 64,
+                              repeatOffset: 2, repeatLength: 4,
+                              bytes: [Int8](repeating: 50, count: 8),
+                              isLooped: true)
+        let sample = try XCTUnwrap(inst.primarySample)
+        XCTAssertTrue(sample.isLooped, "Die Regression braucht einen echten Sample-Loop")
+        let ch = DSPChannel(index: 1)
+        ch.instrument = inst
+        ch.sample = sample
+        ch.volume = 64
+        ch.currentVolume = 64
+        ch.period = 214
+        ch.currentPeriod = 214
+        ch.sampleIndex = 2.0
+        ch.sampleSpeed = 0.375
+        ch.playing = false
+
+        let frames: AVAudioFrameCount = 32
+        let voice = PreviewVoice(framesLeft: Int(frames))
+        let block = ModPlayerCoordinator.createPreviewRenderBlock(
+            channel: ch, voice: voice, useInterpolation: false)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2))
+        let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+        pcm.frameLength = frames
+        var silence = ObjCBool(false)
+        var ts = AudioTimeStamp()
+
+        let status = block(&silence, &ts, frames, pcm.mutableAudioBufferList)
+
+        XCTAssertEqual(status, noErr)
+        let left = try XCTUnwrap(pcm.floatChannelData)[0]
+        for frame in 0..<Int(frames) {
+            XCTAssertEqual(left[frame], 0.0, accuracy: 0.0,
+                           "Gestoppter Loop war in Frame \(frame) noch hoerbar")
+        }
+    }
+
     // MARK: - Offline-WAV-Renderer (Quick-Look-Pfad)
 
     func testRenderWavDataProducesValidRiff() throws {

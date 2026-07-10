@@ -1396,6 +1396,9 @@ public final class ModPlayerCoordinator: ObservableObject {
 
     @inline(__always)
     nonisolated private static func renderChannelSample(channel ch: DSPChannel, useInterpolation: Bool) -> Float {
+        // Note-Cut, Key-Off und Stop setzen dieses Flag. Besonders geloopte
+        // Samples wuerden ohne den Guard trotz gestoppter Stimme weiterklingen.
+        guard ch.playing else { return 0.0 }
         guard let smp = ch.sample, smp.pcm.count > 0, ch.currentPeriod > 0 else { return 0.0 }
         guard ch.sampleIndex.isFinite, !ch.sampleIndex.isNaN else { return 0.0 }
 

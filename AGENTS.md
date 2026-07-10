@@ -388,7 +388,7 @@ XM-Kern (M0–M5) steht, committet, getestet; im echten App-GUI verifiziert (spi
 
 **Hinweis Standard-Playlist-Ordner:** Durch das App-Starten aus dem Repo wurde der Auto-Load-/Standard-Ordner auf `audio/` gezogen; Daniel hatte einen anderen gesetzt. Nächste Session ggf. zurückstellen anbieten (Wert steckt in `@AppStorage`).
 
-## Geplanter IT-Ausbau (2026-07-10, Version 1.5.1)
+## IT-Ausbau (seit 2026-07-10)
 
 Daniel hat die schrittweise Unterstützung von Impulse Tracker (`.it`) freigegeben.
 Der verbindliche Langzeitplan liegt unter
@@ -406,7 +406,14 @@ Wichtige Leitplanken:
   App-UTI und Quick Look aktiviert.
 - Die Agentenzelle ist auf vier feste Subagenten-Identitäten begrenzt; kein
   Subagent darf weitere Agenten erzeugen.
-- Nächstes Paket ist `IT-001` aus `tasks/2026-07-10-it-support/handoff.md`.
+- **IT-001 (Version 1.5.2):** Gestoppte geloopte Stimmen liefern im gemeinsamen
+  Sample-Renderer sofort Stille. Ein gerätefreier Regressionstest läuft über
+  denselben privaten Pfad wie Live-, Probe- und Offline-Wiedergabe; vor dem Fix
+  waren alle 32 Testframes trotz `playing == false` hörbar. Reviewer-`ACCEPT`,
+  90 Swift-Tests, JS-Parität und signierter App-/Quick-Look-Build sind grün.
+- Nächstes Paket ist `IT-002` aus `tasks/2026-07-10-it-support/handoff.md`:
+  `savage-cli --no-interp` bis in `ModuleRenderer` durchreichen und den
+  Interpolationsunterschied mit einem synthetischen WAV-Test beweisen.
 
 ## Fallen / Agent-Hinweise
 
