@@ -1,4 +1,5 @@
 import XCTest
+import Foundation
 @testable import SavageModPlayerCore
 
 final class ModParserTests: XCTestCase {
@@ -53,6 +54,13 @@ final class ModParserTests: XCTestCase {
         data[1085] = 0xAC
         data[1086] = 0x1C
         data[1087] = 0x20
+
+        // Nullparameter-Effekte auf weiteren Zeilen: 000 bleibt leer, die
+        // vorhandenen C00/D00/100-Befehle müssen trotz Datenbyte 0 präsent
+        // bleiben. Jede MOD-Row ist 16 Bytes breit.
+        data[1084 + 16 * 2 + 2] = 0x0C // C00
+        data[1084 + 16 * 3 + 2] = 0x0D // D00
+        data[1084 + 16 * 4 + 2] = 0x01 // 100
         
         // Run parser
         let mod = try ModParser.parse(data: data)
@@ -82,6 +90,39 @@ final class ModParserTests: XCTestCase {
         XCTAssertEqual(note.effectId, 0x0C)
         XCTAssertEqual(note.effectData, 0x20)
         XCTAssertEqual(note.hasEffect, true)
+        XCTAssertEqual(mod.patterns[0].rows[1].notes[0].effectPresent, false)
+        XCTAssertFalse(mod.patterns[0].rows[1].notes[0].hasEffect)
+        XCTAssertEqual(mod.patterns[0].rows[2].notes[0].effectPresent, true)
+        XCTAssertEqual(mod.patterns[0].rows[3].notes[0].effectPresent, true)
+        XCTAssertEqual(mod.patterns[0].rows[4].notes[0].effectPresent, true)
+    }
+
+    func testEffectPresenceOverrideAndLegacyCodable() throws {
+        let present = Note(instrument: 0, period: 0, effectId: 0, effectData: 0,
+                           effectPresent: true)
+        XCTAssertTrue(present.hasEffect)
+
+        let absent = Note(instrument: 0, period: 0, effectId: 0, effectData: 0,
+                          effectPresent: false)
+        XCTAssertFalse(absent.hasEffect)
+
+        let inferred = Note(instrument: 0, period: 0, effectId: 1, effectData: 0)
+        XCTAssertNil(inferred.effectPresent)
+        XCTAssertTrue(inferred.hasEffect)
+
+        let encoded = try JSONEncoder().encode(present)
+        let decoded = try JSONDecoder().decode(Note.self, from: encoded)
+        XCTAssertEqual(decoded.effectPresent, true)
+        XCTAssertTrue(decoded.hasEffect)
+
+        // Vor IT-005 gespeicherte Noten haben kein effectPresent-Feld.
+        let legacy = Data("""
+        {"instrument":0,"period":0,"effectId":0,"effectData":0,
+         "key":-1,"volume":-1,"volCmd":0}
+        """.utf8)
+        let decodedLegacy = try JSONDecoder().decode(Note.self, from: legacy)
+        XCTAssertNil(decodedLegacy.effectPresent)
+        XCTAssertFalse(decodedLegacy.hasEffect)
     }
     
     func testRealModFilesParsing() throws {

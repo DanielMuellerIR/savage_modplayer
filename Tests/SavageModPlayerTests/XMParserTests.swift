@@ -123,6 +123,9 @@ final class XMParserTests: XCTestCase {
                 case (33, 0): data += packCell(fxType: 0x10, fxParam: 0x30)    // Gxx (Global Volume)
                 case (34, 0): data += packCell(fxType: 0x0E, fxParam: 0x1A)    // E1x (Fine Porta Up)
                 case (35, 0): data += packCell(fxType: 0x21, fxParam: 0x15)    // X1x (Extra Fine Porta Up)
+                case (36, 0): data += packCell(fxType: 0x0C, fxParam: 0x00)    // C00
+                case (37, 0): data += packCell(fxType: 0x0D, fxParam: 0x00)    // D00
+                case (38, 0): data += packCell(fxType: 0x01, fxParam: 0x00)    // 100
                 default:      data += packCell()                              // leer -> 0x80
                 }
             }
@@ -266,6 +269,12 @@ final class XMParserTests: XCTestCase {
 
         // Leere Zelle -> key -1
         XCTAssertEqual(rows[1].notes[0].key, -1)
+        XCTAssertEqual(rows[1].notes[0].effectPresent, false)
+        XCTAssertFalse(rows[1].notes[0].hasEffect)
+
+        // Ein vollständig leeres Pattern wird nicht durch Pack-Bits erzeugt
+        // und bleibt deshalb ohne explizite Effektspalte.
+        XCTAssertNil(mod.patterns[1].rows[0].notes[0].effectPresent)
     }
 
     func testEffectTranslation() throws {
@@ -289,6 +298,17 @@ final class XMParserTests: XCTestCase {
         // Row 35: X1x (0x21, param 0x15) -> extraFinePortaUp, data 5
         XCTAssertEqual(rows[35].notes[0].effectId, ModuleEffect.extraFinePortaUp)
         XCTAssertEqual(rows[35].notes[0].effectData, 5)
+
+        // Auch XM-Effekte mit Parameter 0 bleiben als Befehle präsent.
+        XCTAssertEqual(rows[36].notes[0].effectId, 0x0C)
+        XCTAssertEqual(rows[36].notes[0].effectData, 0)
+        XCTAssertEqual(rows[36].notes[0].effectPresent, true)
+        XCTAssertEqual(rows[37].notes[0].effectId, 0x0D)
+        XCTAssertEqual(rows[37].notes[0].effectData, 0)
+        XCTAssertEqual(rows[37].notes[0].effectPresent, true)
+        XCTAssertEqual(rows[38].notes[0].effectId, 0x01)
+        XCTAssertEqual(rows[38].notes[0].effectData, 0)
+        XCTAssertEqual(rows[38].notes[0].effectPresent, true)
     }
 
     func testEmptyPatternHasFullRows() throws {

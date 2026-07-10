@@ -136,9 +136,9 @@ final class MultiFormatTests: XCTestCase {
         // Orders: Pattern 0, dann Ende-Marker
         data[0x60] = 0
         data[0x61] = 255
-        // Instrument-Parapointer -> 0x70, Pattern-Parapointer -> 0xB0
+        // Instrument-Parapointer -> 0x70, Pattern-Parapointer -> 0xD0
         data[0x62] = 0x07
-        data[0x64] = 0x0B
+        data[0x64] = 0x0D
 
         // Instrument bei 0x70: Typ 1, Sample bei 0x100 (memseg 0x10), 4 Bytes
         data[0x70] = 1
@@ -149,9 +149,10 @@ final class MultiFormatTests: XCTestCase {
         data[0x91] = 0x20
         data.replaceSubrange(0xBC..<0xC0, with: Data("SCRS".utf8)) // 0x70 + 0x4C
 
-        // Pattern bei 0xB0: Row 0 mit Note C-4/Inst 1/Vol 32/Effekt A03 auf
-        // Kanal 0, danach Rest leer.
-        var p = 0xB0
+        // Pattern bei 0xD0: Row 0 mit Note C-4/Inst 1/Vol 32/Effekt A03 auf
+        // Kanal 0. Row 1 enthält D00 (präsent trotz Nullparameter), Row 2
+        // eine Note ohne Effekt; danach bleiben die Rows leer.
+        var p = 0xD0
         data[p] = 0x30; p += 1   // gepackte Laenge (unbenutzt beim Lesen)
         data[p] = 0x00; p += 1
         data[p] = 0xE0; p += 1   // what: Kanal 0 + Note/Inst + Vol + Cmd
@@ -161,7 +162,17 @@ final class MultiFormatTests: XCTestCase {
         data[p] = 0x01; p += 1   // Cmd A (Set Speed)
         data[p] = 0x03; p += 1   // Info 3
         data[p] = 0x00; p += 1   // Ende Row 0
-        // Rows 1..63 leer (Nullbytes reichen)
+        data[p] = 0xA0; p += 1   // Row 1: Kanal 0 + Note/Inst + Cmd
+        data[p] = 0x40; p += 1   // C-4
+        data[p] = 0x01; p += 1   // Instrument 1
+        data[p] = 0x04; p += 1   // Cmd D (Volume Slide)
+        data[p] = 0x00; p += 1   // D00
+        data[p] = 0x00; p += 1   // Ende Row 1
+        data[p] = 0x20; p += 1   // Row 2: nur Note/Instrument
+        data[p] = 0x40; p += 1
+        data[p] = 0x01; p += 1
+        data[p] = 0x00; p += 1   // Ende Row 2
+        // Rows 3..63 leer (Nullbytes reichen)
 
         // Sampledaten bei 0x100 (unsigned)
         data[0x100] = 0x80
@@ -199,6 +210,21 @@ final class MultiFormatTests: XCTestCase {
         XCTAssertEqual(note.volume, 32)
         XCTAssertEqual(note.effectId, ModuleEffect.setSpeed)
         XCTAssertEqual(note.effectData, 3)
+        XCTAssertEqual(note.effectPresent, true)
+
+        let d00 = mod.patterns[0].rows[1].notes[0]
+        XCTAssertEqual(d00.effectId, ModuleEffect.volumeSlideS3M)
+        XCTAssertEqual(d00.effectData, 0)
+        XCTAssertEqual(d00.effectPresent, true)
+        XCTAssertTrue(d00.hasEffect)
+
+        let noEffect = mod.patterns[0].rows[2].notes[0]
+        XCTAssertEqual(noEffect.effectPresent, false)
+        XCTAssertFalse(noEffect.hasEffect)
+
+        let empty = mod.patterns[0].rows[3].notes[0]
+        XCTAssertNil(empty.effectPresent)
+        XCTAssertFalse(empty.hasEffect)
     }
 
     func testModuleLoaderDispatch() throws {

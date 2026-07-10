@@ -353,7 +353,8 @@ public class XMParser {
         }
         let (effectId, effectData) = translateEffect(type: fxType, param: fxParam)
         return Note(instrument: instr, period: 0, effectId: effectId, effectData: effectData,
-                    key: key, volume: -1, volCmd: vol)
+                    key: key, volume: -1, volCmd: vol,
+                    effectPresent: effectId != 0 || effectData != 0)
     }
 
     // XM-Effekt-Typ (0x00..0x21) + Parameter auf interne (effectId, effectData)

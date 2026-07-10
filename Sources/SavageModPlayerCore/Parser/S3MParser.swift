@@ -262,7 +262,8 @@ public class S3MParser {
                         effectId: effectId,
                         effectData: effectData,
                         key: key,
-                        volume: volByte >= 0 ? min(64, volByte) : -1
+                        volume: volByte >= 0 ? min(64, volByte) : -1,
+                        effectPresent: effectId != 0 || effectData != 0
                     )
                 }
             }

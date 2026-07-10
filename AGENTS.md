@@ -429,10 +429,15 @@ Wichtige Leitplanken:
   blieben bytegleich. Reviewer-`ACCEPT`, 92 Swift-Tests, alle gezielten
   Sequencer-/DSP-/Crash-/RType-Tests, JS-Parität und signierter App-/Quick-Look-
   Build sind grün.
-- M0 hat als verbleibende Vorarbeit noch die explizite Effekt-Präsenz für
-  Nullparameter-Befehle (`effectId == 0`, Parameter 0). Das nächste Paket ist
-  `IT-005` aus `tasks/2026-07-10-it-support/handoff.md`; M1 startet erst nach
-  diesem Gate.
+- **IT-005 (Version 1.5.6):** `Note.effectPresent` unterscheidet explizite
+  Nullparameter-Befehle von leeren Zellen, bleibt per optionalem Codable-Feld
+  legacy-kompatibel und wird in MOD/S3M/XM nach der bestehenden Übersetzung
+  eingefroren. Echte MOD-C00/D00/100-, S3M-D00- und XM-Nullparameter-Fixtures
+  sowie leere Zellen sind getestet. Reviewer-`ACCEPT`, 93 Swift-Tests,
+  JS-Parität und signierter App-/Quick-Look-Build sind grün.
+- M0 hat als verbleibende Vorarbeit Float-/Stem-Ausgabe für belastbare
+  Referenzmessungen offen. Das nächste Paket ist `IT-006` aus
+  `tasks/2026-07-10-it-support/handoff.md`; M1 startet erst nach diesem Gate.
 
 ## Fallen / Agent-Hinweise
 

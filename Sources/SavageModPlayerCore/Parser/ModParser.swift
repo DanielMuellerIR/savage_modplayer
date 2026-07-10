@@ -51,6 +51,11 @@ public struct Note: Sendable, Codable {
     public let period: Int          // 12-Bit-Wert für Amiga-Perioden (MOD); 0 bei S3M
     public let effectId: Int        // Effekt-ID (inkl. Extended 0xE0..0xEF und ModuleEffect.*)
     public let effectData: Int      // Effekt-Datenbyte (0..255)
+    // Explizite Präsenz der Effektspalte. nil behält die bisherige Inferenz
+    // (effectId/effectData != 0) für alte Aufrufer und alte Codable-Daten bei;
+    // true/false kann einen vorhandenen Nullparameter von einer leeren Zelle
+    // unterscheiden.
+    public let effectPresent: Bool?
     // S3M/XM-Notenschlüssel: Halbton-Index (Oktave*12 + Note, C-0 = 0). -1 = keine
     // Note, 254 = Note-Cut (^^), 253 = Key-Off (XM). MOD-Dateien nutzen weiterhin `period`.
     public let key: Int
@@ -67,7 +72,7 @@ public struct Note: Sendable, Codable {
     public static let keyOff = 253
 
     public var hasEffect: Bool {
-        return effectId != 0 || effectData != 0
+        return effectPresent ?? (effectId != 0 || effectData != 0)
     }
 
     public var effectHigh: Int {
@@ -78,14 +83,47 @@ public struct Note: Sendable, Codable {
         return effectData & 0x0F
     }
 
-    public init(instrument: Int, period: Int, effectId: Int, effectData: Int, key: Int = -1, volume: Int = -1, volCmd: Int = 0) {
+    public init(instrument: Int, period: Int, effectId: Int, effectData: Int, key: Int = -1, volume: Int = -1, volCmd: Int = 0, effectPresent: Bool? = nil) {
         self.instrument = instrument
         self.period = period
         self.effectId = effectId
         self.effectData = effectData
+        self.effectPresent = effectPresent
         self.key = key
         self.volume = volume
         self.volCmd = volCmd
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case instrument, period, effectId, effectData, effectPresent
+        case key, volume, volCmd
+    }
+
+    // Alte gespeicherte Noten enthalten kein effectPresent-Feld. Mit
+    // decodeIfPresent bleiben sie ohne Migration lesbar und nutzen wieder die
+    // historische Inferenz in hasEffect.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        instrument = try values.decode(Int.self, forKey: .instrument)
+        period = try values.decode(Int.self, forKey: .period)
+        effectId = try values.decode(Int.self, forKey: .effectId)
+        effectData = try values.decode(Int.self, forKey: .effectData)
+        effectPresent = try values.decodeIfPresent(Bool.self, forKey: .effectPresent)
+        key = try values.decodeIfPresent(Int.self, forKey: .key) ?? -1
+        volume = try values.decodeIfPresent(Int.self, forKey: .volume) ?? -1
+        volCmd = try values.decodeIfPresent(Int.self, forKey: .volCmd) ?? 0
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(instrument, forKey: .instrument)
+        try values.encode(period, forKey: .period)
+        try values.encode(effectId, forKey: .effectId)
+        try values.encode(effectData, forKey: .effectData)
+        try values.encodeIfPresent(effectPresent, forKey: .effectPresent)
+        try values.encode(key, forKey: .key)
+        try values.encode(volume, forKey: .volume)
+        try values.encode(volCmd, forKey: .volCmd)
     }
 }
 
@@ -587,7 +625,8 @@ public class ModParser {
                         instrument: instrument,
                         period: period,
                         effectId: effectId,
-                        effectData: effectData
+                        effectData: effectData,
+                        effectPresent: effectId != 0 || effectData != 0
                     ))
                 }
 
