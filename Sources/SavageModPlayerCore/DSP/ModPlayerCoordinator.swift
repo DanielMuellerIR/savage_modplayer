@@ -69,6 +69,28 @@ public final class RealtimeWaveBuffer: @unchecked Sendable {
     }
 }
 
+// Vorallozierte Capture-Pointer fuer genau EINEN Renderblock. Die Pointer
+// werden vor dem Audio-Callback vom Offline-Renderer bereitgestellt und nach
+// dessen Rueckkehr synchron in RenderCaptureBlock kopiert.
+struct RenderCapture: @unchecked Sendable {
+    let stereoLeftPointer: UnsafeMutablePointer<Float>
+    let stereoRightPointer: UnsafeMutablePointer<Float>
+    let stemsPointer: UnsafeMutablePointer<Float>
+    let frameCapacity: Int
+    let channelCount: Int
+}
+
+// Wertkopie eines fertigen Blocks fuer den Offline-Consumer. Diese Arrays
+// entstehen erst nach dem Callback und sind deshalb kein Echtzeit-Arbeitsschritt.
+struct RenderCaptureBlock: Sendable {
+    let frameCount: Int
+    let channelCount: Int
+    let stereoLeft: [Float]
+    let stereoRight: [Float]
+    // Kanal-major: stems[channel * frameCount + frame].
+    let stems: [Float]
+}
+
 // Wertkopie des Sequencer-Zustands an einer festen Frame-Grenze. Sie enthaelt
 // bewusst keine Referenz auf den laufenden Zustand und kein endReached: Die
 // Probe setzt dieses Live-/Offline-Abbruchsignal heute nicht.
@@ -793,7 +815,8 @@ public final class ModPlayerCoordinator: ObservableObject {
         waveBuffer: RealtimeWaveBuffer,
         dspChannels: [DSPChannel],
         mod: Mod,
-        sampleRate: Double
+        sampleRate: Double,
+        capture: RenderCapture? = nil
     ) -> @Sendable (UnsafeMutablePointer<ObjCBool>, UnsafePointer<AudioTimeStamp>, UInt32, UnsafeMutablePointer<AudioBufferList>) -> OSStatus {
         // Kanalzahl und Mix-Gain einmalig ableiten: Mehr als 4 Kanäle laufen
         // sonst deutlich heißer in den tanh-Limiter als das klassische
@@ -836,6 +859,8 @@ public final class ModPlayerCoordinator: ObservableObject {
                 let hasSolo = dspChannels.contains(where: { $0.isSoloed })
                 // Globale Lautstärke (S3M Vxx) wirkt auf alle Kanäle gleich.
                 let globalGain = state.globalVolume / 64.0
+                let captureStems = capture?.stemsPointer
+                let captureFrameCapacity = capture?.frameCapacity ?? 0
 
                 // Roll the wave sample write index
                 state.waveWriteIndex = (state.waveWriteIndex + 1) % 32
@@ -847,6 +872,12 @@ public final class ModPlayerCoordinator: ObservableObject {
                         channel: ch,
                         useInterpolation: state.useInterpolation
                     ) * globalGain
+
+                    // Roh-Stem vor Panning, Mix-Gain und Limiter. Bei Capture=nil
+                    // bleibt dies nur ein einfacher optionaler Pointer-Check.
+                    if let captureStems {
+                        captureStems[i * captureFrameCapacity + frame] = outputSample
+                    }
 
                     // Mute / Solo logic
                     var isChannelMuted = ch.isMuted
@@ -877,6 +908,12 @@ public final class ModPlayerCoordinator: ObservableObject {
                     if absVal > vuBuffer.pointer[i] {
                         vuBuffer.pointer[i] = absVal
                     }
+                }
+
+                // Float-Stereo unmittelbar vor dem tanh-Limiter sichern.
+                if let capture {
+                    capture.stereoLeftPointer[frame] = outL
+                    capture.stereoRightPointer[frame] = outR
                 }
                 
                 // Soft Limiter (Hyperbolic Tangent) gegen Clipping

@@ -20,6 +20,44 @@ public enum ModuleRenderer {
         normalize: Bool = true,
         useInterpolation: Bool = true
     ) throws -> Data {
+        try renderWavDataImpl(
+            mod: mod,
+            sampleRate: sampleRate,
+            maxDurationSeconds: maxDurationSeconds,
+            normalize: normalize,
+            useInterpolation: useInterpolation,
+            captureConsumer: nil
+        )
+    }
+
+    // Synchroner, blockweiser Offline-Pfad fuer Float-/Stem-Referenzmessungen.
+    // Der Consumer wird erst nach der Rueckkehr des Audio-Blocks aufgerufen.
+    nonisolated static func renderWavDataWithCapture(
+        mod: Mod,
+        sampleRate: Double = 44100.0,
+        maxDurationSeconds: Double = 300.0,
+        normalize: Bool = true,
+        useInterpolation: Bool = true,
+        consume: @escaping (RenderCaptureBlock) -> Void
+    ) throws -> Data {
+        try renderWavDataImpl(
+            mod: mod,
+            sampleRate: sampleRate,
+            maxDurationSeconds: maxDurationSeconds,
+            normalize: normalize,
+            useInterpolation: useInterpolation,
+            captureConsumer: consume
+        )
+    }
+
+    private static func renderWavDataImpl(
+        mod: Mod,
+        sampleRate: Double,
+        maxDurationSeconds: Double,
+        normalize: Bool,
+        useInterpolation: Bool,
+        captureConsumer: ((RenderCaptureBlock) -> Void)?
+    ) throws -> Data {
         guard let stereoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
             throw NSError(domain: "ModuleRenderer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Konnte Audio-Format nicht erstellen"])
         }
@@ -42,16 +80,49 @@ public enum ModuleRenderer {
         defer { dummyMasterWaves.deallocate() }
         for j in 0..<128 { dummyMasterWaves[j] = 0.0 }
 
+        let blockFrames = UInt32(1024)
+        let captureEnabled = captureConsumer != nil
+        var captureLeftPointer: UnsafeMutablePointer<Float>?
+        var captureRightPointer: UnsafeMutablePointer<Float>?
+        var captureStemsPointer: UnsafeMutablePointer<Float>?
+        var renderCapture: RenderCapture?
+        if captureEnabled {
+            let left = UnsafeMutablePointer<Float>.allocate(capacity: Int(blockFrames))
+            let right = UnsafeMutablePointer<Float>.allocate(capacity: Int(blockFrames))
+            let stems = UnsafeMutablePointer<Float>.allocate(capacity: channelCount * Int(blockFrames))
+            left.initialize(repeating: 0.0, count: Int(blockFrames))
+            right.initialize(repeating: 0.0, count: Int(blockFrames))
+            stems.initialize(repeating: 0.0, count: channelCount * Int(blockFrames))
+            captureLeftPointer = left
+            captureRightPointer = right
+            captureStemsPointer = stems
+            renderCapture = RenderCapture(
+                stereoLeftPointer: left,
+                stereoRightPointer: right,
+                stemsPointer: stems,
+                frameCapacity: Int(blockFrames),
+                channelCount: channelCount
+            )
+        }
+        defer {
+            captureLeftPointer?.deinitialize(count: Int(blockFrames))
+            captureLeftPointer?.deallocate()
+            captureRightPointer?.deinitialize(count: Int(blockFrames))
+            captureRightPointer?.deallocate()
+            captureStemsPointer?.deinitialize(count: channelCount * Int(blockFrames))
+            captureStemsPointer?.deallocate()
+        }
+
         let block = ModPlayerCoordinator.createRenderBlock(
             state: state,
             vuBuffer: RealtimeVUBuffer(pointer: dummyPeaks),
             waveBuffer: RealtimeWaveBuffer(channelWaves: dummyWaves, masterWaves: dummyMasterWaves),
             dspChannels: renderChannels,
             mod: mod,
-            sampleRate: sampleRate
+            sampleRate: sampleRate,
+            capture: renderCapture
         )
 
-        let blockFrames = UInt32(1024)
         guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: stereoFormat, frameCapacity: blockFrames) else {
             throw NSError(domain: "ModuleRenderer", code: 2, userInfo: [NSLocalizedDescriptionKey: "Konnte Buffer nicht erstellen"])
         }
@@ -70,6 +141,31 @@ public enum ModuleRenderer {
             let status = block(&isSilence, &timeStamp, blockFrames, abl)
             if status != noErr {
                 throw NSError(domain: "ModuleRenderer", code: Int(status), userInfo: [NSLocalizedDescriptionKey: "Audio-Render-Fehler"])
+            }
+
+            if let renderCapture, let captureConsumer {
+                let frames = Int(blockFrames)
+                var stereoLeft = [Float](repeating: 0.0, count: frames)
+                var stereoRight = [Float](repeating: 0.0, count: frames)
+                var stems = [Float](repeating: 0.0, count: channelCount * frames)
+                for frame in 0..<frames {
+                    stereoLeft[frame] = renderCapture.stereoLeftPointer[frame]
+                    stereoRight[frame] = renderCapture.stereoRightPointer[frame]
+                }
+                for channel in 0..<channelCount {
+                    let sourceOffset = channel * renderCapture.frameCapacity
+                    let destinationOffset = channel * frames
+                    for frame in 0..<frames {
+                        stems[destinationOffset + frame] = renderCapture.stemsPointer[sourceOffset + frame]
+                    }
+                }
+                captureConsumer(RenderCaptureBlock(
+                    frameCount: frames,
+                    channelCount: channelCount,
+                    stereoLeft: stereoLeft,
+                    stereoRight: stereoRight,
+                    stems: stems
+                ))
             }
 
             // Float-Stereo in interleaved 16-Bit-PCM (Little Endian) wandeln.

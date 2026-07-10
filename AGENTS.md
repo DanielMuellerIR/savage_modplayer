@@ -435,8 +435,16 @@ Wichtige Leitplanken:
   eingefroren. Echte MOD-C00/D00/100-, S3M-D00- und XM-Nullparameter-Fixtures
   sowie leere Zellen sind getestet. Reviewer-`ACCEPT`, 93 Swift-Tests,
   JS-Parität und signierter App-/Quick-Look-Build sind grün.
-- M0 hat als verbleibende Vorarbeit Float-/Stem-Ausgabe für belastbare
-  Referenzmessungen offen. Das nächste Paket ist `IT-006` aus
+- **IT-006 (Version 1.5.7):** Der gemeinsame Renderblock kann optional
+  vorallozierte Float-Stereo-Daten vor `tanh` sowie kanalweise Mono-Stems vor
+  Panning, Mix-Gain und Limiter in festen Offline-Blöcken erfassen. Der
+  bestehende WAV-Pfad bleibt bytegleich; der Consumer wird erst nach der
+  Callback-Rückkehr bedient und es gibt keine songlangen Stem-Puffer. Ein
+  synthetischer Mehrkanal-Test rekonstruiert Panning/Mix und Int16-Ausgabe bis
+  auf 1 LSB. Reviewer-`ACCEPT`, 94 Swift-Tests, JS-Parität und signierter
+  App-/Quick-Look-Build sind grün.
+- M0 hat als verbleibende Vorarbeit reproduzierbare Referenzmetriken gegen
+  `openmpt123` offen. Das nächste Paket ist `IT-007` aus
   `tasks/2026-07-10-it-support/handoff.md`; M1 startet erst nach diesem Gate.
 
 ## Fallen / Agent-Hinweise
