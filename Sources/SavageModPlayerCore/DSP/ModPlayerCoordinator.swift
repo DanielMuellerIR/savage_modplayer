@@ -819,142 +819,12 @@ public final class ModPlayerCoordinator: ObservableObject {
             let safeFrameCount = Int(frameCount)
 
             for frame in 0..<safeFrameCount {
-                if state.outputsUntilNextTick <= 0 {
-                    // Ticks erhöhen
-                    state.tick += 1
-                    if state.tick >= state.ticksPerRow {
-                        if state.patternDelayCounter > 0 {
-                            state.patternDelayCounter -= 1
-                            state.tick = 0 // Wiederhole aktuelle Zeile
-                        } else if state.patternDelay > 0 {
-                            state.patternDelayCounter = state.patternDelay
-                            state.patternDelay = 0
-                            state.tick = 0 // Wiederhole aktuelle Zeile
-                        } else {
-                            state.tick = 0
-                            
-                            // Row-Wechsel
-                            var targetPosition = state.position
-                            var targetRow = state.rowIndex + 1
-                            
-                            if state.patternLoopRow >= 0 {
-                                targetRow = state.patternLoopRow
-                                state.patternLoopRow = -1
-                            } else {
-                                if state.positionJump >= 0 {
-                                    targetPosition = state.positionJump
-                                    targetRow = 0
-                                    state.positionJump = -1
-                                }
-                                if state.patternBreak >= 0 {
-                                    if targetPosition == state.position {
-                                        targetPosition = state.position + 1
-                                    }
-                                    targetRow = state.patternBreak
-                                    state.patternBreak = -1
-                                } else if targetRow >= Self.patternRowCount(mod, at: state.position) {
-                                    targetRow = 0
-                                    targetPosition = state.position + 1
-                                }
-                            }
-
-                            state.position = targetPosition
-                            state.rowIndex = targetRow
-
-                                    // Song-Ende: zurueck an den Anfang wrappen UND danach
-                                    // dieselbe Lade-Logik durchlaufen, damit die erste Zeile
-                                    // nach dem Loop frisch getriggert wird (sonst war sie stumm).
-                                    // endReached signalisiert dem MainActor den Wrap (loopMode-Auswertung);
-                                    // das Audio laeuft glitch-frei weiter, bis der Hauptthread reagiert.
-                                    if state.position >= mod.length {
-                                        state.endReached = true
-                                        state.position = 0
-                                    }
-                                    do {
-                                        // Defensive bounds check for pattern and table indices
-                                        let posIndex = max(0, min(mod.patternTable.count - 1, state.position))
-                                        let patternIndex = mod.patternTable[posIndex]
-
-                                        if patternIndex >= 0 && patternIndex < mod.patterns.count {
-                                            let pattern = mod.patterns[patternIndex]
-                                            if state.rowIndex >= 0 && state.rowIndex < pattern.rows.count {
-                                                let row = pattern.rows[state.rowIndex]
-                                                if row.notes.count >= channelCount {
-                                                    for i in 0..<channelCount {
-                                                        let note = row.notes[i]
-                                                        let ch = dspChannels[i]
-
-                                                        // Jumps and breaks check
-                                                        if note.hasEffect && note.effectId == 0x0B {
-                                                            state.positionJump = note.effectData
-                                                        } else if note.hasEffect && note.effectId == 0x0D {
-                                                            // Dxx: BCD-Zielzeile. Werte > 63 (korruptes/
-                                                            // ueberlanges Break) auf 0 umlenken statt die
-                                                            // rowIndex unbegrenzt klettern zu lassen — sonst
-                                                            // haengt der Song auf einer Phantom-Zeile fest.
-                                                            let r = note.effectHigh * 10 + note.effectLow
-                                                            state.patternBreak = r > 63 ? 0 : r
-                                                        } else if note.hasEffect && note.effectId == 0xE6 {
-                                                            if note.effectLow == 0 {
-                                                                ch.patternLoopStartRow = state.rowIndex
-                                                            } else {
-                                                                if ch.patternLoopCount < 0 {
-                                                                    ch.patternLoopCount = note.effectLow
-                                                                }
-                                                                if ch.patternLoopCount > 0 {
-                                                                    ch.patternLoopCount -= 1
-                                                                    state.patternLoopRow = ch.patternLoopStartRow
-                                                                } else {
-                                                                    ch.patternLoopCount = -1
-                                                                }
-                                                            }
-                                                        } else if note.hasEffect && note.effectId == 0xEE {
-                                                            if state.patternDelayCounter == 0 {
-                                                                state.patternDelay = note.effectLow
-                                                            }
-                                                        } else if note.hasEffect && note.effectId == 0x0F {
-                                                            if note.effectData >= 1 && note.effectData <= 31 {
-                                                                state.ticksPerRow = note.effectData
-                                                            } else if note.effectData > 0 {
-                                                                state.bpm = note.effectData
-                                                                // Update output clock speed
-                                                                state.outputsPerTick = sampleRate * 60.0 / (Double(note.effectData) * 24.0)
-                                                            }
-                                                        } else if note.hasEffect && note.effectId == ModuleEffect.setSpeed {
-                                                            // S3M Axx: Ticks pro Zeile, volle 1..255.
-                                                            if note.effectData > 0 {
-                                                                state.ticksPerRow = note.effectData
-                                                            }
-                                                        } else if note.hasEffect && note.effectId == ModuleEffect.setTempo {
-                                                            // S3M Txx: BPM ab 32 (kleinere Werte sind
-                                                            // Tempo-Slides, die wir nicht unterstützen).
-                                                            if note.effectData >= 32 {
-                                                                state.bpm = note.effectData
-                                                                state.outputsPerTick = sampleRate * 60.0 / (Double(note.effectData) * 24.0)
-                                                            }
-                                                        } else if note.hasEffect && note.effectId == ModuleEffect.globalVolume {
-                                                            state.globalVolume = Float(min(64, max(0, note.effectData)))
-                                                        }
-
-                                                        ch.playNote(note, instruments: mod.instruments)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                        }
-                    }
-                    
-                    // Tick-Effekte
-                    let clockRate = state.clockRateOverride > 0
-                        ? state.clockRateOverride
-                        : (state.palClock ? 3546894.6 : 3579545.25)
-                    for i in 0..<channelCount {
-                        dspChannels[i].performTick(tick: state.tick, sampleRate: sampleRate, clockRate: clockRate)
-                    }
-
-                    state.outputsUntilNextTick += state.outputsPerTick
-                }
+                SequencerCore.advanceIfNeeded(
+                    state: state,
+                    channels: dspChannels,
+                    mod: mod,
+                    sampleRate: sampleRate
+                )
 
                 state.outputsUntilNextTick -= 1.0
                 state.elapsedFrames += 1
@@ -1258,30 +1128,12 @@ public final class ModPlayerCoordinator: ObservableObject {
         samples.reserveCapacity(totalFrames / 256)
 
         for frame in 0..<totalFrames {
-            if state.outputsUntilNextTick <= 0 {
-                state.tick += 1
-                if state.tick >= state.ticksPerRow {
-                    if state.patternDelayCounter > 0 {
-                        state.patternDelayCounter -= 1
-                        state.tick = 0
-                    } else if state.patternDelay > 0 {
-                        state.patternDelayCounter = state.patternDelay
-                        state.patternDelay = 0
-                        state.tick = 0
-                    } else {
-                        state.tick = 0
-                        Self.advanceRowForProbe(state: state, channels: renderChannels, mod: mod, sampleRate: sampleRate)
-                    }
-                }
-
-                let clockRate = state.clockRateOverride > 0
-                    ? state.clockRateOverride
-                    : (state.palClock ? 3546894.6 : 3579545.25)
-                for i in 0..<channelCount {
-                    renderChannels[i].performTick(tick: state.tick, sampleRate: sampleRate, clockRate: clockRate)
-                }
-                state.outputsUntilNextTick += state.outputsPerTick
-            }
+            SequencerCore.advanceIfNeeded(
+                state: state,
+                channels: renderChannels,
+                mod: mod,
+                sampleRate: sampleRate
+            )
 
             state.outputsUntilNextTick -= 1.0
             state.elapsedFrames += 1
@@ -1313,10 +1165,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Patterns → Timing-Drift + weiterlaufende Volume-Slides). Allokationsfrei
     // (nur Array-Index-Zugriffe), damit im Echtzeit-Render-Block nutzbar.
     nonisolated static func patternRowCount(_ mod: Mod, at position: Int) -> Int {
-        let posIndex = max(0, min(mod.patternTable.count - 1, position))
-        let patternIndex = mod.patternTable[posIndex]
-        guard patternIndex >= 0 && patternIndex < mod.patterns.count else { return 64 }
-        return mod.patterns[patternIndex].rows.count
+        SequencerCore.patternRowCount(mod, at: position)
     }
 
     // Globaler Zeilen-Index: Summe der ECHTEN Pattern-Reihen aller Positionen vor
@@ -1342,105 +1191,6 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
         let last = max(0, mod.length - 1)
         return (last, max(0, patternRowCount(mod, at: last) - 1))
-    }
-
-    nonisolated private static func advanceRowForProbe(
-        state: RealtimePlaybackState,
-        channels: [DSPChannel],
-        mod: Mod,
-        sampleRate: Double
-    ) {
-        var targetPosition = state.position
-        var targetRow = state.rowIndex + 1
-
-        if state.patternLoopRow >= 0 {
-            targetRow = state.patternLoopRow
-            state.patternLoopRow = -1
-        } else {
-            if state.positionJump >= 0 {
-                targetPosition = state.positionJump
-                targetRow = 0
-                state.positionJump = -1
-            }
-            if state.patternBreak >= 0 {
-                if targetPosition == state.position {
-                    targetPosition = state.position + 1
-                }
-                targetRow = state.patternBreak
-                state.patternBreak = -1
-            } else if targetRow >= Self.patternRowCount(mod, at: state.position) {
-                targetRow = 0
-                targetPosition = state.position + 1
-            }
-        }
-
-        state.position = targetPosition
-        state.rowIndex = targetRow
-
-        // Song-Ende: wrappen und danach Zeile 0 trotzdem laden (Parallele zum
-        // Live-Renderblock), damit die erste Loop-Zeile frisch getriggert wird.
-        if state.position >= mod.length {
-            state.position = 0
-        }
-
-        let posIndex = max(0, min(mod.patternTable.count - 1, state.position))
-        let patternIndex = mod.patternTable[posIndex]
-        guard patternIndex >= 0 && patternIndex < mod.patterns.count else { return }
-        let pattern = mod.patterns[patternIndex]
-        guard state.rowIndex >= 0 && state.rowIndex < pattern.rows.count else { return }
-        let row = pattern.rows[state.rowIndex]
-        let channelCount = channels.count
-        guard row.notes.count >= channelCount else { return }
-
-        for i in 0..<channelCount {
-            let note = row.notes[i]
-            let ch = channels[i]
-
-            if note.hasEffect && note.effectId == 0x0B {
-                state.positionJump = note.effectData
-            } else if note.hasEffect && note.effectId == 0x0D {
-                let r = note.effectHigh * 10 + note.effectLow
-                state.patternBreak = r > 63 ? 0 : r
-            } else if note.hasEffect && note.effectId == 0xE6 {
-                if note.effectLow == 0 {
-                    ch.patternLoopStartRow = state.rowIndex
-                } else {
-                    if ch.patternLoopCount < 0 {
-                        ch.patternLoopCount = note.effectLow
-                    }
-                    if ch.patternLoopCount > 0 {
-                        ch.patternLoopCount -= 1
-                        state.patternLoopRow = ch.patternLoopStartRow
-                    } else {
-                        ch.patternLoopCount = -1
-                    }
-                }
-            } else if note.hasEffect && note.effectId == 0xEE {
-                if state.patternDelayCounter == 0 {
-                    state.patternDelay = note.effectLow
-                }
-            } else if note.hasEffect && note.effectId == 0x0F {
-                if note.effectData >= 1 && note.effectData <= 31 {
-                    state.ticksPerRow = note.effectData
-                } else if note.effectData > 0 {
-                    state.bpm = note.effectData
-                    state.outputsPerTick = sampleRate * 60.0 / (Double(note.effectData) * 24.0)
-                }
-            } else if note.hasEffect && note.effectId == ModuleEffect.setSpeed {
-                if note.effectData > 0 {
-                    state.ticksPerRow = note.effectData
-                }
-            } else if note.hasEffect && note.effectId == ModuleEffect.setTempo {
-                if note.effectData >= 32 {
-                    state.bpm = note.effectData
-                    state.outputsPerTick = sampleRate * 60.0 / (Double(note.effectData) * 24.0)
-                }
-            } else if note.hasEffect && note.effectId == ModuleEffect.globalVolume {
-                state.globalVolume = Float(min(64, max(0, note.effectData)))
-            }
-
-            ch.playNote(note, instruments: mod.instruments)
-        }
     }
 
     @inline(__always)

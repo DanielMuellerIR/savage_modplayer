@@ -423,10 +423,16 @@ Wichtige Leitplanken:
   104 Abtastpunkte elementweise überein; Coverage beweist echte E61-Row-
   Transition und drei EE2-Tick-Wraps. Reviewer-`ACCEPT`, 92 Swift-Tests,
   JS-Parität und signierter App-/Quick-Look-Build sind grün.
-- Nächstes Paket ist `IT-004` aus `tasks/2026-07-10-it-support/handoff.md`:
-  Die doppelte Sequencer-Logik verhaltensgleich in einen internen,
-  allokationsfreien `SequencerCore` extrahieren. Die IT-003-Tests bleiben dabei
-  unverändert.
+- **IT-004 (Version 1.5.5):** Die doppelte Tick-, Row-, Sprung-, Delay- und
+  Effektlogik läuft jetzt in einem gemeinsamen statischen, allokationsfreien
+  `SequencerCore`; Live/Offline/Probe rufen denselben Kern. Die IT-003-Tests
+  blieben bytegleich. Reviewer-`ACCEPT`, 92 Swift-Tests, alle gezielten
+  Sequencer-/DSP-/Crash-/RType-Tests, JS-Parität und signierter App-/Quick-Look-
+  Build sind grün.
+- M0 hat als verbleibende Vorarbeit noch die explizite Effekt-Präsenz für
+  Nullparameter-Befehle (`effectId == 0`, Parameter 0). Das nächste Paket ist
+  `IT-005` aus `tasks/2026-07-10-it-support/handoff.md`; M1 startet erst nach
+  diesem Gate.
 
 ## Fallen / Agent-Hinweise
 
