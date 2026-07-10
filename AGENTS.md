@@ -451,8 +451,14 @@ Wichtige Leitplanken:
   hält Module/WAVs/Berichte aus Git. 14 synthetische Tests, doppelte
   Realwelt-Smokes für alle drei Formate, Reviewer-`ACCEPT`, 94 Swift-Tests,
   JS-Parität und signierter App-/Quick-Look-Build sind grün. M0 ist damit
-  abgeschlossen; das nächste Paket `IT-008` eröffnet M1 erst nach neuem
-  read-only Paketvertrag.
+  abgeschlossen.
+- **IT-008 (Version 1.5.9):** Die gemeinsamen Modelltypen wurden bytegleich aus
+  `ModParser.swift` in `ModuleModels.swift` ausgelagert. Öffentliche Signaturen,
+  Defaults, Raw Values, Codable-Verhalten sowie Parser- und Audiosemantik bleiben
+  unverändert; `.it` und neue Playback-Semantik sind noch deaktiviert. Reviewer-
+  `ACCEPT`, 44 gezielte Parser-Tests, 94 Swift-Tests, JS-Parität und signierter
+  App-/Quick-Look-Build sind grün. M1 ist damit gestartet; `IT-009` wird vor
+  weiteren Modelländerungen neu read-only geschnitten.
 
 ## Fallen / Agent-Hinweise
 
