@@ -69,6 +69,14 @@ public enum ModuleEffect {
     public static let extraFinePortaDown = 0x10E // XM X2x: Extra-Fine-Porta down (einmalig)
 }
 
+// Tracker können statt einer Tonhöhe einen besonderen Notenbefehl speichern.
+// Der String-Rohwert macht diese drei Bedeutungen auch in Codable-Daten eindeutig.
+public enum SpecialNote: String, Sendable, Codable {
+    case off
+    case cut
+    case fade
+}
+
 public struct Note: Sendable, Codable {
     public let instrument: Int      // 0..99 (0 = kein Instrument)
     public let period: Int          // 12-Bit-Wert für Amiga-Perioden (MOD); 0 bei S3M
@@ -79,8 +87,8 @@ public struct Note: Sendable, Codable {
     // true/false kann einen vorhandenen Nullparameter von einer leeren Zelle
     // unterscheiden.
     public let effectPresent: Bool?
-    // S3M/XM-Notenschlüssel: Halbton-Index (Oktave*12 + Note, C-0 = 0). -1 = keine
-    // Note, 254 = Note-Cut (^^), 253 = Key-Off (XM). MOD-Dateien nutzen weiterhin `period`.
+    // S3M/XM/IT-Notenschlüssel: Halbton-Index (Oktave*12 + Note, C-0 = 0).
+    // -1 bedeutet keine Note; 252...254 sind besondere Notenbefehle.
     public let key: Int
     // S3M-Volume-Column (0..64). -1 = keine Angabe.
     public let volume: Int
@@ -93,6 +101,19 @@ public struct Note: Sendable, Codable {
     public static let keyCut = 254
     // Sentinel für XM-Key-Off (Note 97) im `key`-Feld: gibt Sustain frei + startet Fadeout.
     public static let keyOff = 253
+    // Sentinel für IT-Note-Fade im `key`-Feld: startet das Ausblenden der Stimme.
+    public static let keyFade = 252
+
+    // Leitet den besonderen Notenbefehl nur aus `key` ab. Dadurch bleibt das
+    // bestehende Speicherformat von Note unverändert und enthält kein Zusatzfeld.
+    public var specialNote: SpecialNote? {
+        switch key {
+        case Self.keyOff: return .off
+        case Self.keyCut: return .cut
+        case Self.keyFade: return .fade
+        default: return nil
+        }
+    }
 
     public var hasEffect: Bool {
         return effectPresent ?? (effectId != 0 || effectData != 0)

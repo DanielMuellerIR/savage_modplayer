@@ -58,6 +58,51 @@ final class ModuleModelsTests: XCTestCase {
         XCTAssertFalse(ModuleLoader.supportedExtensions.contains("it"))
     }
 
+    func testSpecialNoteSentinelsAreDistinctAndOutsideRegularKeys() {
+        XCTAssertEqual(Note.keyFade, 252)
+        XCTAssertEqual(Note.keyOff, 253)
+        XCTAssertEqual(Note.keyCut, 254)
+
+        let sentinels = [Note.keyFade, Note.keyOff, Note.keyCut]
+
+        XCTAssertEqual(Set(sentinels).count, sentinels.count)
+        for sentinel in sentinels {
+            XCTAssertFalse((0...119).contains(sentinel))
+            XCTAssertNotEqual(sentinel, -1)
+        }
+    }
+
+    func testSpecialNoteMappingIsExact() {
+        XCTAssertEqual(makeNote(key: Note.keyOff).specialNote, .off)
+        XCTAssertEqual(makeNote(key: Note.keyCut).specialNote, .cut)
+        XCTAssertEqual(makeNote(key: Note.keyFade).specialNote, .fade)
+
+        for regularKey in [-1, 0, 95, 119] {
+            XCTAssertNil(makeNote(key: regularKey).specialNote)
+        }
+    }
+
+    func testSpecialNotesSurviveNoteCodableRoundTrip() throws {
+        let expected: [(Int, SpecialNote)] = [
+            (Note.keyOff, .off),
+            (Note.keyCut, .cut),
+            (Note.keyFade, .fade),
+        ]
+
+        for (key, specialNote) in expected {
+            let encoded = try JSONEncoder().encode(makeNote(key: key))
+            let decoded = try JSONDecoder().decode(Note.self, from: encoded)
+            XCTAssertEqual(decoded.key, key)
+            XCTAssertEqual(decoded.specialNote, specialNote)
+        }
+    }
+
+    /// Erstellt eine ansonsten leere Note, damit der jeweilige Schlüssel isoliert
+    /// geprüft wird und keine Effekt- oder Instrumentdaten das Ergebnis beeinflussen.
+    private func makeNote(key: Int) -> Note {
+        Note(instrument: 0, period: 0, effectId: 0, effectData: 0, key: key)
+    }
+
     /// Kodiert und dekodiert einen Wert wie bei einer späteren Speicherung.
     private func assertCodableRoundTrip(
         _ original: PlaybackSemantics,

@@ -464,6 +464,11 @@ Wichtige Leitplanken:
   `Compatible Gxx` müssen später ausdrücklich aus dem IT-Header kommen; `.it`
   bleibt im Loader und in der App deaktiviert. Reviewer-`ACCEPT`, 99 Swift-Tests,
   JS-Parität und signierter App-/Quick-Look-Build sind grün.
+- **IT-010 (Version 1.5.11):** `SpecialNote` trennt Note Off, Note Cut und Note
+  Fade im neutralen Modell. Die unveränderten Sentinels 253/254 und der neue
+  Fade-Sentinel 252 werden über `Note.specialNote` abgeleitet, ohne gespeichertes
+  Feld oder neue Wiedergabesemantik. Reviewer-`ACCEPT` nach einer Testkorrektur,
+  102 Swift-Tests, JS-Parität und signierter App-/Quick-Look-Build sind grün.
 
 ## Fallen / Agent-Hinweise
 
