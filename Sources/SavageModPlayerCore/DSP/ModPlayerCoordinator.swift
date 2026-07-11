@@ -20,12 +20,17 @@ public final class RealtimePlaybackState: Sendable {
     nonisolated(unsafe) public var outputsUntilNextTick: Double = 0.0
     // IT T0x/T1x verändert das Tempo auf den Folgeticks einer Zeile.
     nonisolated(unsafe) public var tempoSlide: Int = 0
+    // Wxy verändert die globale IT-Lautstärke auf Folgeticks.
+    nonisolated(unsafe) public var globalVolumeSlide: Int = 0
+    // S6x verlängert ausschließlich die aktuelle Zeile um x Ticks.
+    nonisolated(unsafe) public var rowTickDelay: Int = 0
     
     nonisolated(unsafe) public var positionJump: Int = -1
     nonisolated(unsafe) public var patternBreak: Int = -1
     nonisolated(unsafe) public var patternLoopRow: Int = -1
     nonisolated(unsafe) public var patternDelay: Int = 0
     nonisolated(unsafe) public var patternDelayCounter: Int = 0
+    nonisolated(unsafe) public var patternDelaySeen: Bool = false
     
     // New parameters for user controls
     nonisolated(unsafe) public var stereoSeparation: Float = 0.8
@@ -110,6 +115,10 @@ struct SequencerTraceSnapshot: Sendable, Equatable {
     let patternLoopRow: Int
     let patternDelay: Int
     let patternDelayCounter: Int
+    let tempoSlide: Int
+    let globalVolumeSlide: Int
+    let rowTickDelay: Int
+    let patternDelaySeen: Bool
 
     init(frame: Int, state: RealtimePlaybackState, mod: Mod) {
         self.frame = frame
@@ -130,6 +139,10 @@ struct SequencerTraceSnapshot: Sendable, Equatable {
         self.patternLoopRow = state.patternLoopRow
         self.patternDelay = state.patternDelay
         self.patternDelayCounter = state.patternDelayCounter
+        self.tempoSlide = state.tempoSlide
+        self.globalVolumeSlide = state.globalVolumeSlide
+        self.rowTickDelay = state.rowTickDelay
+        self.patternDelaySeen = state.patternDelaySeen
     }
 }
 
@@ -408,6 +421,18 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.patternLoopRow = -1
         state.patternDelay = 0
         state.patternDelayCounter = 0
+        state.patternDelaySeen = false
+        state.tempoSlide = 0
+        state.globalVolumeSlide = 0
+        state.rowTickDelay = 0
+        if let states = channels.first?.itVoicePool?.patternChannels {
+            for patternState in states {
+                patternState.patternLoopCount = -1
+                patternState.patternLoopStartRow = 0
+                patternState.channelVolumeSlide = 0
+                patternState.panningSlide = 0
+            }
+        }
         state.stereoSeparation = self.stereoSeparation
         state.useInterpolation = self.useInterpolation
         state.palClock = self.palClock
@@ -702,6 +727,19 @@ public final class ModPlayerCoordinator: ObservableObject {
         // nach dem Seek unerwartet verzoegern.
         state.patternDelay = 0
         state.patternDelayCounter = 0
+
+        state.patternDelaySeen = false
+        state.tempoSlide = 0
+        state.globalVolumeSlide = 0
+        state.rowTickDelay = 0
+        if let states = channels.first?.itVoicePool?.patternChannels {
+            for patternState in states {
+                patternState.patternLoopCount = -1
+                patternState.patternLoopStartRow = 0
+                patternState.channelVolumeSlide = 0
+                patternState.panningSlide = 0
+            }
+        }
 
         let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
         let outputsPerTick = sampleRate * 60.0 / (Double(state.bpm) * 24.0)

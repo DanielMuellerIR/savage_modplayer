@@ -531,6 +531,17 @@ Wichtige Leitplanken:
   Besitzerkanals; Sample-Mode bleibt beim günstigeren 64-Kanal-Pfad. Der volle
   256-Voice-Release-Stress bleibt schneller als Echtzeit, `CarryNNA.it` endet
   wie OpenMPT nach 5,760 Sekunden. `.it` bleibt bis M10 öffentlich deaktiviert.
+- **M8-Abschluss (Version 1.5.22):** IT-Effekt-Memory umfasst D/K/L, E/F/G mit
+  `Compatible Gxx`, M/N/P/Q/W/Y sowie die getrennte Volume-Column. `Old Effects`,
+  256-stufige Vibrato-/Tremolo-/Panbrello-Wellenformen, Sample-and-Hold-Random,
+  gehaltenes Panbrello und der rowübergreifende Qxy-Zähler folgen OpenMPT und
+  Schism Tracker. T-/W-Slides, S6x/SBx/SEx sowie kombinierte Bxx/Cxx-/Loop-/
+  Delay-Fälle laufen im gemeinsamen Sequencer. Offizielle Fixtures besitzen
+  Referenzdauer; `PatternDelays.it`/`VolColMemory.it` erreichen 0,989/0,986
+  Hüllkurvenkorrelation und 0,996/0,992 STFT-Cosine. Stereo-/Surround-Klangdetails
+  folgen in M9. 186 Swift-Tests, beide Audio-Regressionen, JS-Parität und der
+  signierte App-/Quick-Look-Build sind grün; `.it` bleibt bis M10 öffentlich
+  deaktiviert.
 
 ## Fallen / Agent-Hinweise
 

@@ -10,6 +10,8 @@ public final class ITPlaybackVoicePool: Sendable {
 
     private let linearMode: Bool
     private let instrumentMode: Bool
+    private let oldEffects: Bool
+    private let compatibleGxx: Bool
     private let samplePool: [Sample?]
     nonisolated(unsafe) private var nextGeneration: UInt64 = 1
     // Feste Aktivliste statt eines 256er-Scans pro Audio-Frame. Beide Arrays
@@ -22,6 +24,13 @@ public final class ITPlaybackVoicePool: Sendable {
         self.logicalChannelCount = max(1, min(64, mod.channelCount))
         self.linearMode = mod.linearFrequency
         self.instrumentMode = mod.itProperties?.usesInstruments ?? false
+        if case let .impulseTracker(compatibility)? = mod.playbackSemantics {
+            self.oldEffects = compatibility.oldEffects
+            self.compatibleGxx = compatibility.compatibleGxx
+        } else {
+            self.oldEffects = false
+            self.compatibleGxx = false
+        }
         self.usesBackgroundVoices = mod.itProperties?.usesInstruments ?? false
         self.samplePool = mod.samplePool
         self.activeVoiceIndices = [Int](repeating: 0, count: Self.voiceCapacity)
@@ -32,7 +41,8 @@ public final class ITPlaybackVoicePool: Sendable {
                 channelVolume: channel < mod.channelVolumes.count ? mod.channelVolumes[channel] : 64,
                 channelPanning: channel < mod.channelPannings.count ? mod.channelPannings[channel] : 0.5,
                 foregroundVoiceIndex: channel,
-                isMuted: channel < mod.channelDisabled.count ? mod.channelDisabled[channel] : false
+                isMuted: channel < mod.channelDisabled.count ? mod.channelDisabled[channel] : false,
+                isSurround: channel < mod.channelSurrounds.count ? mod.channelSurrounds[channel] : false
             )
         }
     }
@@ -87,11 +97,46 @@ public final class ITPlaybackVoicePool: Sendable {
         activeVoiceCount = write
     }
 
+    // Kanalbezogene Slides laufen auch ohne klingende Stimme weiter. Deshalb
+    // verarbeitet der Pool sie einmal pro Tick unabhängig von der Aktivliste.
+    @inline(__always)
+    public func performPatternChannelTick(tick: Int, voices: [DSPChannel]) {
+        guard tick > 0 else { return }
+        for state in patternChannels {
+            if state.channelVolumeSlide != 0 {
+                state.channelVolume = max(
+                    0,
+                    min(64, state.channelVolume + state.channelVolumeSlide)
+                )
+            }
+            if state.panningSlide != 0 {
+                state.channelPanning = max(
+                    0,
+                    min(1, state.channelPanning + state.panningSlide)
+                )
+                let index = state.foregroundVoiceIndex
+                if index >= 0, index < voices.count {
+                    voices[index].panning = state.channelPanning
+                }
+            }
+        }
+    }
+
+    @inline(__always)
+    public func resetPatternChannelRowEffects() {
+        for state in patternChannels {
+            state.channelVolumeSlide = 0
+            state.panningSlide = 0
+        }
+    }
+
     @inline(__always)
     private func configureBase(_ voice: DSPChannel) {
         voice.itMode = true
         voice.itLinearMode = linearMode
         voice.itInstrumentMode = instrumentMode
+        voice.itOldEffects = oldEffects
+        voice.itCompatibleGxx = compatibleGxx
         voice.itSamplePool = samplePool
         voice.itVoicePool = self
         voice.periodScale = 4

@@ -82,6 +82,16 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var volColVolSlide: Float = 0
     // XM Panning-Slide pro Tick in 0..255-Einheiten (Volume-Column D/E oder Pxy).
     nonisolated(unsafe) public var panSlide: Float = 0
+    // IT Yxy moduliert Panning, ohne die kanalbezogene Basis zu verändern.
+    nonisolated(unsafe) public var panbrelloActive: Bool = false
+    nonisolated(unsafe) public var panbrelloDepth: Float = 0
+    nonisolated(unsafe) public var panbrelloSpeed: Float = 0
+    nonisolated(unsafe) public var panbrelloIndex: Float = 0
+    nonisolated(unsafe) public var panbrelloDelta: Float = 0
+    // ITs Zufalls-Panbrello ist ein Sample-and-Hold-Signal: Die zufällige
+    // Auslenkung bleibt so viele Ticks stehen, wie Yxys Geschwindigkeit vorgibt.
+    nonisolated(unsafe) private var panbrelloRandomMemory: Float = 0
+    nonisolated(unsafe) private var itRandomState: UInt32 = 0x6D2B_79F5
     
     // Custom Panning (0..1.0, 0.5 = Center)
     nonisolated(unsafe) public var panning: Float = 0.5
@@ -101,6 +111,8 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var retrigger: Int = 0
     // IT Qxy verändert bei jedem Retrigger zusätzlich die Lautstärke über x.
     nonisolated(unsafe) public var retriggerVolumeMode: Int = 0
+    nonisolated(unsafe) private var itRetriggerCounter: Int = 0
+    nonisolated(unsafe) private var itRetriggerSuppressTickZero: Bool = false
     // -1 bedeutet: kein EDx-Delay aktiv. 0 ist ein echter Tick und darf
     // leere Rows nicht versehentlich wie eine verzögerte Note auslösen.
     nonisolated(unsafe) public var delayNote: Int = -1
@@ -125,6 +137,8 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var itMode: Bool = false
     nonisolated(unsafe) public var itLinearMode: Bool = false
     nonisolated(unsafe) public var itInstrumentMode: Bool = false
+    nonisolated(unsafe) public var itOldEffects: Bool = false
+    nonisolated(unsafe) public var itCompatibleGxx: Bool = false
     nonisolated(unsafe) public var itPatternState: ITPatternChannelState?
     nonisolated(unsafe) public var itVoicePool: ITPlaybackVoicePool?
     nonisolated(unsafe) public var itIsBackgroundVoice: Bool = false
@@ -142,6 +156,9 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var itEnvelopeReleased: Bool = false
     // IT Note Fade läuft unabhängig vom Key-Off: Fade gibt den Sustain nicht frei.
     nonisolated(unsafe) public var noteFadeActive: Bool = false
+    nonisolated(unsafe) public var itVolumeEnvelopeEnabled: Bool = true
+    nonisolated(unsafe) public var itPanningEnvelopeEnabled: Bool = true
+    nonisolated(unsafe) public var itPitchEnvelopeEnabled: Bool = true
 
     // ---- Instrument-Voice-Zustand (Hüllkurven / Fadeout / Auto-Vibrato) ----
     // Volume-/Panning-Envelope-Position (x-Achse = Ticks ab Note-Start).
@@ -183,21 +200,22 @@ public final class DSPChannel: Sendable {
         return sampleGlobal * instrumentGlobal * channelGlobal
     }
 
-    // Effektives Panning inkl. XM-/IT-Panning-Hüllkurve. Ohne Instrument-
-    // Hüllkurve bleibt das rohe Kanal-Panning unverändert.
+    // Effektives Panning inkl. XM-/IT-Panning-Hüllkurve und IT-Panbrello.
     public var effectivePanning: Float {
-        guard (xmLinearMode || (itMode && itInstrumentMode)), hasPanEnvelope else { return panning }
+        guard (xmLinearMode || (itMode && itInstrumentMode)), hasPanEnvelope else {
+            return max(0, min(1, panning + panbrelloDelta))
+        }
         if itMode, itInstrumentMode {
             let pan = panning * 256.0
             let displacement = panEnvValue - 32.0
             let finalPan = pan >= 128.0
                 ? pan + displacement * (256.0 - pan) / 32.0
                 : pan + displacement * pan / 32.0
-            return max(0.0, min(1.0, finalPan / 256.0))
+            return max(0.0, min(1.0, finalPan / 256.0 + panbrelloDelta))
         }
         let pan = panning * 255.0
         let finalPan = pan + (panEnvValue - 32.0) * (128.0 - abs(pan - 128.0)) / 32.0
-        return max(0.0, min(1.0, finalPan / 255.0))
+        return max(0.0, min(1.0, finalPan / 255.0 + panbrelloDelta))
     }
     // Skaliert Vibrato-Deltas: S3M-Perioden sind 4x feiner als Amiga-Perioden.
     nonisolated(unsafe) public var periodScale: Float = 1
@@ -263,6 +281,13 @@ public final class DSPChannel: Sendable {
         volumeSlide = 0
         volColVolSlide = 0
         panSlide = 0
+        panbrelloActive = false
+        panbrelloDepth = 0
+        panbrelloSpeed = 0
+        panbrelloIndex = 0
+        panbrelloDelta = 0
+        panbrelloRandomMemory = 0
+        itRandomState = 0x6D2B_79F5
         sampleIndex = 0.0
         sampleSpeed = 0.0
         sampleOffsetMemory = 0.0
@@ -272,6 +297,8 @@ public final class DSPChannel: Sendable {
         keyOffTick = -1
         retrigger = 0
         retriggerVolumeMode = 0
+        itRetriggerCounter = 0
+        itRetriggerSuppressTickZero = false
         delayNote = -1
         arpActive = false
         arpX = 0
@@ -284,6 +311,8 @@ public final class DSPChannel: Sendable {
         itMode = false
         itLinearMode = false
         itInstrumentMode = false
+        itOldEffects = false
+        itCompatibleGxx = false
         itPatternState = nil
         itVoicePool = nil
         itIsBackgroundVoice = false
@@ -296,6 +325,9 @@ public final class DSPChannel: Sendable {
         keyReleased = false
         itEnvelopeReleased = false
         noteFadeActive = false
+        itVolumeEnvelopeEnabled = true
+        itPanningEnvelopeEnabled = true
+        itPitchEnvelopeEnabled = true
         volEnvPos = 0
         panEnvPos = 0
         pitchEnvPos = 0
@@ -312,6 +344,8 @@ public final class DSPChannel: Sendable {
         periodMin = 113
         periodMax = 856
         tremorActive = false
+        panbrelloActive = false
+        panbrelloDelta = 0
         tremorOn = 1
         tremorOff = 1
         tremorCount = 0
@@ -521,6 +555,12 @@ public final class DSPChannel: Sendable {
             self.noteFadeActive = false
         }
 
+        // In IT beendet jede echte neue Note die gehaltene Panbrello-
+        // Auslenkung. Instrument-, Effekt- und Spezialnoten tun das nicht.
+        if itMode, note.period > 0 || playbackKey >= 0 {
+            panbrelloDelta = 0
+        }
+
         // S3M-Volume-Column überschreibt die Instrument-Default-Lautstärke.
         if note.volume >= 0, !itMode {
             self.setVolume = Float(min(64, note.volume))
@@ -573,6 +613,11 @@ public final class DSPChannel: Sendable {
                 && previousInstrumentIndex == self.instrument?.index
             initInstrumentVoice(preserveCarry: mayCarry)
         }
+        if itMode, self.setSampleIndex != nil {
+            if (itPatternState?.vibratoWaveform ?? 0) < 4 { vibratoIndex = 0 }
+            if (itPatternState?.tremoloWaveform ?? 0) < 4 { tremoloIndex = 0 }
+            if (itPatternState?.panbrelloWaveform ?? 0) < 4 { panbrelloIndex = 0 }
+        }
     }
 
     // Eine NNA-Hintergrundstimme behält Sample, Envelope, Fade und Filter,
@@ -592,6 +637,9 @@ public final class DSPChannel: Sendable {
         cutNoteTick = -1
         keyOffTick = -1
         tremorActive = false
+        // Eine NNA-Hintergrundstimme hält die letzte Panbrello-Auslenkung,
+        // erhält aber keine weiteren Phasenupdates vom Pattern-Kanal.
+        panbrelloActive = false
     }
 
     @inline(__always)
@@ -637,6 +685,11 @@ public final class DSPChannel: Sendable {
         }
         fadeVolume = 65536
         noteFadeActive = false
+        if itMode {
+            itVolumeEnvelopeEnabled = instrument?.volumeEnvelope != nil
+            itPanningEnvelopeEnabled = instrument?.panningEnvelope != nil
+            itPitchEnvelopeEnabled = instrument?.pitchEnvelope != nil
+        }
         keyReleased = false
         itEnvelopeReleased = false
         sampleDirection = 1.0
@@ -669,6 +722,89 @@ public final class DSPChannel: Sendable {
         } else {
             autoVibAmp = 0
             autoVibSweepStep = 0
+        }
+    }
+
+    private func applyITChannelVolumeSlide(
+        _ parameter: Int,
+        state: ITPatternChannelState
+    ) {
+        let high = (parameter >> 4) & 0x0F
+        let low = parameter & 0x0F
+        if low == 0x0F, high > 0 {
+            state.channelVolume = min(64, state.channelVolume + Float(high))
+        } else if high == 0x0F, low > 0 {
+            state.channelVolume = max(0, state.channelVolume - Float(low))
+        } else if low > 0 {
+            state.channelVolumeSlide = -Float(low)
+        } else if high > 0 {
+            state.channelVolumeSlide = Float(high)
+        }
+    }
+
+    private func applyITPanningSlide(_ parameter: Int, state: ITPatternChannelState) {
+        let high = (parameter >> 4) & 0x0F
+        let low = parameter & 0x0F
+        if low == 0x0F, high > 0 {
+            state.channelPanning = max(0, state.channelPanning - Float(high) / 64.0)
+            panning = state.channelPanning
+        } else if high == 0x0F, low > 0 {
+            state.channelPanning = min(1, state.channelPanning + Float(low) / 64.0)
+            panning = state.channelPanning
+        } else if low > 0 {
+            state.panningSlide = Float(low) / 64.0
+        } else if high > 0 {
+            state.panningSlide = -Float(high) / 64.0
+        }
+        state.isSurround = false
+        panbrelloDelta = 0
+    }
+
+    private func applyITSpecial(_ parameter: Int, state: ITPatternChannelState) {
+        let command = (parameter >> 4) & 0x0F
+        let value = parameter & 0x0F
+        switch command {
+        case 1:
+            state.glissandoEnabled = value != 0
+        case 3:
+            state.vibratoWaveform = value < 4 ? value : 0
+        case 4:
+            state.tremoloWaveform = value < 4 ? value : 0
+        case 5:
+            state.panbrelloWaveform = value < 4 ? value : 0
+            panbrelloIndex = 0
+        case 7:
+            switch value {
+            case 7: itVolumeEnvelopeEnabled = false
+            case 8: itVolumeEnvelopeEnabled = instrument?.volumeEnvelope != nil
+            case 9: itPanningEnvelopeEnabled = false
+            case 10: itPanningEnvelopeEnabled = instrument?.panningEnvelope != nil
+            case 11: itPitchEnvelopeEnabled = false
+            case 12: itPitchEnvelopeEnabled = instrument?.pitchEnvelope != nil
+            default: break
+            }
+        case 8:
+            let normalized = Float(value * 16 + 8) / 256.0
+            setPanning = normalized
+            state.channelPanning = normalized
+            state.isSurround = false
+            panbrelloDelta = 0
+        case 9:
+            if value == 0 { state.isSurround = false }
+            if value == 1 {
+                state.isSurround = true
+                setPanning = 0.5
+                state.channelPanning = 0.5
+                panbrelloDelta = 0
+            }
+        case 10:
+            state.highOffset = value
+        case 12:
+            cutNoteTick = value == 0 ? 1 : value
+        case 13:
+            delayNote = value == 0 ? -1 : value
+        default:
+            break
         }
     }
 
@@ -778,6 +914,9 @@ public final class DSPChannel: Sendable {
         // Tremor gilt nur auf Rows mit Ixy; der Zähler läuft aber über
         // Row-Grenzen weiter (ST3-Verhalten), darum hier kein tremorCount-Reset.
         self.tremorActive = false
+        self.panbrelloActive = false
+        // IT hält die letzte Yxy-Auslenkung auf effektlosen Rows. Erst eine
+        // neue Note oder ein expliziter Panning-Befehl setzt sie zurück.
 
         guard note.hasEffect else { return }
         
@@ -1023,16 +1162,28 @@ public final class DSPChannel: Sendable {
             applyITVolumeSlide(state.remembered(command: command, parameter: parameter))
         case 5: // Exx: Portamento down
             applyITPorta(
-                state.remembered(command: command, parameter: parameter),
+                state.rememberedPitchSlide(
+                    parameter: parameter,
+                    tonePortamento: false,
+                    compatibleGxx: itCompatibleGxx
+                ),
                 direction: 1
             )
         case 6: // Fxx: Portamento up
             applyITPorta(
-                state.remembered(command: command, parameter: parameter),
+                state.rememberedPitchSlide(
+                    parameter: parameter,
+                    tonePortamento: false,
+                    compatibleGxx: itCompatibleGxx
+                ),
                 direction: -1
             )
         case 7: // Gxx: Tone Portamento
-            let value = state.remembered(command: command, parameter: parameter)
+            let value = state.rememberedPitchSlide(
+                parameter: parameter,
+                tonePortamento: true,
+                compatibleGxx: itCompatibleGxx
+            )
             portamento = true
             if value > 0 { portamentoSpeed = Float(value) * portaScale }
             periodDelta = portamentoSpeed
@@ -1041,12 +1192,14 @@ public final class DSPChannel: Sendable {
         case 8: // Hxy: Vibrato
             let value = state.remembered(command: command, parameter: parameter)
             if value >> 4 > 0 { vibratoSpeed = Float(value >> 4) }
-            if value & 0x0F > 0 { vibratoDepth = Float(value & 0x0F) }
+            if value & 0x0F > 0 { vibratoDepth = Float((value & 0x0F) * 4) }
             vibrato = true
         case 9: // Ixy: Tremor
             let value = state.remembered(command: command, parameter: parameter)
-            tremorOn = ((value >> 4) & 0x0F) + 1
-            tremorOff = (value & 0x0F) + 1
+            let on = (value >> 4) & 0x0F
+            let off = value & 0x0F
+            tremorOn = itOldEffects ? on + 1 : max(1, on)
+            tremorOff = itOldEffects ? off + 1 : max(1, off)
             tremorActive = true
         case 10: // Jxy: Arpeggio
             let value = state.remembered(command: command, parameter: parameter)
@@ -1066,26 +1219,53 @@ public final class DSPChannel: Sendable {
             applyITVolumeSlide(state.remembered(
                 command: command, parameter: parameter, memoryCommand: 4
             ))
+        case 13: // Mxx: Channel Volume 0...64
+            if parameter <= 64 { state.channelVolume = Float(parameter) }
+        case 14: // Nxy: Channel Volume Slide mit eigenem Memory
+            applyITChannelVolumeSlide(
+                state.remembered(command: command, parameter: parameter),
+                state: state
+            )
         case 15: // Oxx: Sample Offset
             let value = state.remembered(command: command, parameter: parameter)
-            sampleOffsetMemory = Double(value) * 256.0
-            setSampleIndex = sampleOffsetMemory
+            sampleOffsetMemory = Double((state.highOffset << 16) | (value << 8))
+            let length = Double((setSample ?? sample)?.pcm.count ?? 0)
+            setSampleIndex = !itOldEffects && sampleOffsetMemory > length ? 0 : sampleOffsetMemory
+        case 16: // Pxy: Panning Slide mit eigenem Memory
+            applyITPanningSlide(
+                state.remembered(command: command, parameter: parameter),
+                state: state
+            )
         case 17: // Qxy: Retrigger mit Lautstärkemodus x alle y Ticks
             let value = state.remembered(command: command, parameter: parameter)
             retriggerVolumeMode = (value >> 4) & 0x0F
-            retrigger = value & 0x0F
+            retrigger = max(1, value & 0x0F)
+            if setSampleIndex != nil {
+                itRetriggerCounter = retrigger
+                itRetriggerSuppressTickZero = true
+            }
         case 18: // Rxy: Tremolo
             let value = state.remembered(command: command, parameter: parameter)
             if value >> 4 > 0 { tremoloSpeed = Float(value >> 4) }
             if value & 0x0F > 0 { tremoloDepth = Float(value & 0x0F) }
             tremolo = true
+        case 19: // Sxy: kanalbezogene Unterbefehle
+            applyITSpecial(parameter, state: state)
         case 21: // Uxy: Fine Vibrato; H/U teilen Phase und Parameterzustand.
             let value = state.remembered(command: command, parameter: parameter, memoryCommand: 8)
             if value >> 4 > 0 { vibratoSpeed = Float(value >> 4) }
-            if value & 0x0F > 0 { vibratoDepth = Float(value & 0x0F) / 4.0 }
+            if value & 0x0F > 0 { vibratoDepth = Float(value & 0x0F) }
             vibrato = true
         case 24: // Xxx: absolutes Panning 0...255
             setPanning = Float(parameter) / 255.0
+            state.channelPanning = Float(parameter) / 255.0
+            state.isSurround = false
+            panbrelloDelta = 0
+        case 25: // Yxy: Panbrello
+            let value = state.remembered(command: command, parameter: parameter)
+            if value >> 4 > 0 { panbrelloSpeed = Float(value >> 4) }
+            if value & 0x0F > 0 { panbrelloDepth = Float(value & 0x0F) }
+            panbrelloActive = true
         default:
             break
         }
@@ -1094,24 +1274,38 @@ public final class DSPChannel: Sendable {
     // IT-Volume-Column bleibt roh im Patternmodell. Die Bereiche entsprechen
     // ITTECH/OpenMPT; 213...222 sind reserviert und werden ignoriert.
     private func applyITVolumeColumn(_ value: Int) {
-        guard value >= 0 else { return }
+        guard value >= 0, let state = itPatternState else { return }
         switch value {
         case 0...64:
             setVolume = Float(value)
         case 65...74:
-            applyFineVolume(delta: Float(value - 65))
+            let amount = state.rememberedVolumeColumnSlide(value - 65)
+            applyFineVolume(delta: Float(amount))
         case 75...84:
-            applyFineVolume(delta: -Float(value - 75))
+            let amount = state.rememberedVolumeColumnSlide(value - 75)
+            applyFineVolume(delta: -Float(amount))
         case 85...94:
-            volColVolSlide = Float(value - 85)
+            volColVolSlide = Float(state.rememberedVolumeColumnSlide(value - 85))
         case 95...104:
-            volColVolSlide = -Float(value - 95)
+            volColVolSlide = -Float(state.rememberedVolumeColumnSlide(value - 95))
         case 105...114:
-            periodDelta = Float(value - 105) * portaScale
+            let amount = state.rememberedPitchSlide(
+                parameter: (value - 105) * 4,
+                tonePortamento: false,
+                compatibleGxx: itCompatibleGxx
+            )
+            periodDelta = Float(amount) * portaScale
         case 115...124:
-            periodDelta = -Float(value - 115) * portaScale
+            let amount = state.rememberedPitchSlide(
+                parameter: (value - 115) * 4,
+                tonePortamento: false,
+                compatibleGxx: itCompatibleGxx
+            )
+            periodDelta = -Float(amount) * portaScale
         case 128...192:
             setPanning = Float(value - 128) / 64.0
+            state.isSurround = false
+            panbrelloDelta = 0
         case 193...202:
             // Feste Zuordnung ohne lokales Array: playNote läuft im Audio-Thread.
             let speed: Int
@@ -1124,16 +1318,34 @@ public final class DSPChannel: Sendable {
             case 6: speed = 64
             case 7: speed = 96
             case 8: speed = 128
-            default: speed = 0
+            case 9: speed = 255
+            default: speed = state.rememberedPitchSlide(
+                parameter: 0,
+                tonePortamento: true,
+                compatibleGxx: itCompatibleGxx
+            )
             }
             portamento = true
-            if speed > 0 { portamentoSpeed = Float(speed) }
+            let remembered = state.rememberedPitchSlide(
+                parameter: speed,
+                tonePortamento: true,
+                compatibleGxx: itCompatibleGxx
+            )
+            if remembered > 0 { portamentoSpeed = Float(remembered) * portaScale }
             periodDelta = portamentoSpeed
             setCurrentPeriod = false
             setSampleIndex = nil
         case 203...212:
-            let depth = value - 203
-            if depth > 0 { vibratoDepth = Float(depth) }
+            let suppliedDepth = value - 203
+            let previous = state.remembered(command: 8, parameter: 0)
+            let depth = suppliedDepth > 0 ? suppliedDepth : (previous & 0x0F)
+            if suppliedDepth > 0 {
+                _ = state.remembered(
+                    command: 8,
+                    parameter: (previous & 0xF0) | suppliedDepth
+                )
+            }
+            if depth > 0 { vibratoDepth = Float(depth * 4) }
             vibrato = true
         case 223...232:
             setSampleIndex = Double(value - 223) * 256.0
@@ -1142,23 +1354,20 @@ public final class DSPChannel: Sendable {
         }
     }
 
-    // IT Dxy: reguläre Slides auf Tick > 0, Fine-/Extra-Fine-Formen einmalig
-    // auf Tick 0. Exakte Old-Effects-Abweichungen folgen gesammelt in M8.
+    // IT Dxy: reguläre Slides auf Tick > 0, Fine-Formen einmalig auf Tick 0.
     private func applyITVolumeSlide(_ parameter: Int) {
         let high = (parameter >> 4) & 0x0F
         let low = parameter & 0x0F
-        if low == 0x0F, high > 0 {
+        if low == 0, high > 0 {
+            volumeSlide = Float(high)
+            if high == 0x0F { applyFineVolume(delta: Float(high)) }
+        } else if high == 0, low > 0 {
+            volumeSlide = -Float(low)
+            if low == 0x0F { applyFineVolume(delta: -Float(low)) }
+        } else if low == 0x0F, high > 0 {
             applyFineVolume(delta: Float(high))
         } else if high == 0x0F, low > 0 {
             applyFineVolume(delta: -Float(low))
-        } else if low == 0x0E, high > 0 {
-            applyFineVolume(delta: Float(high))
-        } else if high == 0x0E, low > 0 {
-            applyFineVolume(delta: -Float(low))
-        } else if high > 0 {
-            volumeSlide = Float(high)
-        } else if low > 0 {
-            volumeSlide = -Float(low)
         }
     }
 
@@ -1263,34 +1472,49 @@ public final class DSPChannel: Sendable {
             self.currentVolume += self.volumeSlide
             if self.currentVolume < 0 { self.currentVolume = 0 }
             if self.currentVolume > 64 { self.currentVolume = 64 }
+            self.volume = self.currentVolume
         }
         
         if self.vibrato {
             // ProTracker: Vibrato-Sinusindex erst ab Tick 1 weiterdrehen, nie auf
             // Tick 0. Sonst driftet der Index jede Row um einen Schritt (vgl. der
             // gleiche tick>0-Guard beim Volume-Slide oben und im HTML-Worklet).
-            if tick > 0 {
-                self.vibratoIndex = (self.vibratoIndex + self.vibratoSpeed).truncatingRemainder(dividingBy: 64)
+            if tick > 0 || (itMode && !itOldEffects) {
+                let phaseStep = itMode ? 4 * self.vibratoSpeed : self.vibratoSpeed
+                let phaseRange: Float = itMode ? 256 : 64
+                self.vibratoIndex = (self.vibratoIndex + phaseStep)
+                    .truncatingRemainder(dividingBy: phaseRange)
                 // PT-Sinustabelle statt sin(): korrekte Amplitude (depth*255/128,
                 // ~doppelt so tief wie das alte sin()*depth) und Original-Wellenform.
-                let p = Int(self.vibratoIndex) & 63
-                let amp = DSPChannel.ptSineTable[p & 31]
+                let p = Int(self.vibratoIndex) & (itMode ? 255 : 63)
+                let amp = itMode
+                    ? itTrackerWaveform(type: itPatternState?.vibratoWaveform ?? 0, position: p)
+                    : (p < 32 ? DSPChannel.ptSineTable[p & 31] : -DSPChannel.ptSineTable[p & 31])
                 // periodScale: S3M-Perioden sind 4x feiner, das Vibrato-Delta
                 // muss entsprechend groesser ausfallen (ST3-Verhalten).
-                let delta = (p < 32 ? amp : -amp) * self.vibratoDepth / 128.0 * self.periodScale
-                self.currentPeriod = self.period + delta
+                let frequencySlide = itMode
+                    ? amp * self.vibratoDepth / (itOldEffects ? -32.0 : 64.0)
+                    : amp * self.vibratoDepth / 128.0 * self.periodScale
+                // IT beschreibt das Vorzeichen als Frequenz-Slide, unser
+                // lineares Modell als Periode: höhere Frequenz = kleinere Periode.
+                self.currentPeriod = self.period + (itMode ? -frequencySlide : frequencySlide)
             }
         }
         else if self.tremolo {
             // Wie Vibrato: Tremolo-Index nur auf Tick > 0 fortschreiben.
-            if tick > 0 {
-                self.tremoloIndex = (self.tremoloIndex + self.tremoloSpeed).truncatingRemainder(dividingBy: 64)
-                // PT-Sinustabelle: Amplitude depth*255/64 (~viermal so stark wie
-                // das alte sin()*depth) und Original-Wellenform.
-                let p = Int(self.tremoloIndex) & 63
-                let amp = DSPChannel.ptSineTable[p & 31]
-                let volDelta = (p < 32 ? amp : -amp) * self.tremoloDepth / 64.0
+            if tick > 0 || (itMode && !itOldEffects) {
+                // IT nutzt seine 256er Tabelle mit Tiefe /32; die anderen
+                // Tracker behalten die ProTracker-Tabelle mit Tiefe /64.
+                let p = Int(self.tremoloIndex) & (itMode ? 255 : 63)
+                let amp = itMode
+                    ? itTrackerWaveform(type: itPatternState?.tremoloWaveform ?? 0, position: p)
+                    : (p < 32 ? DSPChannel.ptSineTable[p & 31] : -DSPChannel.ptSineTable[p & 31])
+                let volDelta = amp * self.tremoloDepth / (itMode ? 32.0 : 64.0)
                 self.currentVolume = max(0.0, min(64.0, self.volume + volDelta))
+                let phaseStep = itMode ? 4 * self.tremoloSpeed : self.tremoloSpeed
+                let phaseRange: Float = itMode ? 256 : 64
+                self.tremoloIndex = (self.tremoloIndex + phaseStep)
+                    .truncatingRemainder(dividingBy: phaseRange)
             }
         }
         else if self.periodDelta != 0 {
@@ -1324,9 +1548,21 @@ public final class DSPChannel: Sendable {
                 self.currentPeriod = self.period / Float(pow(2.0, Double(Float(semis) / 12.0)))
             }
         }
-        else if self.retrigger > 0 && self.playing && tick > 0 && (tick % self.retrigger) == 0 {
-            self.sampleIndex = 0.0
-            if itMode { applyITRetriggerVolume() }
+        else if self.retrigger > 0 && self.playing {
+            if itMode {
+                if tick == 0, itRetriggerSuppressTickZero {
+                    itRetriggerSuppressTickZero = false
+                } else {
+                    itRetriggerCounter -= 1
+                    if itRetriggerCounter <= 0 {
+                        self.sampleIndex = 0.0
+                        applyITRetriggerVolume()
+                        itRetriggerCounter = self.retrigger
+                    }
+                }
+            } else if tick > 0 && (tick % self.retrigger) == 0 {
+                self.sampleIndex = 0.0
+            }
         }
         else if self.delayNote >= 0 && self.delayNote == tick {
             self.instrument = self.setInstrument
@@ -1338,6 +1574,13 @@ public final class DSPChannel: Sendable {
             if let per = self.setPeriod {
                 self.period = per
                 self.currentPeriod = per
+            }
+            if let pan = self.setPanning {
+                self.panning = max(0, min(1, pan))
+                if itMode { itPatternState?.channelPanning = self.panning }
+            }
+            if xmLinearMode || (itMode && itInstrumentMode) {
+                initInstrumentVoice(preserveCarry: false)
             }
             self.sampleIndex = 0.0
             self.playing = true
@@ -1355,6 +1598,29 @@ public final class DSPChannel: Sendable {
             self.tremorCount += 1
         }
 
+        if itMode, panbrelloActive {
+            let waveformType = itPatternState?.panbrelloWaveform ?? 0
+            let waveform: Float
+            if waveformType == 3 {
+                // Bei Random bezeichnet die Geschwindigkeit die Haltedauer,
+                // nicht den Phasenschritt (ITTECH / RandomWaveform.it).
+                if panbrelloIndex == 0 || panbrelloIndex >= panbrelloSpeed {
+                    panbrelloIndex = 0
+                    panbrelloRandomMemory = itTrackerWaveform(type: 3, position: 0)
+                }
+                panbrelloIndex += 1
+                waveform = panbrelloRandomMemory
+            } else {
+                waveform = itTrackerWaveform(
+                    type: waveformType,
+                    position: Int(panbrelloIndex) & 255
+                )
+                panbrelloIndex = (panbrelloIndex + panbrelloSpeed)
+                    .truncatingRemainder(dividingBy: 256)
+            }
+            panbrelloDelta = waveform * panbrelloDepth / 2_048.0
+        }
+
         // Instrument-Voice pro Tick: Hüllkurven und Fadeout bleiben strikt auf
         // XM beziehungsweise IT-Instrument-Modus begrenzt; MOD/S3M sind unberührt.
         var xmPeriodDelta: Float = 0
@@ -1363,6 +1629,7 @@ public final class DSPChannel: Sendable {
         // wie die Hauptspalten-Slides erst ab Tick 1.
         if (xmLinearMode || itMode), self.volColVolSlide != 0, tick > 0 {
             self.currentVolume = max(0.0, min(64.0, self.currentVolume + self.volColVolSlide))
+            self.volume = self.currentVolume
         }
 
         if xmLinearMode {
@@ -1389,7 +1656,7 @@ public final class DSPChannel: Sendable {
             xmPeriodDelta = advanceAutoVibrato()
         } else if itMode, itInstrumentMode {
             let envelopeReleased = itEnvelopeReleased
-            if let env = instrument?.volumeEnvelope {
+            if itVolumeEnvelopeEnabled, let env = instrument?.volumeEnvelope {
                 envVolumeFactor = envelopeValue(env, at: volEnvPos) / 64.0
                 let ended = stepEnvelope(
                     env, pos: &volEnvPos, released: envelopeReleased, itStyle: true
@@ -1404,11 +1671,15 @@ public final class DSPChannel: Sendable {
             } else {
                 envVolumeFactor = 1.0
             }
-            if let env = instrument?.panningEnvelope {
+            if itPanningEnvelopeEnabled, let env = instrument?.panningEnvelope {
                 panEnvValue = envelopeValue(env, at: panEnvPos)
                 stepEnvelope(env, pos: &panEnvPos, released: envelopeReleased, itStyle: true)
+            } else {
+                panEnvValue = 32
             }
-            if let env = instrument?.pitchEnvelope, env.valueMode == .pitch {
+            if itPitchEnvelopeEnabled,
+               let env = instrument?.pitchEnvelope,
+               env.valueMode == .pitch {
                 pitchEnvValue = envelopeValue(env, at: pitchEnvPos)
                 itPitchEnvelopeValue = pitchEnvValue
                 stepEnvelope(env, pos: &pitchEnvPos, released: envelopeReleased, itStyle: true)
@@ -1459,7 +1730,30 @@ public final class DSPChannel: Sendable {
         }
 
         if self.cutNoteTick == tick {
-            self.currentVolume = 0.0
+            if itMode {
+                self.playing = false
+                self.fadeVolume = 0
+            } else {
+                self.currentVolume = 0.0
+            }
+        }
+    }
+
+    // Impulse Trackers 256-stufige Wellenformen mit der originalen Amplitude
+    // -64...64. Random nutzt einen festen kanalweisen LCG und bleibt dadurch
+    // testbar und allokationsfrei.
+    private func itTrackerWaveform(type: Int, position: Int) -> Float {
+        let p = position & 255
+        switch type & 0x03 {
+        case 1: // Ramp down
+            return Float(64 - (p + 1) / 2)
+        case 2: // Square
+            return p < 128 ? 64 : 0
+        case 3: // Random
+            itRandomState = itRandomState &* 1_664_525 &+ 1_013_904_223
+            return Float(Int((itRandomState >> 25) & 0x7F) - 64)
+        default:
+            return Float((sin(Double(p) / 256.0 * 2.0 * Double.pi) * 64.0).rounded())
         }
     }
 

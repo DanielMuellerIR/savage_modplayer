@@ -20,7 +20,12 @@ enum SequencerCore {
                 state.patternDelayCounter -= 1
                 state.tick = 0
             } else if state.patternDelay > 0 {
-                state.patternDelayCounter = state.patternDelay
+                // IT-SEx wiederholt die aktuelle Zeile genau x-mal; der
+                // Übergang startet bereits die erste Wiederholung. MOD-EE2
+                // behält den seit M0 eingefrorenen historischen Trace.
+                state.patternDelayCounter = mod.format == .it
+                    ? max(0, state.patternDelay - 1)
+                    : state.patternDelay
                 state.patternDelay = 0
                 state.tick = 0
             } else {
@@ -34,11 +39,18 @@ enum SequencerCore {
             state.bpm = max(32, min(255, state.bpm + state.tempoSlide))
             state.outputsPerTick = sampleRate * 60.0 / (Double(state.bpm) * 24.0)
         }
+        if mod.format == .it, state.globalVolumeSlide != 0, state.tick > 0 {
+            state.globalVolume = max(
+                0,
+                min(128, state.globalVolume + Float(state.globalVolumeSlide))
+            )
+        }
 
         let clockRate = state.clockRateOverride > 0
             ? state.clockRateOverride
             : (state.palClock ? 3546894.6 : 3579545.25)
         if let pool = channels.first?.itVoicePool, pool.usesBackgroundVoices {
+            pool.performPatternChannelTick(tick: state.tick, voices: channels)
             pool.compactActiveVoices(channels)
             for position in 0..<pool.activeVoiceCount {
                 let index = pool.activeVoiceIndex(at: position)
@@ -49,6 +61,10 @@ enum SequencerCore {
                 )
             }
         } else {
+            channels.first?.itVoicePool?.performPatternChannelTick(
+                tick: state.tick,
+                voices: channels
+            )
             for i in 0..<channels.count {
                 channels[i].performTick(tick: state.tick, sampleRate: sampleRate, clockRate: clockRate)
             }
@@ -71,6 +87,10 @@ enum SequencerCore {
         mod: Mod,
         sampleRate: Double
     ) {
+        if mod.format == .it, state.rowTickDelay > 0 {
+            state.ticksPerRow = max(1, state.ticksPerRow - state.rowTickDelay)
+            state.rowTickDelay = 0
+        }
         var targetPosition = state.position
         var targetRow = state.rowIndex + 1
 
@@ -119,7 +139,12 @@ enum SequencerCore {
         let logicalChannelCount = min(mod.channelCount, row.notes.count)
         guard logicalChannelCount > 0 else { return }
 
-        if mod.format == .it { state.tempoSlide = 0 }
+        if mod.format == .it {
+            state.tempoSlide = 0
+            state.globalVolumeSlide = 0
+            state.patternDelaySeen = false
+            channels.first?.itVoicePool?.resetPatternChannelRowEffects()
+        }
         for i in 0..<logicalChannelCount {
             let note = row.notes[i]
             let channel: DSPChannel
@@ -188,6 +213,18 @@ enum SequencerCore {
                 if note.effectData <= 128 {
                     state.globalVolume = Float(note.effectData)
                 }
+            case 23: // Wxy: Global Volume Slide
+                let value = channel.itPatternState?.remembered(
+                    command: command,
+                    parameter: note.effectData
+                ) ?? note.effectData
+                applyITGlobalVolumeSlide(value, state: state)
+            case 19: // Sxy: globale Sequencer-Unterbefehle
+                applyITSpecial(
+                    note.effectData,
+                    channel: channel,
+                    state: state
+                )
             default:
                 break
             }
@@ -237,6 +274,74 @@ enum SequencerCore {
             }
         } else if note.hasEffect && note.effectId == ModuleEffect.globalVolume {
             state.globalVolume = Float(min(64, max(0, note.effectData)))
+        }
+    }
+
+    @inline(__always)
+    private static func applyITGlobalVolumeSlide(
+        _ parameter: Int,
+        state: RealtimePlaybackState
+    ) {
+        let high = (parameter >> 4) & 0x0F
+        let low = parameter & 0x0F
+        if low == 0x0F, high > 0 {
+            state.globalVolume = min(128, state.globalVolume + Float(high))
+        } else if high == 0x0F, low > 0 {
+            state.globalVolume = max(0, state.globalVolume - Float(low))
+        } else if high > 0 {
+            state.globalVolumeSlide = high
+        } else if low > 0 {
+            state.globalVolumeSlide = -low
+        }
+    }
+
+    @inline(__always)
+    private static func applyITSpecial(
+        _ parameter: Int,
+        channel: DSPChannel,
+        state: RealtimePlaybackState
+    ) {
+        let command = (parameter >> 4) & 0x0F
+        let value = parameter & 0x0F
+        switch command {
+        case 6: // S6x: aktuelle Zeile um x Ticks verlängern
+            if value > 0 {
+                state.rowTickDelay += value
+                state.ticksPerRow += value
+            }
+        case 11: // SBx: Pattern Loop
+            if let patternState = channel.itPatternState {
+                if value == 0 {
+                    patternState.patternLoopStartRow = state.rowIndex
+                } else {
+                    if patternState.patternLoopCount < 0 {
+                        patternState.patternLoopCount = value
+                    }
+                    if patternState.patternLoopCount > 0 {
+                        patternState.patternLoopCount -= 1
+                        state.patternLoopRow = patternState.patternLoopStartRow
+                    } else {
+                        patternState.patternLoopCount = -1
+                    }
+                }
+            } else if value == 0 {
+                channel.patternLoopStartRow = state.rowIndex
+            } else {
+                if channel.patternLoopCount < 0 { channel.patternLoopCount = value }
+                if channel.patternLoopCount > 0 {
+                    channel.patternLoopCount -= 1
+                    state.patternLoopRow = channel.patternLoopStartRow
+                } else {
+                    channel.patternLoopCount = -1
+                }
+            }
+        case 14: // SEx: Pattern Delay um x zusätzliche Rows
+            if !state.patternDelaySeen {
+                state.patternDelaySeen = true
+                state.patternDelay = value
+            }
+        default:
+            break
         }
     }
 }

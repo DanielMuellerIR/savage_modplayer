@@ -162,6 +162,36 @@ final class ITVoicePoolTests: XCTestCase {
         }
     }
 
+    func testS7xEnvelopeControlsPauseAndResumeEachEnvelope() throws {
+        let setup = try makeSetup(newNoteAction: .continuePlaying, carryEnvelopes: true)
+        setup.pool.process(
+            note: note(key: 48, instrument: 1), logicalChannel: 0,
+            voices: setup.voices, instruments: setup.mod.instruments
+        )
+        let voice = setup.voices[0]
+
+        for (off, on, keyPath) in [
+            (7, 8, \DSPChannel.volEnvPos),
+            (9, 10, \DSPChannel.panEnvPos),
+            (11, 12, \DSPChannel.pitchEnvPos),
+        ] {
+            setup.pool.process(
+                note: s7Note(low: off), logicalChannel: 0,
+                voices: setup.voices, instruments: setup.mod.instruments
+            )
+            let before = voice[keyPath: keyPath]
+            voice.performTick(tick: 1, sampleRate: sampleRate, clockRate: clockRate)
+            XCTAssertEqual(voice[keyPath: keyPath], before, "S7\(off) muss Envelope anhalten")
+
+            setup.pool.process(
+                note: s7Note(low: on), logicalChannel: 0,
+                voices: setup.voices, instruments: setup.mod.instruments
+            )
+            voice.performTick(tick: 1, sampleRate: sampleRate, clockRate: clockRate)
+            XCTAssertGreaterThan(voice[keyPath: keyPath], before, "S7\(on) muss Envelope fortsetzen")
+        }
+    }
+
     func testVoiceStealingIsQuietestThenOldestThenLowestIndex() throws {
         let setup = try makeSetup(newNoteAction: .continuePlaying)
         let owner = setup.pool.patternChannels[0]
@@ -450,12 +480,23 @@ final class ITVoicePoolTests: XCTestCase {
             loopEnabled: false,
             carryEnabled: true
         ) : nil
+        let pitchCarryEnvelope = carryEnvelopes ? Envelope(
+            points: [EnvelopePoint(frame: 0, value: 32), EnvelopePoint(frame: 20, value: 40)],
+            sustainStart: 0,
+            sustainEnd: 0,
+            loopStart: 0,
+            loopEnd: 0,
+            sustainEnabled: false,
+            loopEnabled: false,
+            carryEnabled: true,
+            valueMode: .pitch
+        ) : nil
         let instrument = Instrument(
             index: 1, name: "Voice pool", samples: [sound, secondSound],
             volumeEnvelope: carryEnvelope,
             panningEnvelope: carryEnvelope,
             fadeout: 512,
-            pitchEnvelope: carryEnvelope,
+            pitchEnvelope: pitchCarryEnvelope,
             noteSampleMapping: mapping, itProperties: properties()
         )
         let secondInstrument = Instrument(
