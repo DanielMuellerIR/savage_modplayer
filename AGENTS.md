@@ -496,7 +496,14 @@ Wichtige Leitplanken:
   Sustain-Loops, C5Speed, Global Volume, Default Pan und Sample-Vibrato bleiben
   erhalten; Sample-Mode erzeugt interne Ein-Sample-Instrumente. 7 gezielte Tests
   mit 24er Golden-Matrix, 131 Gesamttests, beide Audio-Regressionen, JS-Parität
-  und signierter App-Build sind grün. Kompression folgt isoliert in M4.
+  und signierter App-Build sind grün.
+- **M4-Abschluss (Version 1.5.18):** Der isolierte LSB-first-
+  `ITSampleDecompressor` dekodiert IT-2.14-/2.15-Blöcke mit 8/16 Bit, allen drei
+  Bitbreitenwechsel-Modi, korrekten Blockresets und getrennten Stereo-Blöcken.
+  Handvektoren, beide Blockgrenzen und beschädigte Bitströme sind getestet; ein
+  OpenMPT-1.32.10-Referenzrender korreliert samplegenau mit 1,0. 141
+  Gesamttests, beide Audio-Regressionen, JS-Parität und signierter App-Build
+  sind grün. `.it` bleibt bis zur Integration öffentlich deaktiviert.
 
 ## Fallen / Agent-Hinweise
 

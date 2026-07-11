@@ -189,6 +189,44 @@ final class ITSampleParserTests: XCTestCase {
         XCTAssertEqual(module.instruments[1]?.samples.first?.pcm, sample.pcm)
     }
 
+    func testCompressedIT214AndIT215IntegrateIntoSamplePool() throws {
+        let it214 = SampleSpec(
+            name: "it214", frameCount: 3,
+            data: compressedBlock([(1, 9), (1, 9), (254, 9)]),
+            compressed: true
+        )
+        let it215 = SampleSpec(
+            name: "it215", frameCount: 3,
+            data: compressedBlock([(1, 9), (1, 9), (1, 9)]),
+            isDelta: true,
+            compressed: true
+        )
+
+        let module = try ITParser.parse(data: makeSampleIT([it214, it215]))
+        XCTAssertEqual(module.samplePool[1]?.pcm, [1.0 / 256.0, 2.0 / 256.0, 0])
+        XCTAssertEqual(module.samplePool[2]?.pcm, [1.0 / 256.0, 3.0 / 256.0, 6.0 / 256.0])
+    }
+
+    func testLongCompressedWaveformMatchesReferencePCM() throws {
+        let waveform = (0..<256).map { frame -> Int in
+            let phase = frame % 64
+            return phase < 32 ? -96 + phase * 6 : 96 - (phase - 32) * 6
+        }
+        var previous = 0
+        let deltas = waveform.map { value -> (Int, Int) in
+            defer { previous = value }
+            return ((value - previous) & 0xFF, 9)
+        }
+        let spec = SampleSpec(
+            name: "OpenMPT compressed reference",
+            frameCount: waveform.count,
+            data: compressedBlock(deltas),
+            compressed: true
+        )
+        let sample = try XCTUnwrap(ITParser.parse(data: makeSampleIT([spec])).samplePool[1])
+        XCTAssertEqual(sample.pcm, waveform.map { Float($0) / 256.0 })
+    }
+
     func testMissingDataFlagCreatesSilentButDescribedSample() throws {
         var spec = SampleSpec(name: "empty", frameCount: 4, data: [])
         spec.dataPresent = false
@@ -245,8 +283,12 @@ final class ITSampleParserTests: XCTestCase {
 
         var compressedSpec = validSpec
         compressedSpec.compressed = true
+        compressedSpec.data = [0, 0]
         XCTAssertThrowsError(try ITParser.parse(data: makeSampleIT([compressedSpec]))) {
-            XCTAssertEqual($0 as? ITParser.ParserError, .compressedSampleRequiresM4(1))
+            XCTAssertEqual(
+                $0 as? ITSampleDecompressor.DecompressionError,
+                .invalidBlockLength(0)
+            )
         }
     }
 
@@ -376,6 +418,26 @@ final class ITSampleParserTests: XCTestCase {
             }
         }
         return result
+    }
+
+    private func compressedBlock(_ values: [(Int, Int)]) -> [UInt8] {
+        var payload = [UInt8]()
+        var accumulator: UInt64 = 0
+        var bitCount = 0
+        for (value, width) in values {
+            accumulator |= UInt64(value) << bitCount
+            bitCount += width
+            while bitCount >= 8 {
+                payload.append(UInt8(truncatingIfNeeded: accumulator))
+                accumulator >>= 8
+                bitCount -= 8
+            }
+        }
+        if bitCount > 0 { payload.append(UInt8(truncatingIfNeeded: accumulator)) }
+        return [
+            UInt8(truncatingIfNeeded: payload.count),
+            UInt8(truncatingIfNeeded: payload.count >> 8),
+        ] + payload
     }
 
     private func putWord(_ value: Int, at offset: Int, in bytes: inout [UInt8]) {

@@ -17,7 +17,6 @@ public enum ITParser {
         case truncatedPattern(Int)
         case invalidSampleHeader(Int)
         case unsupportedSampleEncoding(sample: Int, convertFlags: Int)
-        case compressedSampleRequiresM4(Int)
         case invalidSampleLoop(sample: Int, kind: String, start: Int, end: Int, length: Int)
         case truncatedSample(Int)
 
@@ -47,8 +46,6 @@ public enum ITParser {
                 return "IT-Sample \(sample) besitzt keinen gültigen IMPS-Header."
             case let .unsupportedSampleEncoding(sample, convertFlags):
                 return "IT-Sample \(sample) verwendet nicht unterstützte Convert-Flags 0x\(String(convertFlags, radix: 16))."
-            case let .compressedSampleRequiresM4(sample):
-                return "IT-Sample \(sample) ist komprimiert; der IT214-/IT215-Pfad folgt in M4."
             case let .invalidSampleLoop(sample, kind, start, end, length):
                 return "IT-Sample \(sample) hat einen ungültigen \(kind)-Loop \(start)..<\(end) bei Länge \(length)."
             case let .truncatedSample(sample):
@@ -414,42 +411,52 @@ public enum ITParser {
             // IT 2.14 führte echtes Stereo ein; Zielumfang M3 ist 2.14/2.15.
             let isStereo = flags & 0x04 != 0 && createdWithVersion >= 0x0214
             let isCompressed = flags & 0x08 != 0
-            if isCompressed, dataPresent, length > 0 {
-                throw ParserError.compressedSampleRequiresM4(sampleIndex)
-            }
-
             var leftPCM = [Float]()
             var rightPCM: [Float]?
             if dataPresent, length > 0 {
-                let bytesPerSample = is16Bit ? 2 : 1
-                let channels = isStereo ? 2 : 1
-                let (channelBytes, channelOverflow) = length.multipliedReportingOverflow(by: bytesPerSample)
-                let (requiredBytes, totalOverflow) = channelBytes.multipliedReportingOverflow(by: channels)
-                guard !channelOverflow, !totalOverflow,
-                      sampleDataOffset > 0,
-                      sampleDataOffset <= reader.data.count - requiredBytes else {
-                    throw ParserError.truncatedSample(sampleIndex)
-                }
+                if isCompressed {
+                    let decompressed = try ITSampleDecompressor.decompress(
+                        data: reader.data,
+                        offset: sampleDataOffset,
+                        frameCount: length,
+                        bitDepth: is16Bit ? .sixteen : .eight,
+                        stereo: isStereo,
+                        version: convertFlags & 0x04 != 0 ? .it215 : .it214
+                    )
+                    let divisor: Float = is16Bit ? 65_536.0 : 256.0
+                    leftPCM = decompressed.left.map { Float($0) / divisor }
+                    rightPCM = decompressed.right?.map { Float($0) / divisor }
+                } else {
+                    let bytesPerSample = is16Bit ? 2 : 1
+                    let channels = isStereo ? 2 : 1
+                    let (channelBytes, channelOverflow) = length.multipliedReportingOverflow(by: bytesPerSample)
+                    let (requiredBytes, totalOverflow) = channelBytes.multipliedReportingOverflow(by: channels)
+                    guard !channelOverflow, !totalOverflow,
+                          sampleDataOffset > 0,
+                          sampleDataOffset <= reader.data.count - requiredBytes else {
+                        throw ParserError.truncatedSample(sampleIndex)
+                    }
 
-                leftPCM = try decodePCMChannel(
-                    reader: reader,
-                    offset: sampleDataOffset,
-                    frameCount: length,
-                    is16Bit: is16Bit,
-                    isSigned: convertFlags & 0x01 != 0,
-                    isBigEndian: convertFlags & 0x02 != 0,
-                    isDelta: convertFlags & 0x04 != 0
-                )
-                if isStereo {
-                    rightPCM = try decodePCMChannel(
+                    leftPCM = try decodePCMChannel(
                         reader: reader,
-                        offset: sampleDataOffset + channelBytes,
+                        offset: sampleDataOffset,
                         frameCount: length,
                         is16Bit: is16Bit,
                         isSigned: convertFlags & 0x01 != 0,
                         isBigEndian: convertFlags & 0x02 != 0,
                         isDelta: convertFlags & 0x04 != 0
                     )
+                    if isStereo {
+                        rightPCM = try decodePCMChannel(
+                            reader: reader,
+                            offset: sampleDataOffset + channelBytes,
+                            frameCount: length,
+                            is16Bit: is16Bit,
+                            isSigned: convertFlags & 0x01 != 0,
+                            isBigEndian: convertFlags & 0x02 != 0,
+                            isDelta: convertFlags & 0x04 != 0
+                        )
+                    }
                 }
             }
 
