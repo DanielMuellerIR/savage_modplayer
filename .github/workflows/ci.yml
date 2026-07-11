@@ -24,9 +24,11 @@ jobs:
 
       # In CI ist der gitignorierte audio/-Ordner nicht vorhanden, daher skippen
       # die Audio-/Hardware-abhaengigen Tests von selbst; die synthetischen
-      # DSP-/Parser-/Sequenzierungs-Tests laufen vollstaendig.
+      # DSP-/Parser-/Sequenzierungs-Tests laufen vollstaendig. Der 256-Voice-
+      # Stresstest misst Release-Echtzeitfaehigkeit und braucht daher denselben
+      # optimierten Build wie die ausgelieferte App.
       - name: Swift tests
-        run: swift test
+        run: swift test -c release
 
       - name: JS Syntax-Check
         run: |
