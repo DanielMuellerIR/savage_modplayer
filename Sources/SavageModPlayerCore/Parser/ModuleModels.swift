@@ -267,6 +267,59 @@ public enum LoopType: Int, Sendable, Codable {
     case pingpong = 2
 }
 
+// Zweiter, von der normalen Sample-Schleife unabhängiger Loop. IT hält diesen
+// Sustain-Loop bis Note Off und wechselt danach zum normalen Loop oder Auslauf.
+public struct SampleLoop: Sendable, Codable, Equatable {
+    public let start: Int
+    public let length: Int
+    public let type: LoopType
+
+    public init(start: Int, length: Int, type: LoopType) {
+        self.start = start
+        self.length = length
+        self.type = type
+    }
+}
+
+public enum ITSampleVibratoWaveform: Int, Sendable, Codable {
+    case sine = 0
+    case rampDown = 1
+    case square = 2
+    case random = 3
+}
+
+// Sample-eigenes IT-Vibrato. Anders als XM-Auto-Vibrato liegt es im Sample-
+// Header und verwendet Speed, Depth und die Anstiegsrate jeweils im Bereich 0...64.
+public struct ITSampleVibrato: Sendable, Codable, Equatable {
+    public let speed: Int
+    public let depth: Int
+    public let rate: Int
+    public let waveform: ITSampleVibratoWaveform
+
+    public init(speed: Int, depth: Int, rate: Int, waveform: ITSampleVibratoWaveform) {
+        self.speed = speed
+        self.depth = depth
+        self.rate = rate
+        self.waveform = waveform
+    }
+}
+
+// IT-spezifische Sample-Metadaten. Stereo-PCM und Sustain-Loop bleiben direkt
+// am neutralen Sample, weil auch andere Formate diese Fähigkeiten nutzen können.
+public struct ITSampleProperties: Sendable, Codable, Equatable {
+    public let c5Speed: Int
+    public let globalVolume: Int
+    public let defaultPanning: Int? // nil = Headerflag „kein Default-Pan“
+    public let vibrato: ITSampleVibrato?
+
+    public init(c5Speed: Int, globalVolume: Int, defaultPanning: Int?, vibrato: ITSampleVibrato? = nil) {
+        self.c5Speed = c5Speed
+        self.globalVolume = globalVolume
+        self.defaultPanning = defaultPanning
+        self.vibrato = vibrato
+    }
+}
+
 // Ein einzelnes PCM-Sample mit Tuning- und Loop-Angaben. Das ist die Einheit,
 // die der DSP tatsächlich abspielt. MOD/S3M-Instrumente enthalten genau eins;
 // XM-Instrumente bis zu 16, ausgewählt per Keymap (siehe Instrument).
@@ -288,6 +341,11 @@ public struct Sample: Sendable, Codable {
     // stattdessen finetune + Perioden-/Frequenzmodell.
     public let c2spd: Int
     public let name: String
+    // IT-Stereo speichert den linken Kanal weiterhin in pcm und den rechten
+    // verlustfrei separat. nil bedeutet Mono.
+    public let rightPCM: [Float]?
+    public let sustainLoop: SampleLoop?
+    public let itProperties: ITSampleProperties?
 
     // Loopt genau dann, wenn ein echter (Vorwärts-/Ping-Pong-)Loop mit > 2 Frames
     // gesetzt ist — dieselbe Schwelle wie zuvor (repeatLength > 2), die Ein-Frame-
@@ -296,7 +354,8 @@ public struct Sample: Sendable, Codable {
 
     public init(pcm: [Float], loopStart: Int, loopLength: Int, loopType: LoopType,
                 volume: Int, finetune: Int, relativeNote: Int = 0, panning: Float = 0.5,
-                c2spd: Int = 8363, name: String = "") {
+                c2spd: Int = 8363, name: String = "", rightPCM: [Float]? = nil,
+                sustainLoop: SampleLoop? = nil, itProperties: ITSampleProperties? = nil) {
         self.pcm = pcm
         self.loopStart = loopStart
         self.loopLength = loopLength
@@ -307,34 +366,127 @@ public struct Sample: Sendable, Codable {
         self.panning = panning
         self.c2spd = c2spd
         self.name = name
+        self.rightPCM = rightPCM
+        self.sustainLoop = sustainLoop
+        self.itProperties = itProperties
     }
 }
 
 // Ein Hüllkurven-Punkt (Volume oder Panning): x = Tick-Position ab Note-Start,
 // y = Wert 0..64. Kein Tupel, damit Codable-Konformanz erhalten bleibt.
-public struct EnvelopePoint: Sendable, Codable {
+public struct EnvelopePoint: Sendable, Codable, Equatable {
     public let frame: Int   // x: Tick-Position
     public let value: Int   // y: 0..64
     public init(frame: Int, value: Int) { self.frame = frame; self.value = value }
 }
 
-// XM-Hüllkurve (Volume oder Panning): stückweise lineare Interpolation zwischen
-// den Punkten, optional mit Sustain-Punkt (hält bis Key-Off) und Loop.
-public struct Envelope: Sendable, Codable {
+// Legt fest, ob eine Hüllkurve einen normalen Pegel-/Panwert, die Tonhöhe oder
+// den Filter steuert. IT verwendet dasselbe dritte Envelope je nach Headerflag
+// entweder für Pitch oder Filter; XM bleibt im neutralen Standardmodus.
+public enum EnvelopeValueMode: String, Sendable, Codable {
+    case standard
+    case pitch
+    case filter
+}
+
+// Formatneutrale Tracker-Hüllkurve mit linear interpolierten Punkten. XM nutzt
+// einen einzelnen Sustain-Punkt; IT kann dagegen einen Sustain-Bereich sowie
+// Carry und einen Pitch-/Filtermodus speichern.
+public struct Envelope: Sendable, Codable, Equatable {
     public let points: [EnvelopePoint]
-    public let sustainPoint: Int
+    public let sustainStart: Int    // Punkt-Index
+    public let sustainEnd: Int      // Punkt-Index
     public let loopStart: Int       // Punkt-Index
     public let loopEnd: Int         // Punkt-Index
     public let sustainEnabled: Bool
     public let loopEnabled: Bool
+    public let carryEnabled: Bool
+    public let valueMode: EnvelopeValueMode
+
+    // Kompatibler XM-Zugriff: Einpunkt-Sustain und IT-Sustain-Bereich beginnen
+    // beide an diesem Index. Bestehender DSP- und CLI-Code bleibt damit stabil.
+    public var sustainPoint: Int { sustainStart }
 
     public init(points: [EnvelopePoint], sustainPoint: Int, loopStart: Int, loopEnd: Int, sustainEnabled: Bool, loopEnabled: Bool) {
+        self.init(
+            points: points,
+            sustainStart: sustainPoint,
+            sustainEnd: sustainPoint,
+            loopStart: loopStart,
+            loopEnd: loopEnd,
+            sustainEnabled: sustainEnabled,
+            loopEnabled: loopEnabled
+        )
+    }
+
+    public init(
+        points: [EnvelopePoint],
+        sustainStart: Int,
+        sustainEnd: Int,
+        loopStart: Int,
+        loopEnd: Int,
+        sustainEnabled: Bool,
+        loopEnabled: Bool,
+        carryEnabled: Bool = false,
+        valueMode: EnvelopeValueMode = .standard
+    ) {
         self.points = points
-        self.sustainPoint = sustainPoint
+        self.sustainStart = sustainStart
+        self.sustainEnd = sustainEnd
         self.loopStart = loopStart
         self.loopEnd = loopEnd
         self.sustainEnabled = sustainEnabled
         self.loopEnabled = loopEnabled
+        self.carryEnabled = carryEnabled
+        self.valueMode = valueMode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case points
+        case sustainPoint   // Legacy-Schlüssel bis Version 1.5.13
+        case sustainStart, sustainEnd
+        case loopStart, loopEnd
+        case sustainEnabled, loopEnabled
+        case carryEnabled, valueMode
+    }
+
+    // Alte Codable-Daten enthalten nur sustainPoint und keine IT-Felder. Der
+    // Decoder bildet sie exakt auf einen Einpunkt-Sustain ohne Carry ab.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let legacySustainPoint = try values.decodeIfPresent(Int.self, forKey: .sustainPoint) ?? 0
+        let sustainStart = try values.decodeIfPresent(Int.self, forKey: .sustainStart)
+            ?? legacySustainPoint
+        let sustainEnd = try values.decodeIfPresent(Int.self, forKey: .sustainEnd)
+            ?? sustainStart
+
+        self.init(
+            points: try values.decode([EnvelopePoint].self, forKey: .points),
+            sustainStart: sustainStart,
+            sustainEnd: sustainEnd,
+            loopStart: try values.decode(Int.self, forKey: .loopStart),
+            loopEnd: try values.decode(Int.self, forKey: .loopEnd),
+            sustainEnabled: try values.decode(Bool.self, forKey: .sustainEnabled),
+            loopEnabled: try values.decode(Bool.self, forKey: .loopEnabled),
+            carryEnabled: try values.decodeIfPresent(Bool.self, forKey: .carryEnabled) ?? false,
+            valueMode: try values.decodeIfPresent(EnvelopeValueMode.self, forKey: .valueMode)
+                ?? .standard
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(points, forKey: .points)
+        // Der Legacy-Schlüssel hält neue Daten für ältere Savage-Versionen lesbar.
+        try values.encode(sustainStart, forKey: .sustainPoint)
+        try values.encode(sustainStart, forKey: .sustainStart)
+        try values.encode(sustainEnd, forKey: .sustainEnd)
+        try values.encode(loopStart, forKey: .loopStart)
+        try values.encode(loopEnd, forKey: .loopEnd)
+        try values.encode(sustainEnabled, forKey: .sustainEnabled)
+        try values.encode(loopEnabled, forKey: .loopEnabled)
+        try values.encode(carryEnabled, forKey: .carryEnabled)
+        try values.encode(valueMode, forKey: .valueMode)
     }
 }
 
@@ -350,6 +502,69 @@ public struct AutoVibrato: Sendable, Codable {
     }
 }
 
+public enum NewNoteAction: Int, Sendable, Codable {
+    case cut = 0
+    case continuePlaying = 1
+    case noteOff = 2
+    case noteFade = 3
+}
+
+public enum DuplicateCheckType: Int, Sendable, Codable {
+    case off = 0
+    case note = 1
+    case sample = 2
+    case instrument = 3
+}
+
+public enum DuplicateCheckAction: Int, Sendable, Codable {
+    case cut = 0
+    case noteOff = 1
+    case noteFade = 2
+}
+
+// IT-Instrumentparameter, die NNA/Duplicate-Handling und die Startparameter
+// einer Stimme bestimmen. Rohe Header-Flags werden schon im Parser in optionale
+// Werte übersetzt; nil bedeutet bei Pan oder Filter ausdrücklich „nicht nutzen“.
+public struct ITInstrumentProperties: Sendable, Codable, Equatable {
+    public let newNoteAction: NewNoteAction
+    public let duplicateCheckType: DuplicateCheckType
+    public let duplicateCheckAction: DuplicateCheckAction
+    public let globalVolume: Int
+    public let defaultPanning: Int?
+    public let pitchPanSeparation: Int
+    public let pitchPanCenter: Int
+    public let randomVolumeVariation: Int
+    public let randomPanningVariation: Int
+    public let initialFilterCutoff: Int?
+    public let initialFilterResonance: Int?
+
+    public init(
+        newNoteAction: NewNoteAction,
+        duplicateCheckType: DuplicateCheckType,
+        duplicateCheckAction: DuplicateCheckAction,
+        globalVolume: Int,
+        defaultPanning: Int?,
+        pitchPanSeparation: Int,
+        pitchPanCenter: Int,
+        randomVolumeVariation: Int,
+        randomPanningVariation: Int,
+        initialFilterCutoff: Int?,
+        initialFilterResonance: Int?
+    ) {
+        self.newNoteAction = newNoteAction
+        self.duplicateCheckType = duplicateCheckType
+        self.duplicateCheckAction = duplicateCheckAction
+        self.globalVolume = globalVolume
+        self.defaultPanning = defaultPanning
+        self.pitchPanSeparation = pitchPanSeparation
+        self.pitchPanCenter = pitchPanCenter
+        self.randomVolumeVariation = randomVolumeVariation
+        self.randomPanningVariation = randomPanningVariation
+        self.initialFilterCutoff = initialFilterCutoff
+        self.initialFilterResonance = initialFilterResonance
+    }
+}
+
 public struct Instrument: Sendable, Codable {
     public let index: Int
     public let name: String
@@ -361,20 +576,28 @@ public struct Instrument: Sendable, Codable {
     public let keymap: [UInt8]
     public let volumeEnvelope: Envelope?
     public let panningEnvelope: Envelope?
+    public let pitchEnvelope: Envelope?
     public let fadeout: Int             // XM: 0..0x8000, pro Tick ab Key-Off; sonst 0
     public let autoVibrato: AutoVibrato?
+    public let noteSampleMapping: NoteSampleMapping?
+    public let itProperties: ITInstrumentProperties?
 
     public init(index: Int, name: String, samples: [Sample], keymap: [UInt8] = [],
                 volumeEnvelope: Envelope? = nil, panningEnvelope: Envelope? = nil,
-                fadeout: Int = 0, autoVibrato: AutoVibrato? = nil) {
+                fadeout: Int = 0, autoVibrato: AutoVibrato? = nil,
+                pitchEnvelope: Envelope? = nil, noteSampleMapping: NoteSampleMapping? = nil,
+                itProperties: ITInstrumentProperties? = nil) {
         self.index = index
         self.name = name
         self.samples = samples
         self.keymap = keymap
         self.volumeEnvelope = volumeEnvelope
         self.panningEnvelope = panningEnvelope
+        self.pitchEnvelope = pitchEnvelope
         self.fadeout = fadeout
         self.autoVibrato = autoVibrato
+        self.noteSampleMapping = noteSampleMapping
+        self.itProperties = itProperties
     }
 
     // Bequemer Konstruktor für Ein-Sample-Formate (MOD/S3M): baut intern genau
@@ -415,6 +638,11 @@ public struct Instrument: Sendable, Codable {
     }
 }
 
+public enum GlobalVolumeScale: Int, Sendable, Codable {
+    case tracker64 = 64
+    case impulseTracker128 = 128
+}
+
 public struct Mod: Sendable, Codable {
     public let name: String
     public let length: Int          // Anzahl der Songpositionen in der Playlist
@@ -429,9 +657,18 @@ public struct Mod: Sendable, Codable {
     public let initialGlobalVolume: Int
     // Start-Panning pro Kanal (0 = links, 1 = rechts). Immer channelCount Einträge.
     public let channelPannings: [Float]
+    // Kanal-Startlautstärken 0...64. Immer channelCount Einträge.
+    public let channelVolumes: [Int]
     // XM: true = lineare Frequenztabelle, false = Amiga-Periodentabelle. Andere
     // Formate lassen es false (sie nutzen ihr eigenes Perioden-/Clock-Modell).
     public let linearFrequency: Bool
+    // IT benötigt Headerflags im Profil und muss es deshalb explizit setzen.
+    // Bestehende Formate werden aus ihren unveränderten Feldern abgeleitet.
+    public let playbackSemantics: PlaybackSemantics?
+
+    public var globalVolumeScale: GlobalVolumeScale {
+        format == .it ? .impulseTracker128 : .tracker64
+    }
 
     public init(
         name: String,
@@ -445,7 +682,9 @@ public struct Mod: Sendable, Codable {
         initialTempo: Int = 125,
         initialGlobalVolume: Int = 64,
         channelPannings: [Float] = [],
-        linearFrequency: Bool = false
+        linearFrequency: Bool = false,
+        channelVolumes: [Int] = [],
+        playbackSemantics: PlaybackSemantics? = nil
     ) {
         self.linearFrequency = linearFrequency
         self.name = name
@@ -461,6 +700,77 @@ public struct Mod: Sendable, Codable {
         self.channelPannings = channelPannings.count == channelCount
             ? channelPannings
             : Mod.defaultAmigaPannings(channelCount: channelCount)
+        self.channelVolumes = channelVolumes.count == channelCount
+            ? channelVolumes
+            : Array(repeating: 64, count: max(0, channelCount))
+        self.playbackSemantics = playbackSemantics ?? Self.inferredSemantics(
+            format: format,
+            linearFrequency: linearFrequency
+        )
+    }
+
+    private static func inferredSemantics(
+        format: ModuleFormat,
+        linearFrequency: Bool
+    ) -> PlaybackSemantics? {
+        switch format {
+        case .protracker, .soundtracker, .multichannel:
+            return .proTracker
+        case .s3m:
+            return .screamTracker3
+        case .xm:
+            return .fastTracker2(linearFrequency: linearFrequency)
+        case .it:
+            // Old Effects und Compatible Gxx dürfen nie geraten werden.
+            return nil
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, length, patternTable, instruments, patterns, channelCount
+        case format, initialSpeed, initialTempo, initialGlobalVolume
+        case channelPannings, channelVolumes, linearFrequency, playbackSemantics
+    }
+
+    // Alte gespeicherte Module besitzen weder Kanal-Volumes noch ein explizites
+    // Wiedergabeprofil. Der normale Initializer stellt dafür dieselben Defaults
+    // wie die bisherigen Parser her.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            name: values.decode(String.self, forKey: .name),
+            length: values.decode(Int.self, forKey: .length),
+            patternTable: values.decode([Int].self, forKey: .patternTable),
+            instruments: values.decode([Instrument?].self, forKey: .instruments),
+            patterns: values.decode([Pattern].self, forKey: .patterns),
+            channelCount: values.decodeIfPresent(Int.self, forKey: .channelCount) ?? 4,
+            format: values.decodeIfPresent(ModuleFormat.self, forKey: .format) ?? .protracker,
+            initialSpeed: values.decodeIfPresent(Int.self, forKey: .initialSpeed) ?? 6,
+            initialTempo: values.decodeIfPresent(Int.self, forKey: .initialTempo) ?? 125,
+            initialGlobalVolume: values.decodeIfPresent(Int.self, forKey: .initialGlobalVolume) ?? 64,
+            channelPannings: values.decodeIfPresent([Float].self, forKey: .channelPannings) ?? [],
+            linearFrequency: values.decodeIfPresent(Bool.self, forKey: .linearFrequency) ?? false,
+            channelVolumes: values.decodeIfPresent([Int].self, forKey: .channelVolumes) ?? [],
+            playbackSemantics: values.decodeIfPresent(PlaybackSemantics.self, forKey: .playbackSemantics)
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(name, forKey: .name)
+        try values.encode(length, forKey: .length)
+        try values.encode(patternTable, forKey: .patternTable)
+        try values.encode(instruments, forKey: .instruments)
+        try values.encode(patterns, forKey: .patterns)
+        try values.encode(channelCount, forKey: .channelCount)
+        try values.encode(format, forKey: .format)
+        try values.encode(initialSpeed, forKey: .initialSpeed)
+        try values.encode(initialTempo, forKey: .initialTempo)
+        try values.encode(initialGlobalVolume, forKey: .initialGlobalVolume)
+        try values.encode(channelPannings, forKey: .channelPannings)
+        try values.encode(channelVolumes, forKey: .channelVolumes)
+        try values.encode(linearFrequency, forKey: .linearFrequency)
+        try values.encodeIfPresent(playbackSemantics, forKey: .playbackSemantics)
     }
 
     // Amiga-Standard-Panning LRRL, für mehr Kanäle periodisch fortgesetzt

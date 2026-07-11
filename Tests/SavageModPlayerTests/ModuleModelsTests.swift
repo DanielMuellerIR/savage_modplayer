@@ -179,6 +179,209 @@ final class ModuleModelsTests: XCTestCase {
         )
     }
 
+    func testLegacyXMEnvelopeMapsSustainPointWithoutChangingSemantics() throws {
+        let legacyJSON = #"{"points":[{"frame":0,"value":64},{"frame":12,"value":32}],"sustainPoint":1,"loopStart":0,"loopEnd":1,"sustainEnabled":true,"loopEnabled":true}"#
+        let envelope = try JSONDecoder().decode(Envelope.self, from: Data(legacyJSON.utf8))
+
+        XCTAssertEqual(envelope.sustainPoint, 1)
+        XCTAssertEqual(envelope.sustainStart, 1)
+        XCTAssertEqual(envelope.sustainEnd, 1)
+        XCTAssertTrue(envelope.sustainEnabled)
+        XCTAssertTrue(envelope.loopEnabled)
+        XCTAssertFalse(envelope.carryEnabled)
+        XCTAssertEqual(envelope.valueMode, .standard)
+    }
+
+    func testITEnvelopeRangeCarryAndModesSurviveCodableRoundTrip() throws {
+        let points = [
+            EnvelopePoint(frame: 0, value: 0),
+            EnvelopePoint(frame: 5, value: 32),
+            EnvelopePoint(frame: 10, value: 64),
+        ]
+
+        for mode in [EnvelopeValueMode.standard, .pitch, .filter] {
+            let original = Envelope(
+                points: points,
+                sustainStart: 1,
+                sustainEnd: 2,
+                loopStart: 0,
+                loopEnd: 2,
+                sustainEnabled: true,
+                loopEnabled: true,
+                carryEnabled: true,
+                valueMode: mode
+            )
+            let encoded = try JSONEncoder().encode(original)
+            let decoded = try JSONDecoder().decode(Envelope.self, from: encoded)
+
+            XCTAssertEqual(decoded, original)
+            XCTAssertEqual(decoded.sustainPoint, 1)
+        }
+    }
+
+    func testITInstrumentActionsAndPropertiesSurviveCodableRoundTrip() throws {
+        XCTAssertEqual(NewNoteAction.cut.rawValue, 0)
+        XCTAssertEqual(NewNoteAction.continuePlaying.rawValue, 1)
+        XCTAssertEqual(NewNoteAction.noteOff.rawValue, 2)
+        XCTAssertEqual(NewNoteAction.noteFade.rawValue, 3)
+        XCTAssertEqual(DuplicateCheckType.off.rawValue, 0)
+        XCTAssertEqual(DuplicateCheckType.note.rawValue, 1)
+        XCTAssertEqual(DuplicateCheckType.sample.rawValue, 2)
+        XCTAssertEqual(DuplicateCheckType.instrument.rawValue, 3)
+        XCTAssertEqual(DuplicateCheckAction.cut.rawValue, 0)
+        XCTAssertEqual(DuplicateCheckAction.noteOff.rawValue, 1)
+        XCTAssertEqual(DuplicateCheckAction.noteFade.rawValue, 2)
+
+        let mapping = try NoteSampleMapping(entries: try (0..<120).map {
+            try NoteSampleMapping.Entry(targetNote: 119 - $0, sampleID: ($0 % 99) + 1)
+        })
+        let pitchEnvelope = Envelope(
+            points: [EnvelopePoint(frame: 0, value: 32), EnvelopePoint(frame: 8, value: 40)],
+            sustainStart: 0,
+            sustainEnd: 1,
+            loopStart: 0,
+            loopEnd: 1,
+            sustainEnabled: true,
+            loopEnabled: true,
+            carryEnabled: true,
+            valueMode: .filter
+        )
+        let properties = ITInstrumentProperties(
+            newNoteAction: .noteFade,
+            duplicateCheckType: .instrument,
+            duplicateCheckAction: .noteOff,
+            globalVolume: 128,
+            defaultPanning: 64,
+            pitchPanSeparation: -32,
+            pitchPanCenter: 119,
+            randomVolumeVariation: 100,
+            randomPanningVariation: 100,
+            initialFilterCutoff: 127,
+            initialFilterResonance: 127
+        )
+        let instrument = Instrument(
+            index: 1,
+            name: "IT",
+            samples: [],
+            fadeout: 128,
+            pitchEnvelope: pitchEnvelope,
+            noteSampleMapping: mapping,
+            itProperties: properties
+        )
+
+        let decoded = try JSONDecoder().decode(
+            Instrument.self,
+            from: JSONEncoder().encode(instrument)
+        )
+        XCTAssertEqual(decoded.pitchEnvelope, pitchEnvelope)
+        XCTAssertEqual(decoded.noteSampleMapping, mapping)
+        XCTAssertEqual(decoded.itProperties, properties)
+        XCTAssertEqual(decoded.fadeout, 128)
+    }
+
+    func testITSampleStereoSustainAndVibratoSurviveCodableRoundTrip() throws {
+        let sustainLoop = SampleLoop(start: 1, length: 3, type: .pingpong)
+        let properties = ITSampleProperties(
+            c5Speed: 9_999_999,
+            globalVolume: 64,
+            defaultPanning: 0,
+            vibrato: ITSampleVibrato(speed: 64, depth: 64, rate: 64, waveform: .random)
+        )
+        let sample = Sample(
+            pcm: [-0.5, 0.0, 0.5, 0.25],
+            loopStart: 0,
+            loopLength: 4,
+            loopType: .forward,
+            volume: 64,
+            finetune: 0,
+            rightPCM: [0.5, 0.0, -0.5, -0.25],
+            sustainLoop: sustainLoop,
+            itProperties: properties
+        )
+
+        let decoded = try JSONDecoder().decode(Sample.self, from: JSONEncoder().encode(sample))
+        XCTAssertEqual(decoded.pcm, sample.pcm)
+        XCTAssertEqual(decoded.rightPCM, sample.rightPCM)
+        XCTAssertEqual(decoded.sustainLoop, sustainLoop)
+        XCTAssertEqual(decoded.itProperties, properties)
+        XCTAssertEqual(decoded.itProperties?.vibrato?.waveform, .random)
+    }
+
+    func testModuleSemanticsChannelVolumesAndGlobalVolumeScale() throws {
+        let emptyPattern = Pattern(rows: [])
+        let formats: [(ModuleFormat, Bool, PlaybackSemantics)] = [
+            (.protracker, false, .proTracker),
+            (.soundtracker, false, .proTracker),
+            (.multichannel, false, .proTracker),
+            (.s3m, false, .screamTracker3),
+            (.xm, false, .fastTracker2(linearFrequency: false)),
+            (.xm, true, .fastTracker2(linearFrequency: true)),
+        ]
+
+        for (format, linearFrequency, semantics) in formats {
+            let module = Mod(
+                name: "Legacy",
+                length: 1,
+                patternTable: [0],
+                instruments: [nil],
+                patterns: [emptyPattern],
+                channelCount: 3,
+                format: format,
+                linearFrequency: linearFrequency
+            )
+            XCTAssertEqual(module.channelVolumes, [64, 64, 64])
+            XCTAssertEqual(module.globalVolumeScale, .tracker64)
+            XCTAssertEqual(module.playbackSemantics, semantics)
+        }
+
+        let compatibility = ITCompatibility(oldEffects: true, compatibleGxx: false)
+        let module = Mod(
+            name: "IT",
+            length: 1,
+            patternTable: [0],
+            instruments: [nil],
+            patterns: [emptyPattern],
+            channelCount: 2,
+            format: .it,
+            initialGlobalVolume: 128,
+            channelPannings: [0.0, 1.0],
+            channelVolumes: [12, 34],
+            playbackSemantics: .impulseTracker(compatibility)
+        )
+        XCTAssertEqual(module.channelVolumes, [12, 34])
+        XCTAssertEqual(module.globalVolumeScale, .impulseTracker128)
+        XCTAssertEqual(module.playbackSemantics, .impulseTracker(compatibility))
+
+        let decoded = try JSONDecoder().decode(Mod.self, from: JSONEncoder().encode(module))
+        XCTAssertEqual(decoded.channelVolumes, [12, 34])
+        XCTAssertEqual(decoded.playbackSemantics, .impulseTracker(compatibility))
+    }
+
+    func testLegacyModuleCodableDefaultsNewM1Fields() throws {
+        let module = Mod(
+            name: "Legacy",
+            length: 0,
+            patternTable: [],
+            instruments: [nil],
+            patterns: [],
+            channelCount: 2,
+            format: .xm,
+            linearFrequency: true
+        )
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(module)) as? [String: Any]
+        )
+        object.removeValue(forKey: "channelVolumes")
+        object.removeValue(forKey: "playbackSemantics")
+
+        let decoded = try JSONDecoder().decode(
+            Mod.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+        XCTAssertEqual(decoded.channelVolumes, [64, 64])
+        XCTAssertEqual(decoded.playbackSemantics, .fastTracker2(linearFrequency: true))
+    }
+
     /// Erstellt eine ansonsten leere Note, damit der jeweilige Schlüssel isoliert
     /// geprüft wird und keine Effekt- oder Instrumentdaten das Ergebnis beeinflussen.
     private func makeNote(key: Int) -> Note {
