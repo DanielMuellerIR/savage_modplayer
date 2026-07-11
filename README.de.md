@@ -7,13 +7,15 @@
 **🌐 Sprache / Language:** [English](README.md) · [Deutsch](README.de.md)
 
 <p align="center">
-  <strong>Amiga-/Tracker-Modul-Player als Single-File-HTML5-Version und native SwiftUI-macOS-App mit Quick-Look-Plugin.</strong>
+  <strong>Nativer macOS-Tracker-Player für MOD, S3M, XM und IT — mit unabhängiger Swift-Replay-Engine.</strong>
 </p>
 
-Ein plattformübergreifender, eigenständiger Tracker-Modul-Player in zwei Varianten:
+Ein eigenständiger Tracker-Modul-Player mit der nativen macOS-App im Mittelpunkt:
 
-1. **HTML5 (`savage-mod-player.html`)** — Eine einzelne HTML-Datei (unter 50 KB), die ohne Webserver direkt per Doppelklick aus dem Dateisystem funktioniert. Spielt klassische 4-Kanal-ProTracker-MODs.
-2. **Native macOS App (`Savage Mod Player.app`)** — SwiftUI-Desktop-Anwendung mit `AVAudioEngine`, `AVAudioSourceNode`, echten Echtzeit-Oszilloskopen und Pegel-Metern. Spielt zusätzlich Multichannel-MODs (6/8/… Kanäle, u. a. `6CHN`/`8CHN`/`FLT8`), 15-Sample-Soundtracker-Module, **ScreamTracker 3 (`.s3m`)**, **FastTracker II (`.xm`)** und **Impulse Tracker (`.it`)** — und bringt ein **Quick-Look-Plugin** mit: Leertaste auf einer `.mod`/`.s3m`/`.xm`/`.it` im Finder öffnet eine abspielbare Audio-Vorschau.
+1. **Native macOS App (`Savage Mod Player.app`)** — SwiftUI-Desktop-Anwendung mit `AVAudioEngine`, `AVAudioSourceNode`, echten Echtzeit-Oszilloskopen und Pegel-Metern. Sie spielt ProTracker- und Multichannel-MODs (6/8/… Kanäle, u. a. `6CHN`/`8CHN`/`FLT8`), 15-Sample-Soundtracker-Module, **ScreamTracker 3 (`.s3m`)**, **FastTracker II (`.xm`)** und **Impulse Tracker (`.it`)** — und bringt ein **Quick-Look-Plugin** mit: Leertaste auf einer `.mod`/`.s3m`/`.xm`/`.it` im Finder öffnet eine abspielbare Audio-Vorschau.
+2. **HTML5-Bonusplayer (`savage-mod-player.html`)** — Eine winzige einzelne HTML-Datei (unter 60 KB), die ohne Webserver direkt per Doppelklick aus dem Dateisystem funktioniert. Sie konzentriert sich bewusst auf klassische 4-Kanal-ProTracker-MODs.
+
+**Kein libopenmpt-Wrapper:** Die native App parst, sequenziert, synthetisiert und mischt MOD/S3M/XM/IT selbst in Swift. Sie bindet weder `libopenmpt`, `libxmp`, `libmodplug`, DUMB noch eine andere Modul-Replay-Library ein. `openmpt123` dient ausschließlich als optionale externe Referenz bei Entwicklung und Tests.
 
 Beide Varianten enthalten standardmäßig keine Moduldateien. Musikstücke werden per Drag & Drop oder Datei-Dialog geladen.
 
@@ -49,6 +51,7 @@ Falls keine Vorschau erscheint:
 
 ## Funktionsumfang
 
+- **Unabhängige native Replay-Engine**: projekteigene Swift-Parser, Sequencer, Instrument-/Voice-Engines, Effekte, Filter, Resampling und Mixer. Hinter der Oberfläche steckt kein fremder Modul-Decoder.
 - **Formatvielfalt (macOS-App)**: ProTracker-MOD, Multichannel-MOD (`xCHN`/`xxCH`/`CD81`/`OKTA`/`FLT8`), 15-Sample-Soundtracker, ScreamTracker 3 (`.s3m`), FastTracker II (`.xm`) und Impulse-Tracker-Dateien bis `cmwt=0x0216` (`.it`) im Sample- oder Instrument-Modus. IT unterstützt 64 Pattern-Kanäle, einen vorallozierten 256-Voice-NNA-Pool, komprimierte 8-/16-Bit-Mono-/Stereo-Samples, Hüllkurven, Filter, Effekte und Sustain-Loops. Der HTML5-Player bleibt bewusst kompakt und spielt 4-Kanal-MODs.
 - **Quick-Look-Vorschau (macOS-App)**: Das mitgelieferte Quick-Look-Plugin rendert und cached bis zu den ersten 60 Sekunden von `.mod`/`.s3m`/`.xm`/`.it` mit der Player-Engine und zeigt im Finder (Leertaste) den nativen Audio-Player mit Play und Scrubbing. Nicht unterstützte Dateien zeigen einen lesbaren Grund.
 - **Drag & Drop**: Einzelne `.mod`-/`.s3m`-/`.xm`-/`.it`-Dateien, ganze Ordner (rekursiv) oder Zip-/7-Zip-Archive können auf den Player gezogen werden.
@@ -127,27 +130,16 @@ Kompatibilitätsmeldungen entstehen aus einer Capability-Analyse. `cwtv` identif
 
 ### Architektur
 
-| Schicht | HTML5 | macOS (Swift) |
+| Schicht | macOS (Swift) | HTML5-Bonusplayer |
 |---|---|---|
-| Parser | `modplayer.js` | `ModuleLoader` plus MOD-/S3M-/XM-/IT-Parser (SavageModPlayerCore) |
-| DSP / Mixer | `mod-player-worklet.js` (AudioWorklet) | `ModPlayerCoordinator.swift` (`AVAudioSourceNode`, bis 64 logische Kanäle / 256 IT-Voices) |
-| UI | Vanilla JS + CSS Grid | SwiftUI + Canvas |
-| Quick Look | — | `quicklook/PreviewProvider.swift` (Appex, WAV-Offline-Render) |
+| Parser | `ModuleLoader` plus projekteigene MOD-/S3M-/XM-/IT-Parser (`SavageModPlayerCore`) | `modplayer.js` |
+| DSP / Mixer | Projekteigener Sequencer und DSP via `AVAudioSourceNode`, bis 64 logische Kanäle / 256 IT-Voices | `mod-player-worklet.js` (AudioWorklet) |
+| UI | SwiftUI + Canvas | Vanilla JS + CSS Grid |
+| Quick Look | `quicklook/PreviewProvider.swift` (Appex, WAV-Offline-Render) | — |
 
 ---
 
 ## Build
-
-### HTML5
-
-```bash
-python3 build.py                  # → savage-mod-player.html (~48 KB)
-python3 build.py --no-min         # ohne Minifizierung
-```
-
-Die erzeugte Single-File-Variante `savage-mod-player.html` ist Teil des
-Repositories, damit der Player auch ohne lokalen Build direkt genutzt werden
-kann.
 
 ### macOS App
 
@@ -164,6 +156,17 @@ Für Release-Builds signiert `build_app.sh` automatisch mit der Developer-ID
 `Developer ID Application: Daniel Mueller (9QSWKSR4NQ)`, sofern sie im
 Schlüsselbund verfügbar ist. Lokale unsignierte Builds sind mit
 `SIGN_APP=0 bash build_app.sh` möglich.
+
+### HTML5-Bonusplayer
+
+```bash
+python3 build.py                  # → savage-mod-player.html (unter 60 KB)
+python3 build.py --no-min         # ohne Minifizierung
+```
+
+Die erzeugte Single-File-Variante `savage-mod-player.html` ist Teil des
+Repositories, damit der kompakte Player auch ohne lokalen Build direkt genutzt
+werden kann.
 
 ### DMG (für Releases)
 
@@ -215,10 +218,11 @@ versehentlich getrackte Audio- und Release-Artefakte und erzeugt bei
 Die ProTracker-Engine entstand zuerst im Schwesterprojekt
 [FraktalLab](https://github.com/DanielMuellerIR/FraktalLab) als eigene
 TypeScript-/AudioWorklet-Implementierung (`AmiModPanel` / `utils/modplayer`,
-kein `libopenmpt`). Für dieses Projekt wurde sie als eigenständiger
-Single-File-HTML-Player herausgelöst und zusätzlich als native Swift-Engine mit
-`AVAudioSourceNode` portiert. Mitgelieferte MOD-Dateien sind nicht Teil dieses
-Repositories.
+kein `libopenmpt`). Für dieses Projekt wurde sie als native Swift-Engine mit
+`AVAudioSourceNode` portiert und anschließend um projekteigene S3M-, XM- und
+IT-Parser, Sequenzierung, Effekte und Voice-Verwaltung erweitert. Die ursprüngliche
+Web-Implementierung bleibt als kompakter Single-File-Bonusplayer erhalten.
+Mitgelieferte Moduldateien sind nicht Teil dieses Repositories.
 
 ## Lizenz
 

@@ -7,13 +7,15 @@
 **🌐 Sprache / Language:** [English](README.md) · [Deutsch](README.de.md)
 
 <p align="center">
-  <strong>Amiga/tracker module player as a single-file HTML5 app and a native SwiftUI macOS app with a Quick Look plugin.</strong>
+  <strong>Native macOS tracker player for MOD, S3M, XM, and IT — powered by an independent Swift replay engine.</strong>
 </p>
 
-A cross-platform, self-contained tracker module player in two flavors:
+A self-contained tracker module player led by its native macOS app:
 
-1. **HTML5 (`savage-mod-player.html`)** — a single HTML file (under 50 KB) that runs straight from the file system with a double click, no web server required. Plays classic 4-channel ProTracker MODs.
-2. **Native macOS app (`Savage Mod Player.app`)** — a SwiftUI desktop application built on `AVAudioEngine`/`AVAudioSourceNode` with true real-time oscilloscopes and VU meters. Additionally plays multichannel MODs (6/8/… channels, including `6CHN`/`8CHN`/`FLT8`), 15-sample Soundtracker modules, **ScreamTracker 3 (`.s3m`)**, **FastTracker II (`.xm`)**, and **Impulse Tracker (`.it`)** — and ships with a **Quick Look plugin**: pressing the space bar on a `.mod`/`.s3m`/`.xm`/`.it` file in Finder opens a playable audio preview.
+1. **Native macOS app (`Savage Mod Player.app`)** — a SwiftUI desktop application built on `AVAudioEngine`/`AVAudioSourceNode` with true real-time oscilloscopes and VU meters. It plays ProTracker and multichannel MODs (6/8/… channels, including `6CHN`/`8CHN`/`FLT8`), 15-sample Soundtracker modules, **ScreamTracker 3 (`.s3m`)**, **FastTracker II (`.xm`)**, and **Impulse Tracker (`.it`)** — and ships with a **Quick Look plugin**: pressing the space bar on a `.mod`/`.s3m`/`.xm`/`.it` file in Finder opens a playable audio preview.
+2. **Bonus HTML5 player (`savage-mod-player.html`)** — a tiny single HTML file (under 60 KB) that runs straight from the file system with a double click, no web server required. It deliberately focuses on classic 4-channel ProTracker MODs.
+
+**Not a libopenmpt wrapper:** the native app parses, sequences, synthesizes, and mixes MOD/S3M/XM/IT itself in Swift. It does not link or ship `libopenmpt`, `libxmp`, `libmodplug`, DUMB, or another module replay library. `openmpt123` is used only as an optional external reference during development and testing.
 
 Neither variant bundles any module files. Songs are loaded via drag & drop or the file dialog.
 
@@ -49,6 +51,7 @@ If no preview appears:
 
 ## Features
 
+- **Independent native replay engine**: project-owned Swift parsers, sequencer, instrument/voice engines, effects, filters, resampling, and mixer. There is no third-party module decoder hidden behind the UI.
 - **Format support (macOS app)**: ProTracker MOD, multichannel MOD (`xCHN`/`xxCH`/`CD81`/`OKTA`/`FLT8`), 15-sample Soundtracker, ScreamTracker 3 (`.s3m`), FastTracker II (`.xm`), and Impulse Tracker files through `cmwt=0x0216` (`.it`) in sample or instrument mode. IT support includes 64 pattern channels, a preallocated 256-voice NNA pool, compressed 8/16-bit mono/stereo samples, envelopes, filters, effects, sustain loops, and compatibility flags. The HTML5 player deliberately stays compact and plays 4-channel MODs.
 - **Quick Look preview (macOS app)**: the bundled Quick Look plugin renders and caches up to the first 60 seconds of `.mod`/`.s3m`/`.xm`/`.it` files with the player engine, then shows the native audio player with play and scrubbing in Finder (space bar). Unsupported files show a readable reason.
 - **Drag & drop**: drop individual `.mod`/`.s3m`/`.xm`/`.it` files, entire folders (recursively), or Zip/7-Zip archives onto the player.
@@ -127,26 +130,16 @@ Compatibility messages are capability-based. `cwtv` identifies the creating trac
 
 ### Architecture
 
-| Layer | HTML5 | macOS (Swift) |
+| Layer | macOS (Swift) | Bonus HTML5 player |
 |---|---|---|
-| Parser | `modplayer.js` | `ModuleLoader` plus MOD/S3M/XM/IT parsers (SavageModPlayerCore) |
-| DSP / mixer | `mod-player-worklet.js` (AudioWorklet) | `ModPlayerCoordinator.swift` (`AVAudioSourceNode`, up to 64 logical channels / 256 IT voices) |
-| UI | vanilla JS + CSS grid | SwiftUI + Canvas |
-| Quick Look | — | `quicklook/PreviewProvider.swift` (appex, offline WAV render) |
+| Parser | `ModuleLoader` plus project-owned MOD/S3M/XM/IT parsers (`SavageModPlayerCore`) | `modplayer.js` |
+| DSP / mixer | Project-owned sequencer and DSP via `AVAudioSourceNode`, up to 64 logical channels / 256 IT voices | `mod-player-worklet.js` (AudioWorklet) |
+| UI | SwiftUI + Canvas | vanilla JS + CSS grid |
+| Quick Look | `quicklook/PreviewProvider.swift` (appex, offline WAV render) | — |
 
 ---
 
 ## Build
-
-### HTML5
-
-```bash
-python3 build.py                  # → savage-mod-player.html (~48 KB)
-python3 build.py --no-min         # without minification
-```
-
-The generated single-file variant `savage-mod-player.html` is part of
-the repository so the player can be used directly without a local build.
 
 ### macOS app
 
@@ -167,6 +160,16 @@ For release builds, `build_app.sh` automatically signs with the Developer ID
 `Developer ID Application: Daniel Mueller (9QSWKSR4NQ)` if it is available in
 the keychain. Local unsigned builds are possible with
 `SIGN_APP=0 bash build_app.sh`.
+
+### Bonus HTML5 player
+
+```bash
+python3 build.py                  # → savage-mod-player.html (under 60 KB)
+python3 build.py --no-min         # without minification
+```
+
+The generated single-file variant `savage-mod-player.html` is part of
+the repository so the compact player can be used directly without a local build.
 
 ### DMG (for releases)
 
@@ -218,9 +221,11 @@ GitHub release entry with the DMG asset.
 The ProTracker engine was first developed in the sister project
 [FraktalLab](https://github.com/DanielMuellerIR/FraktalLab) as a custom
 TypeScript/AudioWorklet implementation (`AmiModPanel` / `utils/modplayer`, no
-`libopenmpt`). For this project it was extracted into a standalone single-file
-HTML player and additionally ported to a native Swift engine built on
-`AVAudioSourceNode`. Bundled MOD files are not part of this repository.
+`libopenmpt`). For this project it was ported to a native Swift engine built on
+`AVAudioSourceNode`, then expanded with project-owned S3M, XM, and IT parsers,
+sequencing, effects, and voice handling. The original web implementation remains
+as the compact single-file bonus player. Bundled module files are not part of
+this repository.
 
 ## License
 
