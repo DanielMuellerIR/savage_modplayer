@@ -15,6 +15,11 @@ public enum ITParser {
         case invalidPatternRows(pattern: Int, rows: Int)
         case invalidPatternValue(pattern: Int, row: Int, channel: Int, field: String, value: Int)
         case truncatedPattern(Int)
+        case invalidSampleHeader(Int)
+        case unsupportedSampleEncoding(sample: Int, convertFlags: Int)
+        case compressedSampleRequiresM4(Int)
+        case invalidSampleLoop(sample: Int, kind: String, start: Int, end: Int, length: Int)
+        case truncatedSample(Int)
 
         public var errorDescription: String? {
             switch self {
@@ -38,6 +43,16 @@ public enum ITParser {
                 return "IT-Pattern \(pattern), Zeile \(row), Kanal \(channel): ungültiges Feld \(field)=\(value)."
             case let .truncatedPattern(pattern):
                 return "IT-Pattern \(pattern) ist abgeschnitten."
+            case let .invalidSampleHeader(sample):
+                return "IT-Sample \(sample) besitzt keinen gültigen IMPS-Header."
+            case let .unsupportedSampleEncoding(sample, convertFlags):
+                return "IT-Sample \(sample) verwendet nicht unterstützte Convert-Flags 0x\(String(convertFlags, radix: 16))."
+            case let .compressedSampleRequiresM4(sample):
+                return "IT-Sample \(sample) ist komprimiert; der IT214-/IT215-Pfad folgt in M4."
+            case let .invalidSampleLoop(sample, kind, start, end, length):
+                return "IT-Sample \(sample) hat einen ungültigen \(kind)-Loop \(start)..<\(end) bei Länge \(length)."
+            case let .truncatedSample(sample):
+                return "IT-Sample \(sample) ist abgeschnitten."
             }
         }
     }
@@ -186,14 +201,14 @@ public enum ITParser {
 
         // M3/M6 lesen den Inhalt. M2 validiert bereits alle 32-Bit-Ziele, damit
         // abgeschnittene oder überlaufende Tabellen kontrolliert scheitern.
-        try validateOffsets(
+        let instrumentOffsets = try readOffsets(
             reader: reader,
             count: instrumentCount,
             tableOffset: instrumentOffsetsOffset,
             kind: "Instrument",
             minimumBytes: 4
         )
-        try validateOffsets(
+        let sampleOffsets = try readOffsets(
             reader: reader,
             count: sampleCount,
             tableOffset: sampleOffsetsOffset,
@@ -208,6 +223,12 @@ public enum ITParser {
             patternCount: patternCount
         )
         guard !patternTable.isEmpty else { throw ParserError.emptySong }
+
+        let samples = try parseSamples(
+            reader: reader,
+            offsets: sampleOffsets,
+            createdWithVersion: createdWithVersion
+        )
 
         var patterns = [Pattern]()
         patterns.reserveCapacity(patternCount)
@@ -226,7 +247,16 @@ public enum ITParser {
         }
 
         let usesInstruments = flags & 0x04 != 0
-        let slotCount = usesInstruments ? instrumentCount : sampleCount
+        let instruments: [Instrument?]
+        if usesInstruments {
+            // Die IMPI-Inhalte folgen in M6; die 1-basierten Slots bleiben schon
+            // jetzt stabil und greifen später auf den globalen Sample-Pool zu.
+            instruments = [Instrument?](repeating: nil, count: instrumentOffsets.count + 1)
+        } else {
+            instruments = [nil] + samples.enumerated().map { index, sample in
+                Instrument(index: index + 1, name: sample.name, samples: [sample])
+            }
+        }
         let compatibility = ITCompatibility(
             oldEffects: flags & 0x10 != 0,
             compatibleGxx: flags & 0x20 != 0
@@ -255,7 +285,8 @@ public enum ITParser {
             name: try reader.string(0x04, length: 26),
             length: patternTable.count,
             patternTable: patternTable,
-            instruments: [Instrument?](repeating: nil, count: slotCount + 1),
+            instruments: instruments,
+            samplePool: [nil] + samples.map(Optional.some),
             patterns: patterns,
             channelCount: channelCount,
             format: .it,
@@ -272,19 +303,248 @@ public enum ITParser {
         )
     }
 
-    private static func validateOffsets(
+    private static func readOffsets(
         reader: Reader,
         count: Int,
         tableOffset: Int,
         kind: String,
         minimumBytes: Int
-    ) throws {
+    ) throws -> [Int] {
+        var offsets = [Int]()
+        offsets.reserveCapacity(count)
         for index in 0..<count {
             let offset = try reader.dword(tableOffset + index * 4)
             guard offset > 0, offset <= reader.data.count - minimumBytes else {
                 throw ParserError.invalidOffset(kind: kind, index: index, offset: offset)
             }
+            offsets.append(offset)
         }
+        return offsets
+    }
+
+    private static func parseSamples(
+        reader: Reader,
+        offsets: [Int],
+        createdWithVersion: Int
+    ) throws -> [Sample] {
+        var samples = [Sample]()
+        samples.reserveCapacity(offsets.count)
+
+        for (zeroBasedIndex, offset) in offsets.enumerated() {
+            let sampleIndex = zeroBasedIndex + 1
+            guard offset <= reader.data.count - 80,
+                  try reader.byte(offset) == 0x49,
+                  try reader.byte(offset + 1) == 0x4D,
+                  try reader.byte(offset + 2) == 0x50,
+                  try reader.byte(offset + 3) == 0x53 else {
+                throw ParserError.invalidSampleHeader(sampleIndex)
+            }
+
+            let globalVolume = try reader.byte(offset + 0x11)
+            let flags = try reader.byte(offset + 0x12)
+            let defaultVolume = try reader.byte(offset + 0x13)
+            let convertFlags = try reader.byte(offset + 0x2E)
+            let rawDefaultPanning = try reader.byte(offset + 0x2F)
+            let length = try reader.dword(offset + 0x30)
+            let loopStart = try reader.dword(offset + 0x34)
+            let loopEnd = try reader.dword(offset + 0x38)
+            let c5Speed = try reader.dword(offset + 0x3C)
+            let sustainStart = try reader.dword(offset + 0x40)
+            let sustainEnd = try reader.dword(offset + 0x44)
+            let sampleDataOffset = try reader.dword(offset + 0x48)
+            let vibratoSpeed = try reader.byte(offset + 0x4C)
+            let vibratoDepth = try reader.byte(offset + 0x4D)
+            let vibratoRate = try reader.byte(offset + 0x4E)
+            let vibratoType = try reader.byte(offset + 0x4F)
+
+            guard globalVolume <= 64 else {
+                throw ParserError.invalidHeaderValue("sample[\(sampleIndex)].globalVolume", globalVolume)
+            }
+            guard defaultVolume <= 64 else {
+                throw ParserError.invalidHeaderValue("sample[\(sampleIndex)].volume", defaultVolume)
+            }
+            guard c5Speed <= 9_999_999 else {
+                throw ParserError.invalidHeaderValue("sample[\(sampleIndex)].c5Speed", c5Speed)
+            }
+            guard vibratoSpeed <= 64, vibratoDepth <= 64, vibratoRate <= 64,
+                  ITSampleVibratoWaveform(rawValue: vibratoType) != nil else {
+                throw ParserError.invalidHeaderValue("sample[\(sampleIndex)].vibrato", vibratoType)
+            }
+            guard convertFlags & ~0x07 == 0 else {
+                throw ParserError.unsupportedSampleEncoding(
+                    sample: sampleIndex,
+                    convertFlags: convertFlags
+                )
+            }
+
+            let loopEnabled = flags & 0x10 != 0
+            let sustainEnabled = flags & 0x20 != 0
+            if loopEnabled {
+                try validateLoop(
+                    sample: sampleIndex,
+                    kind: "normalen",
+                    start: loopStart,
+                    end: loopEnd,
+                    length: length
+                )
+            }
+            if sustainEnabled {
+                try validateLoop(
+                    sample: sampleIndex,
+                    kind: "Sustain",
+                    start: sustainStart,
+                    end: sustainEnd,
+                    length: length
+                )
+            }
+
+            let defaultPanning: Int?
+            if rawDefaultPanning & 0x80 != 0 {
+                let value = rawDefaultPanning & 0x7F
+                guard value <= 64 else {
+                    throw ParserError.invalidHeaderValue("sample[\(sampleIndex)].defaultPanning", value)
+                }
+                defaultPanning = value
+            } else {
+                defaultPanning = nil
+            }
+
+            let dataPresent = flags & 0x01 != 0
+            let is16Bit = flags & 0x02 != 0
+            // IT 2.14 führte echtes Stereo ein; Zielumfang M3 ist 2.14/2.15.
+            let isStereo = flags & 0x04 != 0 && createdWithVersion >= 0x0214
+            let isCompressed = flags & 0x08 != 0
+            if isCompressed, dataPresent, length > 0 {
+                throw ParserError.compressedSampleRequiresM4(sampleIndex)
+            }
+
+            var leftPCM = [Float]()
+            var rightPCM: [Float]?
+            if dataPresent, length > 0 {
+                let bytesPerSample = is16Bit ? 2 : 1
+                let channels = isStereo ? 2 : 1
+                let (channelBytes, channelOverflow) = length.multipliedReportingOverflow(by: bytesPerSample)
+                let (requiredBytes, totalOverflow) = channelBytes.multipliedReportingOverflow(by: channels)
+                guard !channelOverflow, !totalOverflow,
+                      sampleDataOffset > 0,
+                      sampleDataOffset <= reader.data.count - requiredBytes else {
+                    throw ParserError.truncatedSample(sampleIndex)
+                }
+
+                leftPCM = try decodePCMChannel(
+                    reader: reader,
+                    offset: sampleDataOffset,
+                    frameCount: length,
+                    is16Bit: is16Bit,
+                    isSigned: convertFlags & 0x01 != 0,
+                    isBigEndian: convertFlags & 0x02 != 0,
+                    isDelta: convertFlags & 0x04 != 0
+                )
+                if isStereo {
+                    rightPCM = try decodePCMChannel(
+                        reader: reader,
+                        offset: sampleDataOffset + channelBytes,
+                        frameCount: length,
+                        is16Bit: is16Bit,
+                        isSigned: convertFlags & 0x01 != 0,
+                        isBigEndian: convertFlags & 0x02 != 0,
+                        isDelta: convertFlags & 0x04 != 0
+                    )
+                }
+            }
+
+            let loopType: LoopType = loopEnabled
+                ? (flags & 0x40 != 0 ? .pingpong : .forward)
+                : .none
+            let sustainLoop: SampleLoop? = sustainEnabled
+                ? SampleLoop(
+                    start: sustainStart,
+                    length: sustainEnd - sustainStart,
+                    type: flags & 0x80 != 0 ? .pingpong : .forward
+                )
+                : nil
+            let vibrato = ITSampleVibrato(
+                speed: vibratoSpeed,
+                depth: vibratoDepth,
+                rate: vibratoRate,
+                waveform: ITSampleVibratoWaveform(rawValue: vibratoType)!
+            )
+            let name = try reader.string(offset + 0x14, length: 26)
+
+            samples.append(Sample(
+                pcm: leftPCM,
+                loopStart: loopEnabled ? loopStart : 0,
+                loopLength: loopEnabled ? loopEnd - loopStart : 0,
+                loopType: loopType,
+                volume: defaultVolume,
+                finetune: 0,
+                relativeNote: 0,
+                panning: defaultPanning.map { Float($0) / 64.0 } ?? 0.5,
+                c2spd: 8363,
+                name: name,
+                rightPCM: rightPCM,
+                sustainLoop: sustainLoop,
+                itProperties: ITSampleProperties(
+                    c5Speed: c5Speed,
+                    globalVolume: globalVolume,
+                    defaultPanning: defaultPanning,
+                    vibrato: vibratoDepth > 0 ? vibrato : nil
+                )
+            ))
+        }
+        return samples
+    }
+
+    private static func validateLoop(
+        sample: Int,
+        kind: String,
+        start: Int,
+        end: Int,
+        length: Int
+    ) throws {
+        guard start <= end, end <= length else {
+            throw ParserError.invalidSampleLoop(
+                sample: sample, kind: kind, start: start, end: end, length: length
+            )
+        }
+    }
+
+    private static func decodePCMChannel(
+        reader: Reader,
+        offset: Int,
+        frameCount: Int,
+        is16Bit: Bool,
+        isSigned: Bool,
+        isBigEndian: Bool,
+        isDelta: Bool
+    ) throws -> [Float] {
+        var pcm = [Float]()
+        pcm.reserveCapacity(frameCount)
+
+        if is16Bit {
+            var accumulator: UInt16 = 0
+            for frame in 0..<frameCount {
+                let byte0 = try reader.byte(offset + frame * 2)
+                let byte1 = try reader.byte(offset + frame * 2 + 1)
+                let raw = UInt16(isBigEndian ? (byte0 << 8) | byte1 : byte0 | (byte1 << 8))
+                accumulator = isDelta ? accumulator &+ raw : raw
+                let centered = isSigned
+                    ? Int(Int16(bitPattern: accumulator))
+                    : Int(accumulator) - 32_768
+                pcm.append(Float(centered) / 65_536.0)
+            }
+        } else {
+            var accumulator: UInt8 = 0
+            for frame in 0..<frameCount {
+                let raw = UInt8(try reader.byte(offset + frame))
+                accumulator = isDelta ? accumulator &+ raw : raw
+                let centered = isSigned
+                    ? Int(Int8(bitPattern: accumulator))
+                    : Int(accumulator) - 128
+                pcm.append(Float(centered) / 256.0)
+            }
+        }
+        return pcm
     }
 
     private static func parseOrders(

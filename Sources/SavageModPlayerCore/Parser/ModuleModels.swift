@@ -716,6 +716,9 @@ public struct Mod: Sendable, Codable {
     public let length: Int          // Anzahl der Songpositionen in der Playlist
     public let patternTable: [Int]  // Playlist (Indizes der Patterns)
     public let instruments: [Instrument?] // 1-basiertes Array (Index 0 ist nil)
+    // IT besitzt einen globalen, instrumentübergreifenden Sample-Pool. Andere
+    // Formate belassen ihn beim kompatiblen Eintrag [nil].
+    public let samplePool: [Sample?]
     public let patterns: [Pattern]
     public let channelCount: Int    // Kanäle pro Row (MOD klassisch 4, S3M bis 32)
     public let format: ModuleFormat
@@ -748,6 +751,7 @@ public struct Mod: Sendable, Codable {
         length: Int,
         patternTable: [Int],
         instruments: [Instrument?],
+        samplePool: [Sample?] = [nil],
         patterns: [Pattern],
         channelCount: Int = 4,
         format: ModuleFormat = .protracker,
@@ -767,6 +771,7 @@ public struct Mod: Sendable, Codable {
         self.length = length
         self.patternTable = patternTable
         self.instruments = instruments
+        self.samplePool = samplePool
         self.patterns = patterns
         self.channelCount = channelCount
         self.format = format
@@ -810,7 +815,7 @@ public struct Mod: Sendable, Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, length, patternTable, instruments, patterns, channelCount
+        case name, length, patternTable, instruments, samplePool, patterns, channelCount
         case format, initialSpeed, initialTempo, initialGlobalVolume
         case channelPannings, channelVolumes, channelSurrounds, channelDisabled
         case linearFrequency, playbackSemantics, itProperties
@@ -826,6 +831,7 @@ public struct Mod: Sendable, Codable {
             length: values.decode(Int.self, forKey: .length),
             patternTable: values.decode([Int].self, forKey: .patternTable),
             instruments: values.decode([Instrument?].self, forKey: .instruments),
+            samplePool: values.decodeIfPresent([Sample?].self, forKey: .samplePool) ?? [nil],
             patterns: values.decode([Pattern].self, forKey: .patterns),
             channelCount: values.decodeIfPresent(Int.self, forKey: .channelCount) ?? 4,
             format: values.decodeIfPresent(ModuleFormat.self, forKey: .format) ?? .protracker,
@@ -848,6 +854,7 @@ public struct Mod: Sendable, Codable {
         try values.encode(length, forKey: .length)
         try values.encode(patternTable, forKey: .patternTable)
         try values.encode(instruments, forKey: .instruments)
+        try values.encode(samplePool, forKey: .samplePool)
         try values.encode(patterns, forKey: .patterns)
         try values.encode(channelCount, forKey: .channelCount)
         try values.encode(format, forKey: .format)

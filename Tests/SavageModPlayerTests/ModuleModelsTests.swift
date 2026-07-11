@@ -330,6 +330,8 @@ final class ModuleModelsTests: XCTestCase {
                 linearFrequency: linearFrequency
             )
             XCTAssertEqual(module.channelVolumes, [64, 64, 64])
+            XCTAssertEqual(module.samplePool.count, 1)
+            XCTAssertNil(module.samplePool[0])
             XCTAssertEqual(module.channelSurrounds, [false, false, false])
             XCTAssertEqual(module.channelDisabled, [false, false, false])
             XCTAssertEqual(module.globalVolumeScale, .tracker64)
@@ -380,6 +382,7 @@ final class ModuleModelsTests: XCTestCase {
             JSONSerialization.jsonObject(with: JSONEncoder().encode(module)) as? [String: Any]
         )
         object.removeValue(forKey: "channelVolumes")
+        object.removeValue(forKey: "samplePool")
         object.removeValue(forKey: "channelSurrounds")
         object.removeValue(forKey: "channelDisabled")
         object.removeValue(forKey: "playbackSemantics")
@@ -389,6 +392,8 @@ final class ModuleModelsTests: XCTestCase {
             from: JSONSerialization.data(withJSONObject: object)
         )
         XCTAssertEqual(decoded.channelVolumes, [64, 64])
+        XCTAssertEqual(decoded.samplePool.count, 1)
+        XCTAssertNil(decoded.samplePool[0])
         XCTAssertEqual(decoded.channelSurrounds, [false, false])
         XCTAssertEqual(decoded.channelDisabled, [false, false])
         XCTAssertEqual(decoded.playbackSemantics, .fastTracker2(linearFrequency: true))

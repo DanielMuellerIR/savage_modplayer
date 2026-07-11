@@ -490,6 +490,13 @@ Wichtige Leitplanken:
   erhalten; Bxx wird auf die gefilterte Order-Liste remappt. 10 Parser- und 124
   Gesamttests, beide Audio-Regressionen, JS-Parität und signierter App-Build sind
   grün. Loader, UTI und Quick Look führen `.it` weiterhin nicht öffentlich.
+- **M3-Abschluss (Version 1.5.17):** `IMPS`-Header und ein globaler 1-basierter
+  Sample-Pool speichern unkomprimierte 8-/16-Bit-, signed/unsigned-,
+  Little-/Big-Endian-, PCM-/Delta- und planare Stereo-Daten bitgenau. Normale und
+  Sustain-Loops, C5Speed, Global Volume, Default Pan und Sample-Vibrato bleiben
+  erhalten; Sample-Mode erzeugt interne Ein-Sample-Instrumente. 7 gezielte Tests
+  mit 24er Golden-Matrix, 131 Gesamttests, beide Audio-Regressionen, JS-Parität
+  und signierter App-Build sind grün. Kompression folgt isoliert in M4.
 
 ## Fallen / Agent-Hinweise
 
