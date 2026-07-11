@@ -483,6 +483,13 @@ Wichtige Leitplanken:
   Bestehende MOD-/S3M-/XM-Initializer und Legacy-Codable-Daten bleiben
   kompatibel; 114 Swift-Tests, beide Audio-Regressionen, JS-Parität und der
   signierte App-/Quick-Look-Build sind grün. `.it` bleibt öffentlich deaktiviert.
+- **M2-Abschluss (Version 1.5.16):** Der interne `ITParser` liest IMPM-Header,
+  Versionen/Flags, Song-Message-Metadaten, 64 Kanalzustände, 32-Bit-Offsets,
+  Skip-/End-Orders sowie 32...200-zeilige Patterns mit allen Masken- und
+  Last-Value-Kombinationen. Spezialnoten und rohe Volume-/Effektspalten bleiben
+  erhalten; Bxx wird auf die gefilterte Order-Liste remappt. 10 Parser- und 124
+  Gesamttests, beide Audio-Regressionen, JS-Parität und signierter App-Build sind
+  grün. Loader, UTI und Quick Look führen `.it` weiterhin nicht öffentlich.
 
 ## Fallen / Agent-Hinweise
 

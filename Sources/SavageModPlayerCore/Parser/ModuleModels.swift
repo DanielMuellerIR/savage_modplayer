@@ -67,6 +67,14 @@ public enum ModuleEffect {
     public static let multiRetrig = 0x10C       // XM Rxy: Retrigger mit Volume-Modus x
     public static let extraFinePortaUp = 0x10D  // XM X1x: Extra-Fine-Porta up (einmalig)
     public static let extraFinePortaDown = 0x10E // XM X2x: Extra-Fine-Porta down (einmalig)
+
+    // IT-Buchstabenbefehle bleiben bis zur IT-DSP-Anbindung verlustfrei in
+    // einem eigenen Bereich. command 1 = A, 2 = B, ... 26 = Z.
+    public static let impulseTrackerCommandBase = 0x200
+
+    public static func impulseTrackerCommand(_ command: Int) -> Int {
+        impulseTrackerCommandBase + command
+    }
 }
 
 // Tracker können statt einer Tonhöhe einen besonderen Notenbefehl speichern.
@@ -643,6 +651,66 @@ public enum GlobalVolumeScale: Int, Sendable, Codable {
     case impulseTracker128 = 128
 }
 
+// Header-Metadaten, die nur IT besitzt und für Parser-, Effekt- und spätere
+// Kompatibilitätsentscheidungen verlustfrei erhalten bleiben müssen.
+public struct ITModuleProperties: Sendable, Codable, Equatable {
+    public let createdWithVersion: Int
+    public let compatibleWithVersion: Int
+    public let usesInstruments: Bool
+    public let stereo: Bool
+    public let volumeZeroMixOptimization: Bool
+    public let linearSlides: Bool
+    public let patternHighlight: Int
+    public let mixVolume: Int
+    public let panSeparation: Int
+    public let pitchWheelDepth: Int
+    public let hasSongMessage: Bool
+    public let songMessageLength: Int
+    public let songMessageOffset: Int
+    public let usesMIDIPitchController: Bool
+    public let hasEmbeddedMIDIConfiguration: Bool
+    public let unknownHeaderFlags: Int
+    public let unknownSpecialFlags: Int
+
+    public init(
+        createdWithVersion: Int,
+        compatibleWithVersion: Int,
+        usesInstruments: Bool,
+        stereo: Bool,
+        volumeZeroMixOptimization: Bool,
+        linearSlides: Bool,
+        patternHighlight: Int,
+        mixVolume: Int,
+        panSeparation: Int,
+        pitchWheelDepth: Int,
+        hasSongMessage: Bool,
+        songMessageLength: Int,
+        songMessageOffset: Int,
+        usesMIDIPitchController: Bool,
+        hasEmbeddedMIDIConfiguration: Bool,
+        unknownHeaderFlags: Int,
+        unknownSpecialFlags: Int
+    ) {
+        self.createdWithVersion = createdWithVersion
+        self.compatibleWithVersion = compatibleWithVersion
+        self.usesInstruments = usesInstruments
+        self.stereo = stereo
+        self.volumeZeroMixOptimization = volumeZeroMixOptimization
+        self.linearSlides = linearSlides
+        self.patternHighlight = patternHighlight
+        self.mixVolume = mixVolume
+        self.panSeparation = panSeparation
+        self.pitchWheelDepth = pitchWheelDepth
+        self.hasSongMessage = hasSongMessage
+        self.songMessageLength = songMessageLength
+        self.songMessageOffset = songMessageOffset
+        self.usesMIDIPitchController = usesMIDIPitchController
+        self.hasEmbeddedMIDIConfiguration = hasEmbeddedMIDIConfiguration
+        self.unknownHeaderFlags = unknownHeaderFlags
+        self.unknownSpecialFlags = unknownSpecialFlags
+    }
+}
+
 public struct Mod: Sendable, Codable {
     public let name: String
     public let length: Int          // Anzahl der Songpositionen in der Playlist
@@ -669,6 +737,7 @@ public struct Mod: Sendable, Codable {
     // IT benötigt Headerflags im Profil und muss es deshalb explizit setzen.
     // Bestehende Formate werden aus ihren unveränderten Feldern abgeleitet.
     public let playbackSemantics: PlaybackSemantics?
+    public let itProperties: ITModuleProperties?
 
     public var globalVolumeScale: GlobalVolumeScale {
         format == .it ? .impulseTracker128 : .tracker64
@@ -690,7 +759,8 @@ public struct Mod: Sendable, Codable {
         channelVolumes: [Int] = [],
         channelSurrounds: [Bool] = [],
         channelDisabled: [Bool] = [],
-        playbackSemantics: PlaybackSemantics? = nil
+        playbackSemantics: PlaybackSemantics? = nil,
+        itProperties: ITModuleProperties? = nil
     ) {
         self.linearFrequency = linearFrequency
         self.name = name
@@ -719,6 +789,7 @@ public struct Mod: Sendable, Codable {
             format: format,
             linearFrequency: linearFrequency
         )
+        self.itProperties = itProperties
     }
 
     private static func inferredSemantics(
@@ -742,7 +813,7 @@ public struct Mod: Sendable, Codable {
         case name, length, patternTable, instruments, patterns, channelCount
         case format, initialSpeed, initialTempo, initialGlobalVolume
         case channelPannings, channelVolumes, channelSurrounds, channelDisabled
-        case linearFrequency, playbackSemantics
+        case linearFrequency, playbackSemantics, itProperties
     }
 
     // Alte gespeicherte Module besitzen weder Kanal-Volumes noch ein explizites
@@ -766,7 +837,8 @@ public struct Mod: Sendable, Codable {
             channelVolumes: values.decodeIfPresent([Int].self, forKey: .channelVolumes) ?? [],
             channelSurrounds: values.decodeIfPresent([Bool].self, forKey: .channelSurrounds) ?? [],
             channelDisabled: values.decodeIfPresent([Bool].self, forKey: .channelDisabled) ?? [],
-            playbackSemantics: values.decodeIfPresent(PlaybackSemantics.self, forKey: .playbackSemantics)
+            playbackSemantics: values.decodeIfPresent(PlaybackSemantics.self, forKey: .playbackSemantics),
+            itProperties: values.decodeIfPresent(ITModuleProperties.self, forKey: .itProperties)
         )
     }
 
@@ -788,6 +860,7 @@ public struct Mod: Sendable, Codable {
         try values.encode(channelDisabled, forKey: .channelDisabled)
         try values.encode(linearFrequency, forKey: .linearFrequency)
         try values.encodeIfPresent(playbackSemantics, forKey: .playbackSemantics)
+        try values.encodeIfPresent(itProperties, forKey: .itProperties)
     }
 
     // Amiga-Standard-Panning LRRL, für mehr Kanäle periodisch fortgesetzt
