@@ -3,6 +3,25 @@ import Foundation
 @testable import SavageModPlayerCore
 
 final class ModParserTests: XCTestCase {
+    // Lokale, gitignorierte Testmusik darf nach Autor/Format in Unterordnern
+    // liegen. Alle Realwelt-Tests nutzen deshalb dieselbe rekursive Suche statt
+    // still zu ueberspringen, sobald im Wurzelordner keine MOD mehr liegt.
+    private func realModURLs(in rootPath: String = "audio") -> [URL] {
+        let root = URL(fileURLWithPath: rootPath, isDirectory: true)
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return enumerator.compactMap { item -> URL? in
+            guard let url = item as? URL,
+                  url.pathExtension.lowercased() == "mod",
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            else { return nil }
+            return url
+        }.sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
+    }
+
     
     func testMockModParsing() throws {
         // 1084 Header + 1024 Pattern 0 + 2 Sample-Bytes (Instrument 1 deklariert
@@ -134,17 +153,14 @@ final class ModParserTests: XCTestCase {
             return
         }
         
-        let contents = try fileManager.contentsOfDirectory(atPath: audioDirPath)
-        let modFiles = contents.filter { $0.lowercased().hasSuffix(".mod") }
+        let modFiles = realModURLs(in: audioDirPath)
         
         XCTAssertFalse(modFiles.isEmpty, "No MOD files found in audio directory!")
         
         print("Starting parsing tests for \(modFiles.count) actual Amiga MOD files...")
         
-        for fileName in modFiles {
-            let filePath = (audioDirPath as NSString).appendingPathComponent(fileName)
-            let fileURL = URL(fileURLWithPath: filePath)
-            
+        for fileURL in modFiles {
+            let fileName = fileURL.lastPathComponent
             let data = try Data(contentsOf: fileURL)
             let mod = try ModParser.parse(data: data)
             
@@ -224,8 +240,9 @@ final class ModParserTests: XCTestCase {
 
     @MainActor
     func testRTypeFourthChannelSampleSurvivesPastRow16() throws {
-        let fileURL = URL(fileURLWithPath: "audio/Rtype.mod")
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        guard let fileURL = realModURLs().first(where: {
+            $0.lastPathComponent.caseInsensitiveCompare("Rtype.mod") == .orderedSame
+        }) else {
             print("RType test file not found, skipping.")
             return
         }
@@ -306,15 +323,11 @@ final class ModParserTests: XCTestCase {
         guard fileManager.fileExists(atPath: audioDirPath) else {
             return
         }
-        let contents = try fileManager.contentsOfDirectory(atPath: audioDirPath)
-        let modFiles = contents
-            .filter { $0.lowercased().hasSuffix(".mod") }
-            .sorted()
-        guard let randomModName = modFiles.randomElement() else {
+        let modFiles = realModURLs(in: audioDirPath)
+        guard let fileURL = modFiles.randomElement() else {
             return
         }
-        let filePath = (audioDirPath as NSString).appendingPathComponent(randomModName)
-        let fileURL = URL(fileURLWithPath: filePath)
+        let randomModName = fileURL.lastPathComponent
         let data = try Data(contentsOf: fileURL)
         let mod = try ModParser.parse(data: data)
         
@@ -334,10 +347,9 @@ final class ModParserTests: XCTestCase {
     }
     
     func testPrintPatternNotes() throws {
-        let audioDirPath = "audio"
-        let filePath = (audioDirPath as NSString).appendingPathComponent("Simon_the_Sorcerer-Village.mod")
-        let fileURL = URL(fileURLWithPath: filePath)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        guard let fileURL = realModURLs().first(where: {
+            $0.lastPathComponent == "Simon_the_Sorcerer-Village.mod"
+        }) else {
             print("Simon test file not found, skipping.")
             return
         }

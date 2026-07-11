@@ -341,19 +341,31 @@ final class MultiFormatTests: XCTestCase {
         XCTAssertEqual(ch.period, 1712, accuracy: 0.5)
     }
 
-    // Optionaler Realwelt-Test: parst alle .s3m aus audio/ (gitignoriert,
-    // lokal) und rendert je 2 Sekunden — es muss hoerbares Signal entstehen.
+    // Optionaler Realwelt-Test: parst alle .s3m rekursiv aus audio/
+    // (gitignoriert, lokal) und rendert je 2 Sekunden — es muss hoerbares
+    // Signal entstehen.
     @MainActor
     func testRealS3MFilesParseAndRender() throws {
         let audioDirPath = "audio"
         let fm = FileManager.default
         guard fm.fileExists(atPath: audioDirPath) else { return }
-        let s3mFiles = try fm.contentsOfDirectory(atPath: audioDirPath)
-            .filter { $0.lowercased().hasSuffix(".s3m") }
+        let root = URL(fileURLWithPath: audioDirPath, isDirectory: true)
+        guard let enumerator = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        let s3mFiles = enumerator.compactMap { item -> URL? in
+            guard let url = item as? URL,
+                  url.pathExtension.lowercased() == "s3m",
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            else { return nil }
+            return url
+        }.sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
         guard !s3mFiles.isEmpty else { return }
 
-        for fileName in s3mFiles {
-            let url = URL(fileURLWithPath: (audioDirPath as NSString).appendingPathComponent(fileName))
+        for url in s3mFiles {
+            let fileName = url.lastPathComponent
             let mod = try ModuleLoader.parse(data: Data(contentsOf: url))
             XCTAssertEqual(mod.format, .s3m, fileName)
             XCTAssertGreaterThan(mod.length, 0, fileName)

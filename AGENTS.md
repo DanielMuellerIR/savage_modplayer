@@ -20,6 +20,7 @@ Diese Datei ist die zentrale Projektdokumentation. Sie beschreibt die Architektu
 | [RELEASE_NOTES.de.md](RELEASE_NOTES.de.md) | Deutsche Übersetzung der Versionsnotizen. |
 | [tasks/2026-07-05-linux-port/plan.md](tasks/2026-07-05-linux-port/plan.md) | Plan für den Linux-Port: CLI-Player auf Basis von `SavageModPlayerCore`. |
 | [tasks/2026-07-10-it-support/plan.md](tasks/2026-07-10-it-support/plan.md) | Verbindlicher Meilenstein- und Orchestrierungsplan für Impulse-Tracker-Unterstützung (`.it`). |
+| [tasks/2026-07-10-it-support/openmpt-capability-audit.md](tasks/2026-07-10-it-support/openmpt-capability-audit.md) | Vollständiger IT-/OpenMPT-Versions-, Extension-, MSF.-Capability- und A/B-Audit. |
 
 ---
 
@@ -29,7 +30,7 @@ Der **Savage Mod Player** ist ein plattformübergreifender Amiga-/Tracker-Modul-
 1. **HTML5-Variante**: Ein kompakter (unter 40 KB minifizierter) Single-File-Browser-Player (`savage-mod-player.html`), der ohne Webserver direkt aus dem Dateisystem per Doppelklick gestartet werden kann. Bewusst auf klassische 4-Kanal-ProTracker-MODs beschränkt (Kompaktheit).
 2. **Swift-Variante**: Eine native, hochperformante macOS- & iOS-Anwendung (`Savage Mod Player.app`), implementiert in SwiftUI und `AVAudioEngine`/`AVAudioSourceNode` für eine ressourcenschonende und latenzfreie Wiedergabe.
 
-### Unterstützte Formate (Stand 1.5.24)
+### Unterstützte Formate (Stand 1.5.27)
 
 | Format | HTML5 | Swift + Quick Look |
 |---|---|---|
@@ -38,7 +39,7 @@ Der **Savage Mod Player** ist ein plattformübergreifender Amiga-/Tracker-Modul-
 | Ur-Soundtracker (15 Instrumente, ohne Signatur, per Struktur-Heuristik) | ❌ | ✅ |
 | ScreamTracker 3 (S3M, bis 32 PCM-Kanäle) | ❌ | ✅ |
 | FastTracker II (XM, Multi-Sample-Instrumente, Hüllkurven) | ❌ | ✅ |
-| Impulse Tracker 2.14/2.15 (IT, Sample-/Instrument-Modus, bis 64 Pattern-Kanäle und 256 Voices) | ❌ | ✅ |
+| Impulse Tracker bis `cmwt=0x0216` (IT, Sample-/Instrument-Modus, bis 64 Pattern-Kanäle und 256 Voices) | ❌ | ✅ |
 
 Format-Dispatch am Dateiinhalt: `ModuleLoader.parse(data:)` (`"Extended Module: "` → `XMParser`, `IMPM` → `ITParser`, SCRM-Header → `S3MParser`, sonst `ModParser`).
 
@@ -145,7 +146,7 @@ p_savage_modplayer/
 - **JS↔Swift-Parität (headless)**: `node Tests/js/worklet-timing.mjs` — prüft, dass die Browser-Worklet-DSP dieselben Tick-/Amplituden-/Offset-Werte liefert wie `DSPChannel.swift`. Nach jeder DSP-Änderung in EINER Variante beide angleichen (siehe Synchronisierungsregel oben). Die Parität gilt für den gemeinsamen 4-Kanal-MOD-Kern; Multichannel/S3M sind Swift-only.
 - **Multiformat**: `swift test --filter MultiFormatTests` — Multichannel-MOD (6CHN/8CHN/xxCH/FLT8), Soundtracker-15-Heuristik, S3M-Parsing (synthetisch + echte Dateien aus `audio/`), S3M-DSP (Perioden, Slides mit Memory, Tremor, Fine-Porta) und WAV-Offline-Render (RIFF-Validität, Nicht-Stille).
 - **XM**: `swift test --filter XMParserTests` — Header/Pattern-Entpacker (gepackt + leer), Delta-Dekodierung 8/16-Bit, Keymap/Envelopes/Auto-Vibrato/Fadeout, Effekt-/Volume-Column-Übersetzung, Garbage-Ablehnung; plus Realwelt-Test über alle `.xm` aus `audio/`. XM-DSP (lineare Frequenz, Key-Off, Fadeout, Envelope-Interpolation, Volume-Column) in `DSPChannelTimingTests`.
-- **Impulse Tracker**: `swift test --filter IT` — Header/Pattern-/Instrument-/Sampleparser, IT214/IT215, Sample- und Instrument-Wiedergabe, 256er-Voice-Pool, NNA/DCT/DCA, Effekte, Filter und vollständige Klassifikation des lokalen `.it`-Korpus. Planunterstützte Dateien müssen hörbar rendern; Pattern mit weniger als 32 Reihen bleiben als bekannte Grenze klassifiziert.
+- **Impulse Tracker**: `swift test --filter IT` — Header/Pattern-/Instrument-/Sampleparser, IT214/IT215, Sample- und Instrument-Wiedergabe, 256er-Voice-Pool, NNA/DCT/DCA, Effekte, Filter, strukturierte XTPM-/STPM-Erweiterungen und Capability-Klassifikation des lokalen `.it`-Korpus. Erweiterte Patterns mit 1...1024 Zeilen und gelöschte Order-Referenzen sind Regressionen; planunterstützte Dateien müssen hörbar rendern.
 - **Länge-1-Modul**: `swift test --filter LengthOneModuleTests` — `SongPositionScale` liefert für jede Songlänge (0/1/2/…) einen nicht-leeren Slider-Bereich (Länge 1 = 0…1, nicht das crashende 0…0); Länge-1-Modul parst/rendert/seekt ohne Crash. Hardware-frei.
 - **Native App-Build**: Nach jedem Swift-Fix zusätzlich `./build_app.sh` ausführen, nicht nur `swift build` (baut auch die Quick-Look-Extension).
 - **Quick Look (manuell)**: Nach App-Build/-Installation im Finder Leertaste auf einer `.mod`/`.s3m`/`.xm`/`.it` — Audio-Player-Preview muss erscheinen und abspielen. Headless nur teilverifizierbar (Appex-Registrierung via `pluginkit -m -p com.apple.quicklook.preview`).
@@ -570,6 +571,23 @@ Wichtige Leitplanken:
   Die Instrumentliste blendet nicht spielbare Platzhalter aus und löst IT-
   Instrument-Notemaps über den globalen Sample-Pool auf. Die Vorschau stimmt IT-
   Samples anhand von C5Speed statt mit der Amiga-Paula-Periode.
+- **IT-/OpenMPT-Capability-Audit (Version 1.5.27):** `cwtv` ist jetzt eine
+  defensive Tracker-ID, `cmwt` allein die benötigte IT-Strukturversion und
+  `.VWC`/`VWSL` liefern vollständige OpenMPT-Versionen. XTPM/STPM, alte
+  ModPlug-Chunks, Plugin-/MIDI-Routing und der vollständige aktuelle 137-Bit-
+  `PlayBehaviour`-Raum werden strukturell hinter dem exakt konsumierten Payload
+  geparst; PCM-/Pattern-Marker bleiben Nutzdaten. Eine typsichere Capability-
+  Matrix trennt erkannt, tatsächlich verwendet und unterstützt. UI und CLI
+  warnen nur bei einem im abgespielten Order-Pfad erreichten Defizit; Metadaten,
+  hohe OpenMPT-Erstellerversionen, inaktive MIDI-Flags und unbenutzte Plugins
+  bleiben still. Classic/Alternative/Modern-Tempo, Mix/Preamp, Restart,
+  Kanalwerte, Extended Filter Range und alle normalen PCM-IT-Bits werden
+  angewandt. Zusätzlich korrigiert: gelöschte Pattern-Orders, 1...1024 Zeilen,
+  der doppelte Start von Patterns über 64 Zeilen, Speed-1-Slides und der exakte
+  Offline-Endframe. Die UI-Gesamtdauer wird einmal pro Song mit demselben
+  Jump-/Loop-/Delay-/Tempo-bewussten Sequencer vorgetaktet; die Referenz zeigt
+  dadurch 00:46 statt der alten statischen 01:24. Vollständige Matrix, bewusste historische Grenzen und die
+  gemessenen OpenMPT-Korpuswerte stehen im Capability-Audit.
 
 ## Fallen / Agent-Hinweise
 

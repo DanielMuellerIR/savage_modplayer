@@ -49,7 +49,7 @@ If no preview appears:
 
 ## Features
 
-- **Format support (macOS app)**: ProTracker MOD, multichannel MOD (`xCHN`/`xxCH`/`CD81`/`OKTA`/`FLT8`), 15-sample Soundtracker, ScreamTracker 3 (`.s3m`), FastTracker II (`.xm`), and native Impulse Tracker 2.14/2.15 (`.it`) files in sample or instrument mode. IT support includes 64 pattern channels, a preallocated 256-voice NNA pool, compressed 8/16-bit mono/stereo samples, envelopes, filters, effects, sustain loops, and compatibility flags. The HTML5 player deliberately stays compact and plays 4-channel MODs.
+- **Format support (macOS app)**: ProTracker MOD, multichannel MOD (`xCHN`/`xxCH`/`CD81`/`OKTA`/`FLT8`), 15-sample Soundtracker, ScreamTracker 3 (`.s3m`), FastTracker II (`.xm`), and Impulse Tracker files through `cmwt=0x0216` (`.it`) in sample or instrument mode. IT support includes 64 pattern channels, a preallocated 256-voice NNA pool, compressed 8/16-bit mono/stereo samples, envelopes, filters, effects, sustain loops, and compatibility flags. The HTML5 player deliberately stays compact and plays 4-channel MODs.
 - **Quick Look preview (macOS app)**: the bundled Quick Look plugin renders and caches up to the first 60 seconds of `.mod`/`.s3m`/`.xm`/`.it` files with the player engine, then shows the native audio player with play and scrubbing in Finder (space bar). Unsupported files show a readable reason.
 - **Drag & drop**: drop individual `.mod`/`.s3m`/`.xm`/`.it` files, entire folders (recursively), or Zip/7-Zip archives onto the player.
 - **Automatic playlist**: a configurable autoplay folder (macOS app: Settings, Cmd+,) is scanned at startup and loaded as a playlist; without configuration, an `audio/` subfolder next to the player or the app is used.
@@ -114,13 +114,16 @@ For ScreamTracker 3 the engine switches to the ST3 period model (C2Spd-based per
 
 For FastTracker II the engine runs a dedicated instrument voice model: linear frequency table (exponential frequency from linear periods), multi-sample instruments with keymaps, volume and panning envelopes (sustain and loop, interpolated per tick), key-off with volume fadeout, auto-vibrato with sweep, and ping-pong sample loops. The XM effect set including the volume column and per-channel effect memory is translated onto the shared DSP core.
 
-For Impulse Tracker the engine separates 64 logical pattern channels from a preallocated pool of 256 playback voices. It implements sample and instrument mode, NNA/DCT/DCA, 120-note sample maps, IT 2.14/2.15 compression, stereo and sustain loops, pitch/pan/filter envelopes, resonant per-voice filters, sample vibrato, surround, IT effect memory, and the `Old Effects`/`Compatible Gxx` profiles.
+For Impulse Tracker the engine separates 64 logical pattern channels from a preallocated pool of 256 playback voices. It implements sample and instrument mode, NNA/DCT/DCA, 120-note sample maps, IT 2.14/2.15 compression, stereo and sustain loops, pitch/pan/filter envelopes, resonant per-voice filters, sample vibrato, surround, IT effect memory, and the `Old Effects`/`Compatible Gxx` profiles. OpenMPT-created IT files additionally use structured XTPM/STPM parsing, classic/alternative/modern tempo formulas, stored preamp and mix settings, restart position, extended filter range, and the applicable PCM `PlayBehaviour` flags.
+
+Compatibility messages are capability-based. `cwtv` identifies the creating tracker while `cmwt` controls required IT semantics; a newer OpenMPT creator version alone is not a warning. Metadata, dormant MIDI flags, unused plugin definitions, and marker-like bytes inside PCM remain silent. A warning is shown only when a pattern in the played order list actually reaches an unsupported sound-affecting feature, with its instrument, channel, plugin slot, or chunk ID where available. `savage-cli --info` exposes the complete structured diagnosis.
 
 ### Known Impulse Tracker limitations
 
-- Native IT 2.14/2.15 playback is the target. MPTM, proprietary OpenMPT extensions, VST/plugin playback, and external MIDI output are not supported.
-- Embedded MIDI macros are limited to the common cutoff/resonance filter macros. Files using MIDI/plugin routing or unknown extensions remain playable where possible and produce a visible warning.
-- Pattern lengths are accepted from 32 through 200 rows, as defined by this implementation's compatibility target. Shorter or longer extension patterns are rejected with a parser error.
+- IT structures through `cmwt=0x0216` and known PCM-relevant OpenMPT IT extensions are supported. MPTM is detected but remains a separate unsupported format.
+- The player is deliberately not a VST/AudioUnit host and does not emit external MIDI. Embedded MIDI macros are limited to the common cutoff/resonance filter macros. These paths warn only when they are actually triggered.
+- Deprecated OpenMPT bug-emulation modes for pre-1.17 swing, the superseded old pattern-loop/jump rule, imprecise legacy ping-pong overshoot, and proprietary envelope release nodes are not emulated. They produce a feature-specific warning only if used.
+- Extended IT patterns from 1 through 1,024 rows and up to 240 patterns are accepted. Deleted pattern references in the order list are skipped like OpenMPT.
 
 ### Architecture
 
@@ -186,11 +189,15 @@ xcrun notarytool store-credentials SavageModPlayerNotary
 swift test
 swift test --filter MultiFormatTests
 node Tests/js/worklet-timing.mjs
+python3 tools/reference_compare.py --output-dir /tmp/savage-it-reference audio/example.it
 ```
 
 The suite covers the parsers (all MOD variants, S3M, XM, IT, synthetic and real files),
 DSP timing, sequencing, the Quick Look plugin's offline WAV renderer, and the
-parity between the Swift and browser DSP implementations.
+parity between the Swift and browser DSP implementations. The optional reference
+harness compares the native renderer with the pinned `openmpt123` build and reports
+duration, signal levels, envelope correlation, lag, onset matching, and spectral
+similarity without using libopenmpt as a production backend.
 
 ---
 

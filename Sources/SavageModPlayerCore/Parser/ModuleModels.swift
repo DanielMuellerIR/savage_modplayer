@@ -551,6 +551,10 @@ public struct ITInstrumentProperties: Sendable, Codable, Equatable {
     public let midiChannel: Int
     public let midiProgram: Int
     public let midiBank: Int
+    // OpenMPT speichert das Instrument-Plugin entweder im XTPM-Feld .PiM oder
+    // bei sehr alten Dateien im hohen Bit des MIDI-Kanals. nil/0 = kein Plugin.
+    public let pluginSlot: Int?
+    public let midiPitchWheelDepth: Int?
 
     public init(
         newNoteAction: NewNoteAction,
@@ -566,7 +570,9 @@ public struct ITInstrumentProperties: Sendable, Codable, Equatable {
         initialFilterResonance: Int?,
         midiChannel: Int = 0,
         midiProgram: Int = 0,
-        midiBank: Int = 0
+        midiBank: Int = 0,
+        pluginSlot: Int? = nil,
+        midiPitchWheelDepth: Int? = nil
     ) {
         self.newNoteAction = newNoteAction
         self.duplicateCheckType = duplicateCheckType
@@ -582,6 +588,8 @@ public struct ITInstrumentProperties: Sendable, Codable, Equatable {
         self.midiChannel = midiChannel
         self.midiProgram = midiProgram
         self.midiBank = midiBank
+        self.pluginSlot = pluginSlot
+        self.midiPitchWheelDepth = midiPitchWheelDepth
     }
 }
 
@@ -681,8 +689,15 @@ public struct ITModuleProperties: Sendable, Codable, Equatable {
     public let songMessageOffset: Int
     public let usesMIDIPitchController: Bool
     public let hasEmbeddedMIDIConfiguration: Bool
+    public let extendedFilterRange: Bool?
     public let unknownHeaderFlags: Int
     public let unknownSpecialFlags: Int
+    public let trackerIdentity: ITTrackerIdentity?
+    public let openMPTExtensions: ITOpenMPTExtensions?
+    public let capabilityReport: ITCapabilityReport?
+    // Bis Version 1.5.26 gespeichertes Kompatibilitaetsfeld. Neue Parserdaten
+    // bilden Erweiterungen strukturiert ab; das optionale Feld bleibt fuer alte
+    // Codable-Daten lesbar.
     public let hasUnsupportedExtensions: Bool
 
     public init(
@@ -701,8 +716,12 @@ public struct ITModuleProperties: Sendable, Codable, Equatable {
         songMessageOffset: Int,
         usesMIDIPitchController: Bool,
         hasEmbeddedMIDIConfiguration: Bool,
+        extendedFilterRange: Bool? = nil,
         unknownHeaderFlags: Int,
         unknownSpecialFlags: Int,
+        trackerIdentity: ITTrackerIdentity? = nil,
+        openMPTExtensions: ITOpenMPTExtensions? = nil,
+        capabilityReport: ITCapabilityReport? = nil,
         hasUnsupportedExtensions: Bool = false
     ) {
         self.createdWithVersion = createdWithVersion
@@ -720,8 +739,12 @@ public struct ITModuleProperties: Sendable, Codable, Equatable {
         self.songMessageOffset = songMessageOffset
         self.usesMIDIPitchController = usesMIDIPitchController
         self.hasEmbeddedMIDIConfiguration = hasEmbeddedMIDIConfiguration
+        self.extendedFilterRange = extendedFilterRange
         self.unknownHeaderFlags = unknownHeaderFlags
         self.unknownSpecialFlags = unknownSpecialFlags
+        self.trackerIdentity = trackerIdentity
+        self.openMPTExtensions = openMPTExtensions
+        self.capabilityReport = capabilityReport
         self.hasUnsupportedExtensions = hasUnsupportedExtensions
     }
 }
@@ -843,19 +866,18 @@ public struct Mod: Sendable, Codable {
     // unbekannte OpenMPT-Erweiterungen nicht.
     public var compatibilityWarnings: [String] {
         guard format == .it, let properties = itProperties else { return [] }
+        if let report = properties.capabilityReport {
+            return report.warnings
+        }
         var warnings = [String]()
-        if properties.compatibleWithVersion > 0x0215
-            || properties.createdWithVersion > 0x0215 {
-            warnings.append(
-                "Die Datei stammt aus einer neueren IT-/Tracker-Version; Erweiterungen können eingeschränkt sein."
+        if properties.compatibleWithVersion > 0x0216 {
+            let version = String(
+                format: "%X.%02X",
+                properties.compatibleWithVersion >> 8,
+                properties.compatibleWithVersion & 0xFF
             )
-        }
-        if properties.usesMIDIPitchController {
-            warnings.append("Externe MIDI-Pitchsteuerung wird nicht wiedergegeben.")
-        }
-        if properties.hasEmbeddedMIDIConfiguration {
             warnings.append(
-                "Eingebettete MIDI-Makros sind auf die gebräuchlichen IT-Filtermakros beschränkt."
+                "Die Datei benoetigt IT \(version); diese Strukturversion wird noch nicht unterstuetzt."
             )
         }
         if instruments.compactMap({ $0?.itProperties }).contains(where: { $0.midiChannel > 0 }) {

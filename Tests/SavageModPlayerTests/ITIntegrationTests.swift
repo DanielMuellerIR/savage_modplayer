@@ -26,16 +26,7 @@ final class ITIntegrationTests: XCTestCase {
         var hasStereo = false
         var shortPatternFiles = 0
         for file in files {
-            let module: Mod
-            do {
-                module = try ModuleLoader.parse(data: Data(contentsOf: file))
-            } catch let error as ITParser.ParserError {
-                if case let .invalidPatternRows(_, rows) = error, rows > 0, rows < 32 {
-                    shortPatternFiles += 1
-                    continue
-                }
-                throw error
-            }
+            let module = try ModuleLoader.parse(data: Data(contentsOf: file))
             XCTAssertEqual(module.format, .it, file.lastPathComponent)
             if module.itProperties?.usesInstruments == true {
                 instrumentModeCount += 1
@@ -48,6 +39,9 @@ final class ITIntegrationTests: XCTestCase {
                 .contains { $0.valueMode == .filter }
             hasStereo = hasStereo || module.samplePool.compactMap { $0 }
                 .contains { $0.rightPCM != nil }
+            if module.patterns.contains(where: { $0.rows.count < 32 }) {
+                shortPatternFiles += 1
+            }
 
             let wav = try ModuleRenderer.renderWavData(
                 mod: module,
@@ -62,7 +56,7 @@ final class ITIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(sampleModeCount, 0)
         XCTAssertGreaterThan(instrumentModeCount, 0)
         XCTAssertGreaterThan(shortPatternFiles, 0,
-                             "Korpus soll die dokumentierte 32-Row-Untergrenze abdecken")
+                             "Korpus soll OpenMPT-Pattern unter 32 Reihen abdecken")
         XCTAssertTrue(hasNNA, "Korpus muss mindestens eine NNA-Datei enthalten")
         XCTAssertTrue(hasFilter, "Korpus muss mindestens eine Filterdatei enthalten")
         XCTAssertTrue(hasStereo, "Korpus muss mindestens ein Stereo-Sample enthalten")

@@ -1,3 +1,19 @@
+## 1.5.27 — 2026-07-11
+
+- Replaced broad IT/OpenMPT warnings with a structured capability report. `cwtv` now identifies the creating tracker, `cmwt` controls format compatibility, and full OpenMPT versions come from their dedicated extension fields. A newer OpenMPT creator version no longer warns by itself.
+- XTPM, STPM, legacy ModPlug chunks, MIDI/plugin routing, and all current OpenMPT `PlayBehaviour` bits are parsed at their structural boundaries. Marker bytes inside patterns or compressed/uncompressed PCM can no longer be mistaken for extensions.
+- Known channel, timing, mix, preamp, restart, filter, and PCM compatibility values are applied by the engine. Classic, alternative, and modern OpenMPT tempo modes are supported, as are extended IT patterns from 1 to 1,024 rows.
+- Warnings now require actual use in the played order path. Dormant MIDI flags, default macros, unused plugin definitions, metadata, and unsupported properties of unused instruments remain silent; used external routes identify the instrument, channel, or plugin slot.
+- Fixed extended-pattern startup and deleted order references. Patterns longer than 64 rows no longer play their tail and then restart from row zero, and references to deleted patterns are skipped like OpenMPT.
+- Offline rendering now trims the final block at the exact sequencer end frame. The UI duration uses the same jump/loop/delay/tempo-aware sequencer probe instead of a static row estimate; the primary OpenMPT reference now shows and renders exactly 46.080 seconds.
+- `savage-cli --info` now reports tracker identity, `cwtv`/`cmwt`, full OpenMPT versions, every structured extension chunk, `PlayBehaviour` state, and concrete capability results.
+- Added deterministic OpenMPT-extension, warning, compatibility-bit, variable-pattern, and MIDI/plugin fixtures. The reproducible A/B report now includes declared duration and distinguishes OpenMPT's terminal WAV padding from musical duration.
+
+### Deliberate boundaries
+
+- Savage Mod Player remains a native PCM tracker engine, not a VST/AudioUnit host or external MIDI renderer. Those paths warn only when triggered.
+- Deprecated pre-1.17 OpenMPT swing, the superseded old loop/jump rule, imprecise legacy ping-pong overshoot, and proprietary envelope release nodes remain feature-specific compatibility limits.
+
 ## 1.5.25 — 2026-07-11
 
 - The header now shows the number of pattern channels actually used by the song, before BPM.

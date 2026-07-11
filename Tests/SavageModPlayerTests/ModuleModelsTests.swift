@@ -278,6 +278,92 @@ final class ModuleModelsTests: XCTestCase {
         XCTAssertEqual(decoded.fadeout, 128)
     }
 
+    func testITOpenMPTExtensionsAndCapabilitiesSurviveCodableAndLegacyData() throws {
+        let extensions = ITOpenMPTExtensions(
+            chunks: [ITExtensionChunk(
+                id: ".APS", context: .song, size: 4,
+                classification: .playback, summary: "Sample-Preamp"
+            )],
+            instrumentFields: [ITInstrumentExtensionField(
+                id: "..OF", property: .fadeout, entrySize: 2, values: [1_234]
+            )],
+            defaultTempo: 150,
+            rowsPerBeat: 4,
+            rowsPerMeasure: 16,
+            channelCount: 32,
+            tempoMode: .modern,
+            rawTempoMode: 2,
+            mixLevel: .compatible,
+            rawMixLevel: 4,
+            createdWithVersion: OpenMPTVersion(rawValue: 0x01280400),
+            lastSavedWithVersion: OpenMPTVersion(rawValue: 0x01280400),
+            samplePreamp: 48,
+            synthPreamp: 48,
+            restartPosition: 2,
+            playBehaviours: [ITPlayBehaviourState(bit: 13, behaviour: .itArpeggio)],
+            artist: "Test",
+            channelColors: [0x102030],
+            hasMIDIMapping: false
+        )
+        let identity = ITTrackerIdentity(
+            family: .openMPT,
+            rawCreatedWith: 0x5128,
+            displayName: "OpenMPT 1.28.04.00",
+            createdWithOpenMPT: OpenMPTVersion(rawValue: 0x01280400),
+            lastSavedWithOpenMPT: OpenMPTVersion(rawValue: 0x01280400)
+        )
+        let report = ITCapabilityReport(findings: [ITCapabilityFinding(
+            feature: .samplePreamp,
+            identifier: "sample-preamp",
+            detected: true,
+            used: true,
+            support: .supported,
+            detail: "48"
+        )])
+        let properties = ITModuleProperties(
+            createdWithVersion: 0x5128,
+            compatibleWithVersion: 0x0214,
+            usesInstruments: false,
+            stereo: true,
+            volumeZeroMixOptimization: false,
+            linearSlides: true,
+            patternHighlight: 0x1004,
+            mixVolume: 48,
+            panSeparation: 128,
+            pitchWheelDepth: 0,
+            hasSongMessage: false,
+            songMessageLength: 0,
+            songMessageOffset: 0,
+            usesMIDIPitchController: true,
+            hasEmbeddedMIDIConfiguration: false,
+            extendedFilterRange: true,
+            unknownHeaderFlags: 0,
+            unknownSpecialFlags: 0,
+            trackerIdentity: identity,
+            openMPTExtensions: extensions,
+            capabilityReport: report
+        )
+
+        let encoded = try JSONEncoder().encode(properties)
+        XCTAssertEqual(try JSONDecoder().decode(ITModuleProperties.self, from: encoded), properties)
+
+        var legacy = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        legacy.removeValue(forKey: "extendedFilterRange")
+        legacy.removeValue(forKey: "trackerIdentity")
+        legacy.removeValue(forKey: "openMPTExtensions")
+        legacy.removeValue(forKey: "capabilityReport")
+        let decodedLegacy = try JSONDecoder().decode(
+            ITModuleProperties.self,
+            from: JSONSerialization.data(withJSONObject: legacy)
+        )
+        XCTAssertNil(decodedLegacy.extendedFilterRange)
+        XCTAssertNil(decodedLegacy.trackerIdentity)
+        XCTAssertNil(decodedLegacy.openMPTExtensions)
+        XCTAssertNil(decodedLegacy.capabilityReport)
+    }
+
     func testITSampleStereoSustainAndVibratoSurviveCodableRoundTrip() throws {
         let sustainLoop = SampleLoop(start: 1, length: 3, type: .pingpong)
         let properties = ITSampleProperties(

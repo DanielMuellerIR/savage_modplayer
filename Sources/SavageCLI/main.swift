@@ -139,16 +139,49 @@ func envelopeDescription(_ label: String, _ envelope: Envelope?) -> String {
 
 func printITInfo(_ mod: Mod) {
     if let properties = mod.itProperties {
-        print(String(format: "IT-Versionen:    cwtv=0x%04X cmwt=0x%04X", properties.createdWithVersion, properties.compatibleWithVersion))
+        if let identity = properties.trackerIdentity {
+            print("Tracker:          \(identity.displayName)")
+        }
+        print(String(
+            format: "IT-Versionen:    cwtv=0x%04X (Ersteller), cmwt=0x%04X (benoetigte IT-Semantik)",
+            properties.createdWithVersion,
+            properties.compatibleWithVersion
+        ))
         print("IT-Modus:         \(properties.usesInstruments ? "Instrument" : "Sample")")
         print("IT-Mix/PanSep:    \(properties.mixVolume) / \(properties.panSeparation)")
         if case let .impulseTracker(compatibility)? = mod.playbackSemantics {
             print("IT-Flags:         oldFx=\(compatibility.oldEffects) compatGxx=\(compatibility.compatibleGxx)")
         }
+        if let extensions = properties.openMPTExtensions {
+            let created = extensions.createdWithVersion?.displayName ?? "-"
+            let saved = extensions.lastSavedWithVersion?.displayName ?? "-"
+            print("OpenMPT-Version:  erstellt \(created), zuletzt gespeichert \(saved)")
+            print("OpenMPT-Timing:   \(tempoModeName(extensions.tempoMode)), Rows/Beat \(extensions.rowsPerBeat.map(String.init) ?? "Header/4"), Rows/Takt \(extensions.rowsPerMeasure.map(String.init) ?? "Header/16")")
+            print("OpenMPT-Mix:      Level \(extensions.rawMixLevel.map(String.init) ?? "Header"), Sample-/Synth-Preamp \(extensions.samplePreamp.map(String.init) ?? "Header")/\(extensions.synthPreamp.map(String.init) ?? "-")")
+            print("Erweiterungen:    \(extensions.chunks.count) strukturierte Chunks")
+            for chunk in extensions.chunks {
+                print("  \(chunk.context.rawValue).\(chunk.id) [\(chunk.classification.rawValue), \(chunk.size) B]: \(chunk.summary)")
+            }
+            if !extensions.playBehaviours.isEmpty {
+                let flags = extensions.playBehaviours.map {
+                    "\($0.bit):\($0.behaviour?.displayName ?? "unbekannt")"
+                }.joined(separator: ", ")
+                print("MSF.-Bits:        \(flags)")
+            }
+        }
+        if let findings = properties.capabilityReport?.findings.filter({ $0.detected }) {
+            print("Capabilities:     \(findings.count) erkannte Merkmale")
+            for finding in findings {
+                let use = finding.used ? "verwendet" : "nicht verwendet"
+                print("  \(finding.identifier): \(capabilitySupportName(finding.support)), \(use) — \(finding.detail)")
+            }
+        }
     }
     if !mod.compatibilityWarnings.isEmpty {
         print("Einschränkungen:")
         for warning in mod.compatibilityWarnings { print("  WARNUNG: \(warning)") }
+    } else {
+        print("Einschränkungen:  keine hörbar relevanten")
     }
 
     let instruments = mod.instruments.compactMap { $0 }
@@ -218,6 +251,25 @@ func printITInfo(_ mod: Mod) {
     }
 }
 
+func tempoModeName(_ mode: ITTempoMode) -> String {
+    switch mode {
+    case .classic: return "klassisch"
+    case .alternative: return "alternativ"
+    case .modern: return "modern"
+    }
+}
+
+func capabilitySupportName(_ support: ITCapabilitySupport) -> String {
+    switch support {
+    case .supported: return "unterstützt"
+    case .irrelevantForPCM: return "für PCM-IT irrelevant"
+    case .metadataOnly: return "nur Metadaten"
+    case .midiOrPluginOnly: return "nur MIDI/Plugin"
+    case .unsupported: return "nicht unterstützt"
+    case .differentPlayback: return "abweichende Wiedergabe"
+    }
+}
+
 func dumpPattern(_ mod: Mod, orderIndex: Int) {
     guard orderIndex >= 0, orderIndex < mod.patternTable.count else {
         print("Order-Index \(orderIndex) außerhalb 0..\(mod.patternTable.count - 1)")
@@ -267,7 +319,7 @@ do {
 if opts.infoOnly || opts.dumpPattern != nil {
     printInfo(mod)
     if let p = opts.dumpPattern { print(""); dumpPattern(mod, orderIndex: p) }
-    if opts.infoOnly { exit(0) }
+    exit(0)
 }
 
 let maxDuration = opts.seconds > 0 ? opts.seconds : 600.0

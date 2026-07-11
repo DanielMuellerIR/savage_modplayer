@@ -23,6 +23,7 @@ public enum ITParser {
         case unsupportedSampleEncoding(sample: Int, convertFlags: Int)
         case invalidSampleLoop(sample: Int, kind: String, start: Int, end: Int, length: Int)
         case truncatedSample(Int)
+        case invalidExtension(String)
 
         public var errorDescription: String? {
             switch self {
@@ -60,6 +61,8 @@ public enum ITParser {
                 return "IT-Sample \(sample) hat einen ungültigen \(kind)-Loop \(start)..<\(end) bei Länge \(length)."
             case let .truncatedSample(sample):
                 return "IT-Sample \(sample) ist abgeschnitten."
+            case let .invalidExtension(reason):
+                return "Ungueltige IT-/OpenMPT-Erweiterung: \(reason)."
             }
         }
     }
@@ -69,7 +72,12 @@ public enum ITParser {
     private static let maximumOrders = 256
     private static let maximumInstruments = 99
     private static let maximumSamples = 99
-    private static let maximumPatterns = 200
+    // OpenMPTs erweitertes IT-Profil erlaubt bis zu 240 Pattern und 1...1024
+    // Reihen. Das Dateiformat verwendet weiterhin dieselben sicheren Tabellen-
+    // und Packed-Pattern-Grenzen; nur die historischen IT-2.14-UI-Limits
+    // 200/32...200 werden nicht mehr künstlich als Parserlimit behandelt.
+    private static let maximumPatterns = 240
+    private static let maximumPatternRows = 1_024
 
     private struct Reader {
         let data: Data
@@ -151,6 +159,7 @@ public enum ITParser {
         let pitchWheelDepth = try reader.byte(0x35)
         let songMessageLength = try reader.word(0x36)
         let songMessageOffset = try reader.dword(0x38)
+        let reserved = try reader.dword(0x3C)
 
         guard globalVolume <= 128 else {
             throw ParserError.invalidHeaderValue("globalVolume", globalVolume)
@@ -235,19 +244,38 @@ public enum ITParser {
         )
         guard !patternTable.isEmpty else { throw ParserError.emptySong }
 
-        let samples = try parseSamples(
+        let parsedSamples = try parseSamples(
             reader: reader,
             offsets: sampleOffsets,
             createdWithVersion: createdWithVersion
         )
+        let samples = parsedSamples.samples
 
         var patterns = [Pattern]()
         patterns.reserveCapacity(patternCount)
+        var payloadEnd = max(
+            patternOffsetsOffset + patternCount * 4,
+            parsedSamples.endOffset
+        )
+        for (index, offset) in instrumentOffsets.enumerated() {
+            payloadEnd = max(
+                payloadEnd,
+                try instrumentPayloadEnd(reader: reader, offset: offset, index: index + 1)
+            )
+        }
         for patternIndex in 0..<patternCount {
             let offset = try reader.dword(patternOffsetsOffset + patternIndex * 4)
             if offset == 0 {
                 patterns.append(emptyPattern(rowCount: 64))
             } else {
+                guard offset <= data.count - 8 else {
+                    throw ParserError.invalidOffset(kind: "Pattern", index: patternIndex, offset: offset)
+                }
+                let packedLength = try reader.word(offset)
+                guard packedLength <= data.count - offset - 8 else {
+                    throw ParserError.truncatedPattern(patternIndex)
+                }
+                payloadEnd = max(payloadEnd, offset + 8 + packedLength)
                 patterns.append(try parsePattern(
                     reader: reader,
                     patternIndex: patternIndex,
@@ -256,6 +284,24 @@ public enum ITParser {
                 ))
             }
         }
+        if hasSongMessage {
+            payloadEnd = max(payloadEnd, songMessageOffset + songMessageLength)
+        }
+
+        let allPayloadOffsets = instrumentOffsets + sampleOffsets + (0..<patternCount).compactMap {
+            let value = try? reader.dword(patternOffsetsOffset + $0 * 4)
+            return value.flatMap { $0 > 0 ? $0 : nil }
+        } + (hasSongMessage ? [songMessageOffset] : [])
+        let firstPayloadOffset = allPayloadOffsets.min() ?? payloadEnd
+        let extensions = try ITOpenMPTExtensionParser.parse(
+            data: data,
+            tablesEnd: patternOffsetsOffset + patternCount * 4,
+            firstPayloadOffset: firstPayloadOffset,
+            payloadEnd: payloadEnd,
+            instrumentOffsets: instrumentOffsets,
+            flags: flags,
+            special: special
+        )
 
         let usesInstruments = flags & 0x04 != 0
         let instruments: [Instrument?]
@@ -263,7 +309,8 @@ public enum ITParser {
             instruments = try parseInstruments(
                 reader: reader,
                 offsets: instrumentOffsets,
-                compatibleWithVersion: compatibleWithVersion
+                compatibleWithVersion: compatibleWithVersion,
+                extensions: extensions
             )
         } else {
             instruments = [nil] + samples.enumerated().map { index, sample in
@@ -274,7 +321,16 @@ public enum ITParser {
             oldEffects: flags & 0x10 != 0,
             compatibleGxx: flags & 0x20 != 0
         )
-        let properties = ITModuleProperties(
+        let trackerIdentity = ITTrackerDetector.identify(
+            createdWithVersion: createdWithVersion,
+            compatibleWithVersion: compatibleWithVersion,
+            reserved: reserved,
+            extensions: extensions
+        )
+        let declaredChannelCount = extensions.channelCount ?? channelCount
+        let effectiveChannelCount = max(1, min(channelCount, declaredChannelCount))
+        let initialExtensionTempo = extensions.defaultTempo ?? initialTempo
+        let baseProperties = ITModuleProperties(
             createdWithVersion: createdWithVersion,
             compatibleWithVersion: compatibleWithVersion,
             usesInstruments: usesInstruments,
@@ -290,9 +346,48 @@ public enum ITParser {
             songMessageOffset: songMessageOffset,
             usesMIDIPitchController: flags & 0x40 != 0,
             hasEmbeddedMIDIConfiguration: flags & 0x80 != 0 || special & 0x08 != 0,
-            unknownHeaderFlags: flags & ~0x00FF,
-            unknownSpecialFlags: special & ~0x0009,
-            hasUnsupportedExtensions: containsUnsupportedExtension(in: data)
+            extendedFilterRange: flags & 0x1000 != 0,
+            unknownHeaderFlags: flags & ~0x10FF,
+            unknownSpecialFlags: special & ~0x000F,
+            trackerIdentity: trackerIdentity,
+            openMPTExtensions: extensions
+        )
+
+        let capabilityReport = ITCapabilityAnalyzer.analyze(
+            compatibleWithVersion: compatibleWithVersion,
+            initialSpeed: initialSpeed,
+            usesInstruments: usesInstruments,
+            usesMIDIPitchController: flags & 0x40 != 0,
+            unknownHeaderFlags: baseProperties.unknownHeaderFlags,
+            unknownSpecialFlags: baseProperties.unknownSpecialFlags,
+            extensions: extensions,
+            instruments: instruments,
+            samples: samples,
+            patterns: patterns,
+            patternTable: patternTable
+        )
+        let properties = ITModuleProperties(
+            createdWithVersion: createdWithVersion,
+            compatibleWithVersion: compatibleWithVersion,
+            usesInstruments: usesInstruments,
+            stereo: baseProperties.stereo,
+            volumeZeroMixOptimization: baseProperties.volumeZeroMixOptimization,
+            linearSlides: baseProperties.linearSlides,
+            patternHighlight: patternHighlight,
+            mixVolume: mixVolume,
+            panSeparation: panSeparation,
+            pitchWheelDepth: pitchWheelDepth,
+            hasSongMessage: hasSongMessage,
+            songMessageLength: songMessageLength,
+            songMessageOffset: songMessageOffset,
+            usesMIDIPitchController: baseProperties.usesMIDIPitchController,
+            hasEmbeddedMIDIConfiguration: baseProperties.hasEmbeddedMIDIConfiguration,
+            extendedFilterRange: baseProperties.extendedFilterRange,
+            unknownHeaderFlags: baseProperties.unknownHeaderFlags,
+            unknownSpecialFlags: baseProperties.unknownSpecialFlags,
+            trackerIdentity: trackerIdentity,
+            openMPTExtensions: extensions,
+            capabilityReport: capabilityReport
         )
 
         return Mod(
@@ -302,39 +397,59 @@ public enum ITParser {
             instruments: instruments,
             samplePool: [nil] + samples.map(Optional.some),
             patterns: patterns,
-            channelCount: channelCount,
+            channelCount: effectiveChannelCount,
             format: .it,
             initialSpeed: initialSpeed,
-            initialTempo: initialTempo,
+            initialTempo: initialExtensionTempo,
             initialGlobalVolume: globalVolume,
-            channelPannings: channelPannings,
+            channelPannings: Array(channelPannings.prefix(effectiveChannelCount)),
             linearFrequency: properties.linearSlides,
-            channelVolumes: channelVolumes,
-            channelSurrounds: channelSurrounds,
-            channelDisabled: channelDisabled,
+            channelVolumes: Array(channelVolumes.prefix(effectiveChannelCount)),
+            channelSurrounds: Array(channelSurrounds.prefix(effectiveChannelCount)),
+            channelDisabled: Array(channelDisabled.prefix(effectiveChannelCount)),
             playbackSemantics: .impulseTracker(compatibility),
             itProperties: properties
         )
-    }
-
-    // OpenMPT hängt proprietäre Instrument-/Songeigenschaften als markierte
-    // Chunks an native IT-Dateien. Sie bleiben außerhalb des Zielumfangs, ihre
-    // Anwesenheit wird aber im Modell für UI/CLI sichtbar festgehalten.
-    private static func containsUnsupportedExtension(in data: Data) -> Bool {
-        for marker in ["MPTX", "XTPM", "MPTS", "STPM"] {
-            if data.range(of: Data(marker.utf8)) != nil { return true }
-        }
-        return false
     }
 
     // MARK: - Instrumente
 
     private static let instrumentSize = 554
 
+    // Ermittelt das reale Ende alter erweiterter IT-Instrumentheader. Nur diese
+    // strukturelle Grenze darf den Beginn globaler XTPM-/STPM-Daten bestimmen.
+    private static func instrumentPayloadEnd(
+        reader: Reader,
+        offset: Int,
+        index: Int
+    ) throws -> Int {
+        guard offset <= reader.data.count - instrumentSize else {
+            throw ParserError.invalidInstrumentHeader(index)
+        }
+        var end = offset + instrumentSize
+        let marker = try reader.string(offset + instrumentSize - 4, length: 4)
+        if marker == "XTPM" || marker == "MPTX" {
+            guard end <= reader.data.count - 120 else {
+                throw ParserError.invalidExtension(
+                    "abgeschnittene erweiterte Sample-Map von Instrument \(index)"
+                )
+            }
+            end += 120
+        }
+        guard end <= reader.data.count - 8,
+              try reader.string(end, length: 4) == "MSNI" else { return end }
+        let size = try reader.dword(end + 4)
+        guard size <= reader.data.count - end - 8 else {
+            throw ParserError.invalidExtension("abgeschnittener MSNI-Block von Instrument \(index)")
+        }
+        return end + 8 + size
+    }
+
     private static func parseInstruments(
         reader: Reader,
         offsets: [Int],
-        compatibleWithVersion: Int
+        compatibleWithVersion: Int,
+        extensions: ITOpenMPTExtensions
     ) throws -> [Instrument?] {
         var instruments: [Instrument?] = [nil]
         instruments.reserveCapacity(offsets.count + 1)
@@ -353,7 +468,8 @@ public enum ITParser {
                 ))
             } else {
                 instruments.append(try parseModernInstrument(
-                    reader: reader, offset: offset, index: index
+                    reader: reader, offset: offset, index: index,
+                    extensions: extensions
                 ))
             }
         }
@@ -363,7 +479,8 @@ public enum ITParser {
     private static func parseModernInstrument(
         reader: Reader,
         offset: Int,
-        index: Int
+        index: Int,
+        extensions: ITOpenMPTExtensions
     ) throws -> Instrument {
         let nnaRaw = try reader.byte(offset + 0x11)
         let dctRaw = try reader.byte(offset + 0x12)
@@ -407,9 +524,28 @@ public enum ITParser {
         let rawCutoff = try reader.byte(offset + 0x3A)
         let rawResonance = try reader.byte(offset + 0x3B)
         let defaultPanValue = rawDefaultPanning & 0x7F
-        let defaultPanning: Int? = rawDefaultPanning & 0x80 != 0
+        let headerDefaultPanning: Int? = rawDefaultPanning & 0x80 != 0
             ? nil
             : (defaultPanValue <= 64 ? defaultPanValue : 32)
+        // OpenMPT speichert den erweiterten Pan-Wert in 0...256. Das interne
+        // IT-Modell verwendet wie der Originalheader 0...64.
+        let defaultPanning = extensionValue(
+            .panning, instrument: index, extensions: extensions
+        ).map { max(0, min(64, $0 / 4)) } ?? headerDefaultPanning
+        let headerMIDIChannel = try reader.byte(offset + 0x3C)
+        let headerMIDIProgram = try reader.byte(offset + 0x3D)
+        let headerMIDIBank = try reader.word(offset + 0x3E)
+        let rawMIDIChannel = extensionValue(
+            .midiChannel, instrument: index, extensions: extensions
+        ) ?? headerMIDIChannel
+        let headerFadeout = try reader.word(offset + 0x14) << 5
+        let fadeout = extensionValue(
+            .fadeout, instrument: index, extensions: extensions
+        ) ?? headerFadeout
+        let legacyPluginSlot = rawMIDIChannel & 0x80 != 0 ? rawMIDIChannel & 0x7F : 0
+        let pluginSlot = extensionValue(
+            .pluginSlot, instrument: index, extensions: extensions
+        ) ?? legacyPluginSlot
         let properties = ITInstrumentProperties(
             newNoteAction: nna,
             duplicateCheckType: dct,
@@ -422,9 +558,17 @@ public enum ITParser {
             randomPanningVariation: min(64, try reader.byte(offset + 0x1B)),
             initialFilterCutoff: rawCutoff & 0x80 != 0 ? rawCutoff & 0x7F : nil,
             initialFilterResonance: rawResonance & 0x80 != 0 ? rawResonance & 0x7F : nil,
-            midiChannel: try reader.byte(offset + 0x3C),
-            midiProgram: try reader.byte(offset + 0x3D),
-            midiBank: try reader.word(offset + 0x3E)
+            midiChannel: rawMIDIChannel & 0x80 != 0 ? 0 : rawMIDIChannel,
+            midiProgram: extensionValue(
+                .midiProgram, instrument: index, extensions: extensions
+            ) ?? headerMIDIProgram,
+            midiBank: extensionValue(
+                .midiBank, instrument: index, extensions: extensions
+            ) ?? headerMIDIBank,
+            pluginSlot: pluginSlot > 0 ? pluginSlot : nil,
+            midiPitchWheelDepth: extensionValue(
+                .midiPitchWheelDepth, instrument: index, extensions: extensions
+            )
         )
         return Instrument(
             index: index,
@@ -432,11 +576,22 @@ public enum ITParser {
             samples: [],
             volumeEnvelope: volumeEnvelope,
             panningEnvelope: panningEnvelope,
-            fadeout: try reader.word(offset + 0x14) << 5,
+            fadeout: fadeout,
             pitchEnvelope: pitchEnvelope,
             noteSampleMapping: mapping,
             itProperties: properties
         )
+    }
+
+    private static func extensionValue(
+        _ property: ITInstrumentExtensionProperty,
+        instrument: Int,
+        extensions: ITOpenMPTExtensions
+    ) -> Int? {
+        guard instrument > 0,
+              let field = extensions.instrumentFields.last(where: { $0.property == property }),
+              field.values.indices.contains(instrument - 1) else { return nil }
+        return field.values[instrument - 1]
     }
 
     // Das Vor-2.00-Format besitzt nur eine Volume-Hüllkurve und kodiert deren
@@ -650,9 +805,10 @@ public enum ITParser {
         reader: Reader,
         offsets: [Int],
         createdWithVersion: Int
-    ) throws -> [Sample] {
+    ) throws -> (samples: [Sample], endOffset: Int) {
         var samples = [Sample]()
         samples.reserveCapacity(offsets.count)
+        var endOffset = 0
 
         for (zeroBasedIndex, offset) in offsets.enumerated() {
             let sampleIndex = zeroBasedIndex + 1
@@ -738,6 +894,7 @@ public enum ITParser {
             // IT 2.14 führte echtes Stereo ein; Zielumfang M3 ist 2.14/2.15.
             let isStereo = flags & 0x04 != 0 && createdWithVersion >= 0x0214
             let isCompressed = flags & 0x08 != 0
+            endOffset = max(endOffset, offset + 80)
             var leftPCM = [Float]()
             var rightPCM: [Float]?
             if dataPresent, length > 0 {
@@ -750,6 +907,7 @@ public enum ITParser {
                         stereo: isStereo,
                         version: convertFlags & 0x04 != 0 ? .it215 : .it214
                     )
+                    endOffset = max(endOffset, sampleDataOffset + decompressed.bytesConsumed)
                     let divisor: Float = is16Bit ? 65_536.0 : 256.0
                     leftPCM = decompressed.left.map { Float($0) / divisor }
                     rightPCM = decompressed.right?.map { Float($0) / divisor }
@@ -784,6 +942,7 @@ public enum ITParser {
                             isDelta: convertFlags & 0x04 != 0
                         )
                     }
+                    endOffset = max(endOffset, sampleDataOffset + requiredBytes)
                 }
             }
 
@@ -826,7 +985,7 @@ public enum ITParser {
                 )
             ))
         }
-        return samples
+        return (samples, endOffset)
     }
 
     private static func validateLoop(
@@ -902,7 +1061,14 @@ public enum ITParser {
             case 0..<patternCount:
                 filteredIndex[rawIndex] = patternTable.count
                 patternTable.append(value)
+            // OpenMPT erhaelt auch Order-Eintraege, deren Pattern inzwischen
+            // geloescht wurde, ueberspringt sie bei der Wiedergabe aber ohne
+            // Zeitverbrauch. Sie verhalten sich damit wie ein +++-Eintrag.
+            case patternCount...253:
+                continue
             default:
+                // 254/255 wurden oben bereits behandelt; der Zweig bleibt nur
+                // fuer eine vollstaendige, defensive Switch-Abdeckung.
                 throw ParserError.invalidOrder(value)
             }
         }
@@ -938,7 +1104,7 @@ public enum ITParser {
         }
         let packedLength = try reader.word(offset)
         let rowCount = try reader.word(offset + 2)
-        guard (32...200).contains(rowCount) else {
+        guard (1...maximumPatternRows).contains(rowCount) else {
             throw ParserError.invalidPatternRows(pattern: patternIndex, rows: rowCount)
         }
         let packedStart = offset + 8

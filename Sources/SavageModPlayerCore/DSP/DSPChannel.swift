@@ -149,6 +149,17 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var itInstrumentMode: Bool = false
     nonisolated(unsafe) public var itOldEffects: Bool = false
     nonisolated(unsafe) public var itCompatibleGxx: Bool = false
+    // Alte OpenMPT-ITs koennen normale Pitch-Slides bei Speed 1 einmal auf
+    // Tick 0 ausfuehren. Ohne dieses explizite MSF.-Bit gilt originales IT:
+    // Speed 1 besitzt keinen Folgetick und normale Slides bewegen sich nicht.
+    nonisolated(unsafe) public var itSlidesAtSpeedOne: Bool = false
+    nonisolated(unsafe) public var itExtendedFilterRange: Bool = false
+    nonisolated(unsafe) public var itResetFilterOnPortamentoSampleChange: Bool = false
+    nonisolated(unsafe) public var itDoublePortamentoSlides: Bool = false
+    nonisolated(unsafe) public var itNoteCutWithPortamento: Bool = false
+    nonisolated(unsafe) public var itStoppedFilterEnvelopeAtStart: Bool = false
+    nonisolated(unsafe) public var itDeferredPortamentoNoteCut: Bool = false
+    nonisolated(unsafe) public var itStoppedFilterMidpointActive: Bool = false
     nonisolated(unsafe) public var itPatternState: ITPatternChannelState?
     nonisolated(unsafe) public var itVoicePool: ITPlaybackVoicePool?
     nonisolated(unsafe) public var itIsBackgroundVoice: Bool = false
@@ -350,6 +361,14 @@ public final class DSPChannel: Sendable {
         itInstrumentMode = false
         itOldEffects = false
         itCompatibleGxx = false
+        itSlidesAtSpeedOne = false
+        itExtendedFilterRange = false
+        itResetFilterOnPortamentoSampleChange = false
+        itDoublePortamentoSlides = false
+        itNoteCutWithPortamento = false
+        itStoppedFilterEnvelopeAtStart = false
+        itDeferredPortamentoNoteCut = false
+        itStoppedFilterMidpointActive = false
         itPatternState = nil
         itVoicePool = nil
         itIsBackgroundVoice = false
@@ -481,6 +500,7 @@ public final class DSPChannel: Sendable {
         self.delayNote = -1
         self.cutNoteTick = -1
         self.keyOffTick = -1
+        self.itDeferredPortamentoNoteCut = false
 
         var hasSetInstrument = false
         var hasSetSample = false
@@ -628,6 +648,19 @@ public final class DSPChannel: Sendable {
             self.setVolume = Float(min(64, note.volume))
         }
 
+        let itCommand = note.hasEffect
+            && note.effectId > ModuleEffect.impulseTrackerCommandBase
+            ? note.effectId - ModuleEffect.impulseTrackerCommandBase
+            : 0
+        if itMode, itDoublePortamentoSlides, let state = itPatternState {
+            state.primeDoublePortamentoMemory(
+                effectCommand: itCommand,
+                effectParameter: note.effectData,
+                volumeColumn: note.volume,
+                compatibleGxx: itCompatibleGxx
+            )
+        }
+
         self.applyEffect(note: note)
 
         // XM-Volume-Column (zweite Effektspalte) NACH dem Haupteffekt auswerten,
@@ -682,6 +715,36 @@ public final class DSPChannel: Sendable {
             let mayCarry = itMode && itInstrumentMode
                 && previousInstrumentIndex == self.instrument?.index
             initInstrumentVoice(preserveCarry: mayCarry)
+        }
+        if itMode,
+           itStoppedFilterEnvelopeAtStart,
+           itCommand == 19,
+           note.effectHigh == 7,
+           note.effectLow == 11,
+           note.key >= 0,
+           instrument?.pitchEnvelope?.valueMode == .filter {
+            itPitchEnvelopeEnabled = false
+            itStoppedFilterMidpointActive = true
+            itFilterNeedsReset = true
+        }
+        let tonePortamento = itCommand == 7 || itCommand == 12
+            || (193...202).contains(note.volume)
+        if itMode,
+           itResetFilterOnPortamentoSampleChange,
+           !itInstrumentMode,
+           tonePortamento,
+           note.instrument > 0,
+           previousInstrumentIndex != nil,
+           previousInstrumentIndex != (setInstrument ?? instrument)?.index {
+            itFilterNeedsReset = true
+        }
+        if itMode,
+           itNoteCutWithPortamento,
+           itCommand == 19,
+           note.effectHigh == 12,
+           note.key >= 0,
+           (193...202).contains(note.volume) {
+            itDeferredPortamentoNoteCut = true
         }
         if itMode, self.setSampleIndex != nil {
             if (itPatternState?.vibratoWaveform ?? 0) < 4 { vibratoIndex = 0 }
@@ -894,7 +957,9 @@ public final class DSPChannel: Sendable {
             case 9: itPanningEnvelopeEnabled = false
             case 10: itPanningEnvelopeEnabled = instrument?.panningEnvelope != nil
             case 11: itPitchEnvelopeEnabled = false
-            case 12: itPitchEnvelopeEnabled = instrument?.pitchEnvelope != nil
+            case 12:
+                itPitchEnvelopeEnabled = instrument?.pitchEnvelope != nil
+                itStoppedFilterMidpointActive = false
             default: break
             }
         case 8:
@@ -1287,7 +1352,7 @@ public final class DSPChannel: Sendable {
         case 5: // Exx: Portamento down
             applyITPorta(
                 state.rememberedPitchSlide(
-                    parameter: parameter,
+                    parameter: itDoublePortamentoSlides ? 0 : parameter,
                     tonePortamento: false,
                     compatibleGxx: itCompatibleGxx
                 ),
@@ -1296,7 +1361,7 @@ public final class DSPChannel: Sendable {
         case 6: // Fxx: Portamento up
             applyITPorta(
                 state.rememberedPitchSlide(
-                    parameter: parameter,
+                    parameter: itDoublePortamentoSlides ? 0 : parameter,
                     tonePortamento: false,
                     compatibleGxx: itCompatibleGxx
                 ),
@@ -1304,7 +1369,7 @@ public final class DSPChannel: Sendable {
             )
         case 7: // Gxx: Tone Portamento
             let value = state.rememberedPitchSlide(
-                parameter: parameter,
+                parameter: itDoublePortamentoSlides ? 0 : parameter,
                 tonePortamento: true,
                 compatibleGxx: itCompatibleGxx
             )
@@ -1337,6 +1402,14 @@ public final class DSPChannel: Sendable {
             ))
         case 12: // Lxy: Tone Portamento + Dxy-Memory
             portamento = true
+            if itDoublePortamentoSlides {
+                let value = state.rememberedPitchSlide(
+                    parameter: 0,
+                    tonePortamento: true,
+                    compatibleGxx: itCompatibleGxx
+                )
+                if value > 0 { portamentoSpeed = Float(value) * portaScale }
+            }
             periodDelta = portamentoSpeed
             setCurrentPeriod = false
             setSampleIndex = nil
@@ -1426,14 +1499,14 @@ public final class DSPChannel: Sendable {
             volColVolSlide = -Float(state.rememberedVolumeColumnSlide(value - 95))
         case 105...114:
             let amount = state.rememberedPitchSlide(
-                parameter: (value - 105) * 4,
+                parameter: itDoublePortamentoSlides ? 0 : (value - 105) * 4,
                 tonePortamento: false,
                 compatibleGxx: itCompatibleGxx
             )
             periodDelta = Float(amount) * portaScale
         case 115...124:
             let amount = state.rememberedPitchSlide(
-                parameter: (value - 115) * 4,
+                parameter: itDoublePortamentoSlides ? 0 : (value - 115) * 4,
                 tonePortamento: false,
                 compatibleGxx: itCompatibleGxx
             )
@@ -1446,26 +1519,15 @@ public final class DSPChannel: Sendable {
             panbrelloDelta = 0
         case 193...202:
             // Feste Zuordnung ohne lokales Array: playNote läuft im Audio-Thread.
-            let speed: Int
-            switch value - 193 {
-            case 1: speed = 1
-            case 2: speed = 4
-            case 3: speed = 8
-            case 4: speed = 16
-            case 5: speed = 32
-            case 6: speed = 64
-            case 7: speed = 96
-            case 8: speed = 128
-            case 9: speed = 255
-            default: speed = state.rememberedPitchSlide(
+            let mappedSpeed = ITPatternChannelState.volumeColumnTonePortamentoSpeed(value)
+            let speed = mappedSpeed > 0 ? mappedSpeed : state.rememberedPitchSlide(
                 parameter: 0,
                 tonePortamento: true,
                 compatibleGxx: itCompatibleGxx
             )
-            }
             portamento = true
             let remembered = state.rememberedPitchSlide(
-                parameter: speed,
+                parameter: itDoublePortamentoSlides ? 0 : speed,
                 tonePortamento: true,
                 compatibleGxx: itCompatibleGxx
             )
@@ -1605,7 +1667,12 @@ public final class DSPChannel: Sendable {
         }
     }
 
-    public func performTick(tick: Int, sampleRate: Double, clockRate: Double) {
+    public func performTick(
+        tick: Int,
+        sampleRate: Double,
+        clockRate: Double,
+        ticksPerRow: Int = 0
+    ) {
         if self.volumeSlide != 0 && tick > 0 {
             self.currentVolume += self.volumeSlide
             if self.currentVolume < 0 { self.currentVolume = 0 }
@@ -1659,7 +1726,7 @@ public final class DSPChannel: Sendable {
             // ProTracker: 1xx/2xx/3xx (Porta-Up/Down/Tone-Porta) sliden nur auf
             // Ticks > 0, NICHT auf Tick 0. Sonst macht jede Row einen Schritt zu
             // viel (6 statt 5 bei Speed 6). Spiegelt den Volume-Slide-Guard.
-            if tick > 0 {
+            if tick > 0 || (itMode && itSlidesAtSpeedOne && ticksPerRow == 1) {
                 if self.portamento {
                     if self.currentPeriod != self.period {
                         let sign: Float = self.period > self.currentPeriod ? 1.0 : -1.0
@@ -1775,6 +1842,7 @@ public final class DSPChannel: Sendable {
         // Der Wert 0 wäre die halbe Grenzfrequenz und würde jede IT-Voice
         // unbeabsichtigt filtern.
         var itFilterEnvelopeModifier = 256
+        var shouldUpdateITFilter = true
         // XM und IT besitzen eine zweite Effektspalte. Deren Volume-Slide wirkt
         // wie die Hauptspalten-Slides erst ab Tick 1.
         if (xmLinearMode || itMode), self.volColVolSlide != 0, tick > 0 {
@@ -1843,6 +1911,16 @@ public final class DSPChannel: Sendable {
                 )
             } else {
                 pitchEnvValue = 32
+                if instrument?.pitchEnvelope?.valueMode == .filter {
+                    if itStoppedFilterMidpointActive {
+                        itFilterEnvelopeModifier = 0
+                    } else {
+                        // Eine gestoppte Filter-Huellkurve haelt die zuletzt
+                        // berechneten Koeffizienten, statt sie pro Tick auf den
+                        // instrumentalen Grundwert zurueckzusetzen.
+                        shouldUpdateITFilter = false
+                    }
+                }
             }
 
             if noteFadeActive, let inst = instrument, inst.fadeout > 0 {
@@ -1852,7 +1930,7 @@ public final class DSPChannel: Sendable {
             itEnvelopeReleased = keyReleased
         }
 
-        if itMode {
+        if itMode, shouldUpdateITFilter {
             updateITFilter(
                 sampleRate: sampleRate,
                 envelopeModifier: itFilterEnvelopeModifier,
@@ -1899,10 +1977,17 @@ public final class DSPChannel: Sendable {
             self.sampleSpeed = 0.0
         }
 
-        if self.cutNoteTick == tick {
+        let mayExecuteCut = !itDeferredPortamentoNoteCut
+            || (itPatternState?.rowRepeatIndex ?? 0) > 0
+        if self.cutNoteTick == tick, mayExecuteCut {
             if itMode {
                 self.playing = false
                 self.fadeVolume = 0
+                if itDeferredPortamentoNoteCut {
+                    self.period = 0
+                    self.currentPeriod = 0
+                    self.sampleSpeed = 0
+                }
             } else {
                 self.currentVolume = 0.0
             }
@@ -1971,14 +2056,25 @@ public final class DSPChannel: Sendable {
             return
         }
 
+        let filterRange = itExtendedFilterRange ? 20.0 : 24.0
         let cutoffFrequency = min(
             sampleRate / 2.0,
-            110.0 * pow(2.0, Double(computedCutoff) * 128.0 / (24.0 * 256.0) + 0.25)
+            110.0 * pow(2.0, Double(computedCutoff) * 128.0 / (filterRange * 256.0) + 0.25)
         )
         let damping = pow(10.0, -3.0 * Double(itFilterResonance) / 320.0)
-        let ratio = sampleRate / (2.0 * Double.pi * cutoffFrequency)
-        let d = damping * ratio + damping - 1.0
-        let e = ratio * ratio
+        let angularCutoff = 2.0 * Double.pi * cutoffFrequency
+        let d: Double
+        let e: Double
+        if itExtendedFilterRange {
+            let ratio = angularCutoff / sampleRate
+            let limited = min(2.0, (1.0 - 2.0 * damping) * ratio)
+            d = (2.0 * damping - limited) / ratio
+            e = 1.0 / (ratio * ratio)
+        } else {
+            let ratio = sampleRate / angularCutoff
+            d = damping * ratio + damping - 1.0
+            e = ratio * ratio
+        }
         let denominator = 1.0 + d + e
         let shouldResetHistories = reset || !itFilterActive
         itFilterA0 = Float(1.0 / denominator)

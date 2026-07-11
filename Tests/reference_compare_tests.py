@@ -174,6 +174,18 @@ class ReferenceCompareTests(unittest.TestCase):
             reference_compare.require_openmpt_version("openmpt123 v9")
         reference_compare.require_openmpt_version("openmpt123 v9", allow_mismatch=True)
 
+    def test_openmpt_duration_parser_supports_minutes_andHours(self) -> None:
+        self.assertEqual(
+            reference_compare.parse_openmpt_duration("Duration...: 00:46.080\n"),
+            46.08,
+        )
+        self.assertEqual(
+            reference_compare.parse_openmpt_duration("Duration...: 01:02:03.500\n"),
+            3723.5,
+        )
+        with self.assertRaises(reference_compare.ComparisonError):
+            reference_compare.parse_openmpt_duration("Title......: leer\n")
+
     def test_render_subprocess_arguments_match_contract(self) -> None:
         module = self.directory / "fixture.mod"
         module.write_bytes(b"synthetic-module")
@@ -189,8 +201,9 @@ class ReferenceCompareTests(unittest.TestCase):
 
         canonical = "openmpt123 v0.8.7\nlibopenmpt 0.8.7+r25325.pkg"
         with mock.patch.object(reference_compare, "openmpt_version", return_value=canonical):
-            with mock.patch.object(reference_compare.subprocess, "run", side_effect=fake_run):
-                reports = reference_compare.run_comparison([module], output)
+            with mock.patch.object(reference_compare, "openmpt_module_duration", return_value=2.2):
+                with mock.patch.object(reference_compare.subprocess, "run", side_effect=fake_run):
+                    reports = reference_compare.run_comparison([module], output)
 
         self.assertEqual(len(commands), 2)
         self.assertEqual(
@@ -225,7 +238,7 @@ class ReferenceCompareTests(unittest.TestCase):
         second_json = json.dumps(second, sort_keys=True, allow_nan=False)
         self.assertEqual(first_json, second_json)
         self.assertNotIn(self.temporary.name, first_json)
-        self.assertEqual(first["schema"], "savage-reference-report/v1")
+        self.assertEqual(first["schema"], "savage-reference-report/v2")
 
 
 if __name__ == "__main__":

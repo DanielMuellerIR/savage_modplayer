@@ -2,6 +2,23 @@ import XCTest
 @testable import SavageModPlayerCore
 
 final class ITPlaybackTests: XCTestCase {
+    func testSequencedDurationStopsAtBackwardSubsongJump() {
+        let mod = makeMod(rows: [
+            oneChannelRow(),
+            oneChannelRow(),
+            oneChannelRow(),
+            oneChannelRow(effect(2, 0)), // B00 beendet den Subsong nach Zeile 3.
+        ])
+
+        // 4 Zeilen * Speed 6 * 48 Frames/Tick bei 2.400 Hz und BPM 125.
+        let duration = ModPlayerCoordinator.sequencedDuration(
+            of: mod,
+            sampleRate: 2_400,
+            maximumSeconds: 10
+        )
+        XCTAssertEqual(duration, 0.480, accuracy: 0.000_001)
+    }
+
     func testSixtyFourLogicalChannelsArePreallocatedWithIndependentState() {
         let mod = makeMod(
             rows: [Row(notes: [Note](repeating: emptyNote(), count: 64))],

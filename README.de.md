@@ -49,7 +49,7 @@ Falls keine Vorschau erscheint:
 
 ## Funktionsumfang
 
-- **Formatvielfalt (macOS-App)**: ProTracker-MOD, Multichannel-MOD (`xCHN`/`xxCH`/`CD81`/`OKTA`/`FLT8`), 15-Sample-Soundtracker, ScreamTracker 3 (`.s3m`), FastTracker II (`.xm`) und native Impulse-Tracker-2.14-/2.15-Dateien (`.it`) im Sample- oder Instrument-Modus. IT unterstützt 64 Pattern-Kanäle, einen vorallozierten 256-Voice-NNA-Pool, komprimierte 8-/16-Bit-Mono-/Stereo-Samples, Hüllkurven, Filter, Effekte und Sustain-Loops. Der HTML5-Player bleibt bewusst kompakt und spielt 4-Kanal-MODs.
+- **Formatvielfalt (macOS-App)**: ProTracker-MOD, Multichannel-MOD (`xCHN`/`xxCH`/`CD81`/`OKTA`/`FLT8`), 15-Sample-Soundtracker, ScreamTracker 3 (`.s3m`), FastTracker II (`.xm`) und Impulse-Tracker-Dateien bis `cmwt=0x0216` (`.it`) im Sample- oder Instrument-Modus. IT unterstützt 64 Pattern-Kanäle, einen vorallozierten 256-Voice-NNA-Pool, komprimierte 8-/16-Bit-Mono-/Stereo-Samples, Hüllkurven, Filter, Effekte und Sustain-Loops. Der HTML5-Player bleibt bewusst kompakt und spielt 4-Kanal-MODs.
 - **Quick-Look-Vorschau (macOS-App)**: Das mitgelieferte Quick-Look-Plugin rendert und cached bis zu den ersten 60 Sekunden von `.mod`/`.s3m`/`.xm`/`.it` mit der Player-Engine und zeigt im Finder (Leertaste) den nativen Audio-Player mit Play und Scrubbing. Nicht unterstützte Dateien zeigen einen lesbaren Grund.
 - **Drag & Drop**: Einzelne `.mod`-/`.s3m`-/`.xm`-/`.it`-Dateien, ganze Ordner (rekursiv) oder Zip-/7-Zip-Archive können auf den Player gezogen werden.
 - **Automatische Playlist**: Ein konfigurierbarer Autoplay-Ordner (macOS-App: Einstellungen, Cmd+,) wird beim Start gescannt und als Playlist geladen; ohne Konfiguration wird ein `audio/`-Unterordner neben dem Player bzw. der App verwendet.
@@ -114,13 +114,16 @@ Für ScreamTracker 3 rechnet die Engine im ST3-Periodenmodell (C2Spd-basierte Pe
 
 Für FastTracker II fährt die Engine ein eigenes Instrument-Voice-Modell: lineare Frequenztabelle (exponentielle Frequenz aus linearen Perioden), Multi-Sample-Instrumente mit Keymaps, Lautstärke- und Panning-Hüllkurven (Sustain und Loop, pro Tick interpoliert), Key-Off mit Volume-Fadeout, Auto-Vibrato mit Sweep und Ping-Pong-Sample-Loops. Der XM-Effektsatz inklusive Volume-Column und Per-Kanal-Effekt-Memory wird auf den gemeinsamen DSP-Kern übersetzt.
 
-Für Impulse Tracker trennt die Engine 64 logische Pattern-Kanäle von einem vorallozierten Pool mit 256 Wiedergabe-Voices. Implementiert sind Sample- und Instrument-Modus, NNA/DCT/DCA, 120er Sample-Maps, IT-2.14-/2.15-Kompression, Stereo- und Sustain-Loops, Pitch-/Pan-/Filter-Hüllkurven, resonante Filter pro Voice, Sample-Vibrato, Surround, IT-Effekt-Memory sowie die Profile `Old Effects` und `Compatible Gxx`.
+Für Impulse Tracker trennt die Engine 64 logische Pattern-Kanäle von einem vorallozierten Pool mit 256 Wiedergabe-Voices. Implementiert sind Sample- und Instrument-Modus, NNA/DCT/DCA, 120er Sample-Maps, IT-2.14-/2.15-Kompression, Stereo- und Sustain-Loops, Pitch-/Pan-/Filter-Hüllkurven, resonante Filter pro Voice, Sample-Vibrato, Surround, IT-Effekt-Memory sowie die Profile `Old Effects` und `Compatible Gxx`. Von OpenMPT erzeugte IT-Dateien verwenden zusätzlich strukturiertes XTPM-/STPM-Parsing, klassische/alternative/moderne Tempoformeln, gespeicherte Preamp-/Mix-Werte, Restart-Position, erweiterten Filterbereich und die jeweils zutreffenden PCM-`PlayBehaviour`-Flags.
+
+Kompatibilitätsmeldungen entstehen aus einer Capability-Analyse. `cwtv` identifiziert den erstellenden Tracker, `cmwt` steuert dagegen die erforderliche IT-Semantik; eine neuere OpenMPT-Erstellerversion ist allein kein Warnungsgrund. Metadaten, inaktive MIDI-Flags, unbenutzte Plugin-Definitionen und markerähnliche Bytes im PCM bleiben still. Eine Warnung erscheint nur, wenn ein Pattern der abgespielten Order-Liste tatsächlich ein nicht unterstütztes klangrelevantes Merkmal erreicht, soweit möglich mit Instrument, Kanal, Plugin-Slot oder Chunk-ID. `savage-cli --info` zeigt die vollständige strukturierte Diagnose.
 
 ### Bekannte Impulse-Tracker-Einschränkungen
 
-- Ziel sind native IT-2.14-/2.15-Dateien. MPTM, proprietäre OpenMPT-Erweiterungen, VST-/Plugin-Wiedergabe und externe MIDI-Ausgabe werden nicht unterstützt.
-- Eingebettete MIDI-Makros sind auf die gebräuchlichen Cutoff-/Resonance-Filtermakros beschränkt. Dateien mit MIDI-/Plugin-Routing oder unbekannten Erweiterungen bleiben soweit möglich abspielbar und erzeugen eine sichtbare Warnung.
-- Pattern-Längen von 32 bis 200 Zeilen werden akzeptiert. Kürzere oder längere Erweiterungs-Patterns werden mit einem Parserfehler abgelehnt.
+- IT-Strukturen bis `cmwt=0x0216` und bekannte PCM-relevante OpenMPT-IT-Erweiterungen werden unterstützt. MPTM wird sicher erkannt, bleibt aber ein separates nicht unterstütztes Format.
+- Der Player ist bewusst kein VST-/AudioUnit-Host und gibt kein externes MIDI aus. Eingebettete MIDI-Makros sind auf gebräuchliche Cutoff-/Resonance-Filtermakros beschränkt. Diese Pfade warnen nur, wenn sie tatsächlich getriggert werden.
+- Veraltete OpenMPT-Bugemulationen für Swing vor 1.17, die abgelöste alte Pattern-Loop-/Jump-Regel, ungenauen historischen Ping-Pong-Überschuss und proprietäre Envelope-Release-Knoten werden nicht emuliert. Nur die tatsächliche Nutzung erzeugt eine merkmalsspezifische Warnung.
+- Erweiterte IT-Patterns mit 1 bis 1.024 Zeilen und bis zu 240 Patterns werden akzeptiert. Gelöschte Pattern-Referenzen in der Order-Liste werden wie in OpenMPT übersprungen.
 
 ### Architektur
 
@@ -183,11 +186,15 @@ xcrun notarytool store-credentials SavageModPlayerNotary
 swift test
 swift test --filter MultiFormatTests
 node Tests/js/worklet-timing.mjs
+python3 tools/reference_compare.py --output-dir /tmp/savage-it-reference audio/example.it
 ```
 
 Die Suite deckt Parser (alle MOD-Varianten, S3M, XM, IT, synthetische und echte Dateien),
 DSP-Timing, Sequenzierung, den Offline-WAV-Renderer des Quick-Look-Plugins und
-die Parität zwischen Swift- und Browser-DSP ab.
+die Parität zwischen Swift- und Browser-DSP ab. Das optionale Referenz-Harness
+vergleicht den nativen Renderer mit dem festgeschriebenen `openmpt123`-Build und
+meldet Dauer, Signalpegel, Hüllkurvenkorrelation, Lag, Onset-Zuordnung und
+spektrale Ähnlichkeit, ohne libopenmpt als Produktions-Backend zu verwenden.
 
 ---
 

@@ -40,9 +40,14 @@ struct ChannelCellsCanvas: View, Equatable {
     let theme: PlayerTheme
 
     nonisolated static func == (lhs: ChannelCellsCanvas, rhs: ChannelCellsCanvas) -> Bool {
-        lhs.patternIndex == rhs.patternIndex && lhs.channelIndices == rhs.channelIndices
+        // `&&` wertet die rechte Seite als Autoclosure aus. Theme vorher lesen,
+        // damit Swift 6 den View-State nicht faelschlich als spaeten Zugriff aus
+        // dem nonisolated Equatable-Vergleich meldet.
+        let sameTheme = lhs.theme == rhs.theme
+        return sameTheme && lhs.patternIndex == rhs.patternIndex
+            && lhs.channelIndices == rhs.channelIndices
             && lhs.rowCount == rhs.rowCount && lhs.cellWidth == rhs.cellWidth
-            && lhs.showVolume == rhs.showVolume && lhs.fontSize == rhs.fontSize && lhs.theme == rhs.theme
+            && lhs.showVolume == rhs.showVolume && lhs.fontSize == rhs.fontSize
     }
 
     private static let noteNames = ["C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-"]
@@ -162,8 +167,8 @@ struct GridCellsBlock: View, Equatable {
     var onSeekRow: (Int) -> Void
 
     nonisolated static func == (lhs: GridCellsBlock, rhs: GridCellsBlock) -> Bool {
-        lhs.patternIndex == rhs.patternIndex
-            && lhs.theme == rhs.theme
+        let sameTheme = lhs.theme == rhs.theme
+        return sameTheme && lhs.patternIndex == rhs.patternIndex
             && lhs.cellStride == rhs.cellStride
             && lhs.canvasWidth == rhs.canvasWidth
             && lhs.showVolume == rhs.showVolume

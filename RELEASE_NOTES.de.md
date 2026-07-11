@@ -1,3 +1,19 @@
+## 1.5.27 — 2026-07-11
+
+- Pauschale IT-/OpenMPT-Warnungen wurden durch einen strukturierten Capability-Bericht ersetzt. `cwtv` identifiziert jetzt den erstellenden Tracker, `cmwt` steuert die Formatkompatibilität und vollständige OpenMPT-Versionen kommen aus ihren eigenen Erweiterungsfeldern. Eine neuere OpenMPT-Erstellerversion warnt nicht mehr allein.
+- XTPM, STPM, alte ModPlug-Chunks, MIDI-/Plugin-Routing und alle aktuellen OpenMPT-`PlayBehaviour`-Bits werden an ihren strukturellen Grenzen geparst. Markerbytes in Patterns oder komprimiertem beziehungsweise unkomprimiertem PCM können nicht mehr mit Erweiterungen verwechselt werden.
+- Bekannte Kanal-, Timing-, Mix-, Preamp-, Restart-, Filter- und PCM-Kompatibilitätswerte werden von der Engine angewandt. Klassischer, alternativer und moderner OpenMPT-Tempo-Modus sowie erweiterte IT-Patterns mit 1 bis 1.024 Zeilen werden unterstützt.
+- Warnungen setzen jetzt tatsächliche Nutzung im abgespielten Order-Pfad voraus. Inaktive MIDI-Flags, Default-Makros, unbenutzte Plugin-Definitionen, Metadaten und nicht unterstützte Eigenschaften unbenutzter Instrumente bleiben still; verwendete externe Pfade nennen Instrument, Kanal oder Plugin-Slot.
+- Der Start erweiterter Patterns und gelöschte Order-Referenzen wurden korrigiert. Patterns mit mehr als 64 Zeilen spielen nicht mehr erst ihren hinteren Teil und starten dann nochmals bei Zeile null; Referenzen auf gelöschte Patterns werden wie in OpenMPT übersprungen.
+- Der Offline-Renderer schneidet den letzten Block jetzt am exakten Sequencer-Endframe. Die UI-Dauer nutzt dieselbe Jump-/Loop-/Delay-/Tempo-bewusste Sequencer-Probe statt einer statischen Zeilenschätzung; die primäre OpenMPT-Referenz zeigt und rendert jetzt exakt 46,080 Sekunden.
+- `savage-cli --info` zeigt jetzt Tracker-Identität, `cwtv`/`cmwt`, vollständige OpenMPT-Versionen, jeden strukturierten Erweiterungs-Chunk, `PlayBehaviour`-Zustände und konkrete Capability-Ergebnisse.
+- Deterministische Fixtures für OpenMPT-Erweiterungen, Warnungen, Kompatibilitätsbits, variable Pattern-Längen und MIDI-/Plugin-Pfade wurden ergänzt. Der reproduzierbare A/B-Bericht enthält nun die deklarierte Songdauer und trennt OpenMPTs abschließendes WAV-Padding von der musikalischen Dauer.
+
+### Bewusste Grenzen
+
+- Savage Mod Player bleibt eine native PCM-Tracker-Engine, kein VST-/AudioUnit-Host und kein externer MIDI-Renderer. Diese Pfade warnen nur, wenn sie getriggert werden.
+- Veralteter OpenMPT-Swing vor 1.17, die abgelöste alte Loop-/Jump-Regel, ungenauer historischer Ping-Pong-Überschuss und proprietäre Envelope-Release-Knoten bleiben merkmalsspezifische Kompatibilitätsgrenzen.
+
 ## 1.5.25 — 2026-07-11
 
 - Die Kopfzeile zeigt vor BPM die Anzahl der tatsächlich verwendeten Pattern-Kanäle.

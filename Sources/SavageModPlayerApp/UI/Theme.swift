@@ -1,6 +1,9 @@
 import SwiftUI
 
-public enum PlayerTheme: String, CaseIterable, Identifiable {
+// Sendable erlaubt den unveraenderlichen Theme-Wert auch im nonisolated
+// Equatable-Vergleich der Canvas-Views. Ohne die Zusage meldet Swift 6 dort
+// faelschlich einen MainActor-Uebergang fuer den reinen Enum-Wert.
+public enum PlayerTheme: String, CaseIterable, Identifiable, Sendable {
     case workbench = "Light"
     case cyber = "Dark"
     

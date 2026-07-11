@@ -450,20 +450,31 @@ final class XMParserTests: XCTestCase {
         XCTAssertEqual(s.relativeNote, 3)
     }
 
-    // Optionaler Realwelt-Test: parst alle .xm aus audio/ (gitignoriert, lokal)
-    // und prüft grundlegende Plausibilität + dass beim Rendern hörbares Signal
-    // entsteht. Überspringt still, wenn keine .xm vorhanden sind.
+    // Optionaler Realwelt-Test: parst alle .xm rekursiv aus audio/
+    // (gitignoriert, lokal) und prüft grundlegende Plausibilität + dass beim
+    // Rendern hörbares Signal entsteht. Überspringt still, wenn keine .xm da sind.
     @MainActor
     func testRealXMFilesParseAndRender() throws {
         let audioDirPath = "audio"
         let fm = FileManager.default
         guard fm.fileExists(atPath: audioDirPath) else { return }
-        let xmFiles = try fm.contentsOfDirectory(atPath: audioDirPath)
-            .filter { $0.lowercased().hasSuffix(".xm") }
+        let root = URL(fileURLWithPath: audioDirPath, isDirectory: true)
+        guard let enumerator = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        let xmFiles = enumerator.compactMap { item -> URL? in
+            guard let url = item as? URL,
+                  url.pathExtension.lowercased() == "xm",
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            else { return nil }
+            return url
+        }.sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
         guard !xmFiles.isEmpty else { return }
 
-        for fileName in xmFiles {
-            let url = URL(fileURLWithPath: (audioDirPath as NSString).appendingPathComponent(fileName))
+        for url in xmFiles {
+            let fileName = url.lastPathComponent
             let mod = try ModuleLoader.parse(data: Data(contentsOf: url))
             XCTAssertEqual(mod.format, .xm, fileName)
             XCTAssertGreaterThan(mod.length, 0, fileName)

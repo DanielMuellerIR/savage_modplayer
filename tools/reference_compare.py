@@ -30,7 +30,7 @@ OPENMPT_VERSION_MARKERS = (
     "libopenmpt 0.8.7+r25325.pkg",
 )
 SUPPORTED_EXTENSIONS = {".mod", ".s3m", ".xm", ".it"}
-SCHEMA = "savage-reference-report/v1"
+SCHEMA = "savage-reference-report/v2"
 
 
 class ComparisonError(RuntimeError):
@@ -79,6 +79,33 @@ def require_openmpt_version(version: str, allow_mismatch: bool = False) -> None:
             + " und ".join(OPENMPT_VERSION_MARKERS)
             + ". Mit --allow-version-mismatch nur bewusst abweichend fortfahren."
         )
+
+
+def parse_openmpt_duration(info: str) -> float:
+    """Liest die musikalische Dauer aus der stabilen openmpt123-Infozeile."""
+    line = next((value for value in info.splitlines() if value.startswith("Duration...:")), "")
+    if not line:
+        raise ComparisonError("openmpt123 --info enthaelt keine Dauer")
+    value = line.split(":", 1)[1].strip()
+    try:
+        fields = value.split(":")
+        total = 0.0
+        for field in fields:
+            total = total * 60.0 + float(field)
+        return total
+    except ValueError as error:
+        raise ComparisonError(f"Ungueltige openmpt123-Dauer: {value}") from error
+
+
+def openmpt_module_duration(executable: str, module: Path) -> float:
+    result = subprocess.run(
+        [executable, "--info", "--", os.fspath(module)],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    return parse_openmpt_duration(result.stdout)
 
 
 def _read_pcm(path: Path) -> tuple[array.array, int]:
@@ -352,7 +379,11 @@ def stft_metrics(
     }
 
 
-def analyze_wavs(savage_path: Path, reference_path: Path) -> dict[str, object]:
+def analyze_wavs(
+    savage_path: Path,
+    reference_path: Path,
+    reference_declared_duration: float | None = None,
+) -> dict[str, object]:
     savage = _signal(savage_path)
     reference = _signal(reference_path)
     savage_samples = savage["samples"]
@@ -371,6 +402,10 @@ def analyze_wavs(savage_path: Path, reference_path: Path) -> dict[str, object]:
     reference_end = active_end(reference_envelope, len(reference_samples))
     savage_onsets = detect_onsets(savage_envelope)
     reference_onsets = detect_onsets(reference_envelope)
+    declared_frames = (
+        round(reference_declared_duration * SAMPLE_RATE)
+        if reference_declared_duration is not None else None
+    )
     return {
         "levels": {
             "savage_rms_dbfs": _round(savage["dbfs"]),
@@ -392,6 +427,14 @@ def analyze_wavs(savage_path: Path, reference_path: Path) -> dict[str, object]:
             "reference_duration_seconds": _round(reference_frames / SAMPLE_RATE),
             "difference_frames": savage_frames - reference_frames,
             "difference_ms": _round((savage_frames - reference_frames) * 1000.0 / SAMPLE_RATE),
+            "reference_declared_duration_seconds": _round(reference_declared_duration),
+            "savage_vs_declared_difference_ms": _round(
+                (savage_frames - declared_frames) * 1000.0 / SAMPLE_RATE
+                if declared_frames is not None else None
+            ),
+            "openmpt_render_padding_frames": (
+                reference_frames - declared_frames if declared_frames is not None else None
+            ),
             "best_lag_frames": lag_frames,
             "best_lag_ms": _round(lag_frames * 1000.0 / SAMPLE_RATE),
             "savage_active_end_frames": savage_end * DOWNSAMPLE if savage_end is not None else None,
@@ -429,6 +472,7 @@ def _command_report(module_name: str) -> dict[str, list[str]]:
             "--dither", "0", "--subsong", "0", "--repeat", "0", "--end-time",
             "600", "--force", "--output", "<reference.wav>", "--", "<module>",
         ],
+        "openmpt_info": ["openmpt123", "--info", "--", "<module>"],
         "module_name": [module_name],
     }
 
@@ -438,6 +482,7 @@ def make_report(
     savage_wav: Path,
     reference_wav: Path,
     version: str,
+    reference_declared_duration: float | None = None,
 ) -> dict[str, object]:
     return {
         "schema": SCHEMA,
@@ -454,6 +499,7 @@ def make_report(
             "interpolation": "linear",
             "normalization": False,
             "openmpt_version": version,
+            "openmpt_declared_duration_seconds": _round(reference_declared_duration),
             "commands": _command_report(module.name),
         },
         "analysis": {
@@ -467,7 +513,11 @@ def make_report(
             "active_end_relative_db": -60,
             "onset_tolerance_ms": 50,
         },
-        "metrics": analyze_wavs(savage_wav, reference_wav),
+        "metrics": analyze_wavs(
+            savage_wav,
+            reference_wav,
+            reference_declared_duration=reference_declared_duration,
+        ),
     }
 
 
@@ -492,6 +542,7 @@ def run_comparison(
     output_dir.mkdir(parents=True, exist_ok=True)
     reports: list[Path] = []
     for module in checked:
+        declared_duration = openmpt_module_duration(openmpt, module)
         digest = _sha256(module)[:12]
         basename = f"{module.stem}-{digest}"
         with tempfile.TemporaryDirectory(prefix="savage-reference-") as temporary:
@@ -511,7 +562,13 @@ def run_comparison(
                  "600", "--force", "--output", os.fspath(reference_wav), "--", os.fspath(module)],
                 check=True,
             )
-            report = make_report(module, savage_wav, reference_wav, version)
+            report = make_report(
+                module,
+                savage_wav,
+                reference_wav,
+                version,
+                reference_declared_duration=declared_duration,
+            )
             report_path = output_dir / f"{basename}.json"
             write_report(report, report_path)
             reports.append(report_path)

@@ -145,8 +145,19 @@ public enum ModuleRenderer {
                 throw NSError(domain: "ModuleRenderer", code: Int(status), userInfo: [NSLocalizedDescriptionKey: "Audio-Render-Fehler"])
             }
 
+            var validFrames = UInt64(blockFrames)
+            validFrames = min(validFrames, totalFrames - renderedFrames)
+            if state.endReachedFrame != .max {
+                validFrames = min(
+                    validFrames,
+                    state.endReachedFrame > renderedFrames
+                        ? state.endReachedFrame - renderedFrames
+                        : 0
+                )
+            }
+            let frames = Int(validFrames)
+
             if let renderCapture, let captureConsumer {
-                let frames = Int(blockFrames)
                 var stereoLeft = [Float](repeating: 0.0, count: frames)
                 var stereoRight = [Float](repeating: 0.0, count: frames)
                 var stems = [Float](repeating: 0.0, count: channelCount * frames)
@@ -172,7 +183,6 @@ public enum ModuleRenderer {
 
             // Float-Stereo in interleaved 16-Bit-PCM (Little Endian) wandeln.
             if let floatData = pcmBuffer.floatChannelData {
-                let frames = Int(blockFrames)
                 var chunk = [UInt8](repeating: 0, count: frames * 4)
                 for f in 0..<frames {
                     let l = Int16(max(-1.0, min(1.0, floatData[0][f])) * 32767.0)
@@ -184,7 +194,7 @@ public enum ModuleRenderer {
                 }
                 pcmData.append(contentsOf: chunk)
             }
-            renderedFrames += UInt64(blockFrames)
+            renderedFrames += validFrames
 
             // Songende: Der Sequencer hat hinter die letzte Position gewrappt.
             if state.endReached {

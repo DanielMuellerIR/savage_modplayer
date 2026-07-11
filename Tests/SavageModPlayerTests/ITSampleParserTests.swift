@@ -277,6 +277,16 @@ final class ITSampleParserTests: XCTestCase {
         XCTAssertEqual(sample.itProperties?.c5Speed, 12_345)
     }
 
+    func testOpenMPTMarkersInsidePCMDoNotCreateExtensionsOrWarnings() throws {
+        let bytes = Array("MPTXSTPM".utf8)
+        let spec = SampleSpec(name: "marker-pcm", frameCount: bytes.count, data: bytes)
+        let module = try ITParser.parse(data: makeSampleIT([spec]))
+
+        XCTAssertEqual(module.samplePool[1]?.pcm.count, bytes.count)
+        XCTAssertTrue(module.itProperties?.openMPTExtensions?.chunks.isEmpty == true)
+        XCTAssertTrue(module.compatibilityWarnings.isEmpty)
+    }
+
     func testInvalidSampleSignaturePointerLoopsConversionAndCompressionFailCleanly() {
         let validSpec = SampleSpec(name: "valid", frameCount: 2, data: [0, 1])
 

@@ -12,6 +12,12 @@ public final class ITPlaybackVoicePool: Sendable {
     private let instrumentMode: Bool
     private let oldEffects: Bool
     private let compatibleGxx: Bool
+    private let slidesAtSpeedOne: Bool
+    private let extendedFilterRange: Bool
+    private let resetFilterOnPortamentoSampleChange: Bool
+    private let doublePortamentoSlides: Bool
+    private let noteCutWithPortamento: Bool
+    private let stoppedFilterEnvelopeAtStart: Bool
     private let samplePool: [Sample?]
     nonisolated(unsafe) private var nextGeneration: UInt64 = 1
     // Feste Aktivliste statt eines 256er-Scans pro Audio-Frame. Beide Arrays
@@ -32,6 +38,21 @@ public final class ITPlaybackVoicePool: Sendable {
             self.compatibleGxx = false
         }
         self.usesBackgroundVoices = mod.itProperties?.usesInstruments ?? false
+        self.extendedFilterRange = mod.itProperties?.extendedFilterRange == true
+        let behaviours = Set(
+            mod.itProperties?.openMPTExtensions?.playBehaviours.map(\.bit) ?? []
+        )
+        let hasExplicitBehaviours = mod.itProperties?.openMPTExtensions?.chunks.contains {
+            $0.id == ".FSM"
+        } == true
+        self.slidesAtSpeedOne = behaviours.contains(6)
+        // Ohne MSF.-Block gilt originales IT-Verhalten. Ist der Block vorhanden,
+        // ist auch das Fehlen eines Bits eine absichtlich gespeicherte Legacy-
+        // Semantik und darf nicht durch heutige Defaults ueberschrieben werden.
+        self.resetFilterOnPortamentoSampleChange = !hasExplicitBehaviours || behaviours.contains(119)
+        self.doublePortamentoSlides = !hasExplicitBehaviours || behaviours.contains(127)
+        self.noteCutWithPortamento = !hasExplicitBehaviours || behaviours.contains(134)
+        self.stoppedFilterEnvelopeAtStart = !hasExplicitBehaviours || behaviours.contains(136)
         self.samplePool = mod.samplePool
         self.activeVoiceIndices = [Int](repeating: 0, count: Self.voiceCapacity)
         self.voiceIsActive = [Bool](repeating: false, count: Self.voiceCapacity)
@@ -128,7 +149,14 @@ public final class ITPlaybackVoicePool: Sendable {
         for state in patternChannels {
             state.channelVolumeSlide = 0
             state.panningSlide = 0
+            state.globalVolumeSlide = 0
+            state.rowRepeatIndex = 0
         }
+    }
+
+    @inline(__always)
+    public func beginPatternDelayRepeat() {
+        for state in patternChannels { state.rowRepeatIndex += 1 }
     }
 
     @inline(__always)
@@ -138,6 +166,12 @@ public final class ITPlaybackVoicePool: Sendable {
         voice.itInstrumentMode = instrumentMode
         voice.itOldEffects = oldEffects
         voice.itCompatibleGxx = compatibleGxx
+        voice.itSlidesAtSpeedOne = slidesAtSpeedOne
+        voice.itExtendedFilterRange = extendedFilterRange
+        voice.itResetFilterOnPortamentoSampleChange = resetFilterOnPortamentoSampleChange
+        voice.itDoublePortamentoSlides = doublePortamentoSlides
+        voice.itNoteCutWithPortamento = noteCutWithPortamento
+        voice.itStoppedFilterEnvelopeAtStart = stoppedFilterEnvelopeAtStart
         voice.itSamplePool = samplePool
         voice.itVoicePool = self
         voice.periodScale = 4

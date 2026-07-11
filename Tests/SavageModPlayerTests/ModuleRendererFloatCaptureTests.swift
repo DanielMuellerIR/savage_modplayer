@@ -4,7 +4,8 @@ import XCTest
 
 /// Regressionen fuer den blockweisen Float-/Stem-Capture des Offline-Renderers.
 /// Die Fixture ist absichtlich kurz und geloopt: Der Renderer liefert mehrere
-/// feste Bloecke, ohne songlange Stem-Puffer anzulegen.
+/// Bloecke, ohne songlange Stem-Puffer anzulegen. Der letzte Block darf seit dem
+/// samplegenauen Songend-Schnitt kuerzer als die interne Blockgroesse sein.
 final class ModuleRendererFloatCaptureTests: XCTestCase {
 
     private func makeCaptureMod() -> Mod {
@@ -49,11 +50,12 @@ final class ModuleRendererFloatCaptureTests: XCTestCase {
 
         // Capture darf den bisherigen Default-WAV-Pfad byteweise nicht veraendern.
         XCTAssertEqual(capturedWav, baseline)
+        let expectedFrames = Int(0.03 * 44_100)
         XCTAssertEqual(blocks.count, 2, "0,03 s muessen exakt zwei Renderbloecke liefern")
-        XCTAssertTrue(blocks.allSatisfy { $0.frameCount == 1024 })
+        XCTAssertEqual(blocks.map(\.frameCount), [1024, expectedFrames - 1024])
         let capturedFrames = blocks.reduce(0) { $0 + $1.frameCount }
-        XCTAssertEqual(capturedFrames, 2048)
-        XCTAssertEqual((capturedWav.count - 44) / 4, 2048)
+        XCTAssertEqual(capturedFrames, expectedFrames)
+        XCTAssertEqual((capturedWav.count - 44) / 4, expectedFrames)
         XCTAssertEqual(capturedFrames, (capturedWav.count - 44) / 4,
                        "Capture und WAV muessen exakt dieselbe Framezahl abdecken")
 

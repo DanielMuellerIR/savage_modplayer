@@ -66,9 +66,9 @@ final class ITParserTests: XCTestCase {
         XCTAssertTrue(properties.hasEmbeddedMIDIConfiguration)
         XCTAssertEqual(properties.unknownHeaderFlags, 0)
         XCTAssertEqual(properties.unknownSpecialFlags, 0x8000)
-        XCTAssertTrue(module.compatibilityWarnings.contains { $0.contains("MIDI-Pitchsteuerung") })
-        XCTAssertTrue(module.compatibilityWarnings.contains { $0.contains("MIDI-Makros") })
-        XCTAssertTrue(module.compatibilityWarnings.contains { $0.contains("Erweiterungen") })
+        XCTAssertNil(properties.openMPTExtensions?.midiConfiguration)
+        XCTAssertFalse(module.compatibilityWarnings.contains { $0.contains("MIDI") })
+        XCTAssertTrue(module.compatibilityWarnings.contains { $0.contains("0x8000") })
 
         let jump = module.patterns[0].rows[0].notes[0]
         XCTAssertTrue(jump.hasEffect)
@@ -77,12 +77,12 @@ final class ITParserTests: XCTestCase {
         XCTAssertEqual(module.patterns[1].rows.count, 64)
     }
 
-    func testOpenMPTExtensionMarkerIsReportedWithoutRejectingPlayableCore() throws {
+    func testBareStructuredOpenMPTExtensionMarkerIsNotAWarning() throws {
         var data = makeIT(patterns: [nil])
         data.append(contentsOf: Data("MPTX".utf8))
         let module = try ITParser.parse(data: data)
-        XCTAssertTrue(module.itProperties?.hasUnsupportedExtensions == true)
-        XCTAssertTrue(module.compatibilityWarnings.contains { $0.contains("MPTM-/IT-Erweiterungen") })
+        XCTAssertFalse(module.itProperties?.hasUnsupportedExtensions == true)
+        XCTAssertTrue(module.compatibilityWarnings.isEmpty)
     }
 
     func testModuleLoaderDispatchesITByContent() throws {
@@ -220,18 +220,17 @@ final class ITParserTests: XCTestCase {
         }
 
         var tooManyPatterns = makeIT()
-        setWord(201, at: 0x26, in: &tooManyPatterns)
+        setWord(241, at: 0x26, in: &tooManyPatterns)
         XCTAssertThrowsError(try ITParser.parse(data: tooManyPatterns)) {
             guard case .unsupportedCounts? = $0 as? ITParser.ParserError else {
                 return XCTFail("Falscher Fehler: \($0)")
             }
         }
 
-        XCTAssertThrowsError(try ITParser.parse(data: makeIT(orders: [1, 255], patterns: [nil]))) {
-            XCTAssertEqual($0 as? ITParser.ParserError, .invalidOrder(1))
-        }
+        let missingPattern = try? ITParser.parse(data: makeIT(orders: [0, 1, 255], patterns: [nil]))
+        XCTAssertEqual(missingPattern?.patternTable, [0])
 
-        for rows in [31, 201] {
+        for rows in [0, 1_025] {
             let data = makeIT(patterns: [PatternSpec(rows: rows, packed: [])])
             XCTAssertThrowsError(try ITParser.parse(data: data)) {
                 XCTAssertEqual($0 as? ITParser.ParserError, .invalidPatternRows(pattern: 0, rows: rows))

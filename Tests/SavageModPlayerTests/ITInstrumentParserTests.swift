@@ -59,9 +59,10 @@ final class ITInstrumentParserTests: XCTestCase {
         XCTAssertEqual(properties.midiChannel, 17)
         XCTAssertEqual(properties.midiProgram, 42)
         XCTAssertEqual(properties.midiBank, 513)
-        XCTAssertTrue(module.compatibilityWarnings.contains {
-            $0.contains("MIDI-/Plugin-Instrumente")
-        })
+        XCTAssertTrue(
+            module.compatibilityWarnings.isEmpty,
+            "Ein nur deklarierter, im Pattern aber unbenutzter MIDI-Pfad darf nicht warnen."
+        )
 
         let mapping = try XCTUnwrap(parsed.noteSampleMapping)
         XCTAssertEqual(mapping.entry(forSourceNote: 0)?.targetNote, 119)

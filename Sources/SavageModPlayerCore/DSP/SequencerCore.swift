@@ -3,6 +3,25 @@
 // nur bereits vorhandene Zustands-, Kanal- und Modulwerte uebergeben.
 enum SequencerCore {
 
+    // OpenMPT-Timingformeln: Classic = 2,5/BPM Sekunden pro Tick,
+    // Alternative = 1/BPM und Modern = 60/(BPM*Speed*RowsPerBeat).
+    @inline(__always)
+    static func recalculateTickDuration(
+        state: RealtimePlaybackState,
+        sampleRate: Double
+    ) {
+        let tempo = Double(max(1, state.bpm))
+        switch state.tempoMode {
+        case .classic:
+            state.outputsPerTick = sampleRate * 60.0 / (tempo * 24.0)
+        case .alternative:
+            state.outputsPerTick = sampleRate / tempo
+        case .modern:
+            state.outputsPerTick = sampleRate * 60.0
+                / (tempo * Double(max(1, state.ticksPerRow)) * Double(max(1, state.rowsPerBeat)))
+        }
+    }
+
     // Prueft pro Audio-Frame zuerst die Tick-Grenze. Wenn ein Tick faellig ist,
     // bleibt die historische Reihenfolge erhalten: Tick/Delay, Row, globale
     // Effekte, playNote, performTick und zuletzt die naechste Tick-Frist.
@@ -19,6 +38,7 @@ enum SequencerCore {
             if state.patternDelayCounter > 0 {
                 state.patternDelayCounter -= 1
                 state.tick = 0
+                channels.first?.itVoicePool?.beginPatternDelayRepeat()
             } else if state.patternDelay > 0 {
                 // IT-SEx wiederholt die aktuelle Zeile genau x-mal; der
                 // Übergang startet bereits die erste Wiederholung. MOD-EE2
@@ -28,6 +48,7 @@ enum SequencerCore {
                     : state.patternDelay
                 state.patternDelay = 0
                 state.tick = 0
+                channels.first?.itVoicePool?.beginPatternDelayRepeat()
             } else {
                 state.tick = 0
                 advanceRow(state: state, channels: channels, mod: mod, sampleRate: sampleRate)
@@ -37,13 +58,22 @@ enum SequencerCore {
         // IT-Tempo-Slides wirken nur auf den Folgeticks der aktuellen Zeile.
         if mod.format == .it, state.tempoSlide != 0, state.tick > 0 {
             state.bpm = max(32, min(255, state.bpm + state.tempoSlide))
-            state.outputsPerTick = sampleRate * 60.0 / (Double(state.bpm) * 24.0)
+            recalculateTickDuration(state: state, sampleRate: sampleRate)
         }
-        if mod.format == .it, state.globalVolumeSlide != 0, state.tick > 0 {
-            state.globalVolume = max(
-                0,
-                min(128, state.globalVolume + Float(state.globalVolumeSlide))
-            )
+        if mod.format == .it, state.tick > 0 {
+            var channelSlides = state.globalVolumeSlide
+            if let patternStates = channels.first?.itVoicePool?.patternChannels {
+                channelSlides = 0
+                for patternState in patternStates {
+                    channelSlides += patternState.globalVolumeSlide
+                }
+            }
+            if channelSlides != 0 {
+                state.globalVolume = max(
+                    0,
+                    min(128, state.globalVolume + Float(channelSlides))
+                )
+            }
         }
 
         let clockRate = state.clockRateOverride > 0
@@ -57,7 +87,8 @@ enum SequencerCore {
                 channels[index].performTick(
                     tick: state.tick,
                     sampleRate: sampleRate,
-                    clockRate: clockRate
+                    clockRate: clockRate,
+                    ticksPerRow: state.ticksPerRow
                 )
             }
         } else {
@@ -66,7 +97,12 @@ enum SequencerCore {
                 voices: channels
             )
             for i in 0..<channels.count {
-                channels[i].performTick(tick: state.tick, sampleRate: sampleRate, clockRate: clockRate)
+                channels[i].performTick(
+                    tick: state.tick,
+                    sampleRate: sampleRate,
+                    clockRate: clockRate,
+                    ticksPerRow: state.ticksPerRow
+                )
             }
         }
         state.outputsUntilNextTick += state.outputsPerTick
@@ -93,6 +129,8 @@ enum SequencerCore {
         }
         var targetPosition = state.position
         var targetRow = state.rowIndex + 1
+        let sourcePosition = state.position
+        var followedBackwardJump = false
 
         if state.patternLoopRow >= 0 {
             targetRow = state.patternLoopRow
@@ -100,6 +138,7 @@ enum SequencerCore {
         } else {
             if state.positionJump >= 0 {
                 targetPosition = state.positionJump
+                followedBackwardJump = targetPosition <= sourcePosition
                 targetRow = 0
                 state.positionJump = -1
             }
@@ -123,11 +162,21 @@ enum SequencerCore {
         state.position = targetPosition
         state.rowIndex = targetRow
 
+        // Ein Bxx-Sprung auf eine bereits erreichte Position markiert denselben
+        // Subsong-Loop, an dem openmpt123 bei --repeat 0 endet. Der Zielzustand
+        // wird wie beim natuerlichen Wrap noch geladen; Offline-Renderer und UI
+        // erhalten danach das einheitliche Endsignal.
+        if followedBackwardJump {
+            state.endReached = true
+            if state.endReachedFrame == .max { state.endReachedFrame = state.elapsedFrames }
+        }
+
         // Live/Offline werten das Signal aus. Die Probe behaelt es lediglich im
         // Zustand und laeuft wie bisher bis zum festen Frame-Limit weiter.
         if state.position >= mod.length {
             state.endReached = true
-            state.position = 0
+            if state.endReachedFrame == .max { state.endReachedFrame = state.elapsedFrames }
+            state.position = max(0, min(mod.length - 1, state.restartPosition))
         }
 
         let positionIndex = max(0, min(mod.patternTable.count - 1, state.position))
@@ -203,7 +252,7 @@ enum SequencerCore {
                 ) ?? note.effectData
                 if value >= 0x20 {
                     state.bpm = value
-                    state.outputsPerTick = sampleRate * 60.0 / (Double(value) * 24.0)
+                    recalculateTickDuration(state: state, sampleRate: sampleRate)
                 } else if value >= 0x10 {
                     state.tempoSlide = value & 0x0F
                 } else {
@@ -218,7 +267,13 @@ enum SequencerCore {
                     command: command,
                     parameter: note.effectData
                 ) ?? note.effectData
-                applyITGlobalVolumeSlide(value, state: state)
+                let slide = applyITGlobalVolumeSlide(value, state: state)
+                if let patternState = channel.itPatternState {
+                    patternState.globalVolumeSlide = slide
+                    state.globalVolumeSlide = 0
+                } else {
+                    state.globalVolumeSlide = slide
+                }
             case 19: // Sxy: globale Sequencer-Unterbefehle
                 applyITSpecial(
                     note.effectData,
@@ -261,7 +316,7 @@ enum SequencerCore {
                 state.ticksPerRow = note.effectData
             } else if note.effectData > 0 {
                 state.bpm = note.effectData
-                state.outputsPerTick = sampleRate * 60.0 / (Double(note.effectData) * 24.0)
+                recalculateTickDuration(state: state, sampleRate: sampleRate)
             }
         } else if note.hasEffect && note.effectId == ModuleEffect.setSpeed {
             if note.effectData > 0 {
@@ -270,7 +325,7 @@ enum SequencerCore {
         } else if note.hasEffect && note.effectId == ModuleEffect.setTempo {
             if note.effectData >= 32 {
                 state.bpm = note.effectData
-                state.outputsPerTick = sampleRate * 60.0 / (Double(note.effectData) * 24.0)
+                recalculateTickDuration(state: state, sampleRate: sampleRate)
             }
         } else if note.hasEffect && note.effectId == ModuleEffect.globalVolume {
             state.globalVolume = Float(min(64, max(0, note.effectData)))
@@ -281,18 +336,21 @@ enum SequencerCore {
     private static func applyITGlobalVolumeSlide(
         _ parameter: Int,
         state: RealtimePlaybackState
-    ) {
+    ) -> Int {
         let high = (parameter >> 4) & 0x0F
         let low = parameter & 0x0F
         if low == 0x0F, high > 0 {
             state.globalVolume = min(128, state.globalVolume + Float(high))
+            return 0
         } else if high == 0x0F, low > 0 {
             state.globalVolume = max(0, state.globalVolume - Float(low))
+            return 0
         } else if high > 0 {
-            state.globalVolumeSlide = high
+            return high
         } else if low > 0 {
-            state.globalVolumeSlide = -low
+            return -low
         }
+        return 0
     }
 
     @inline(__always)

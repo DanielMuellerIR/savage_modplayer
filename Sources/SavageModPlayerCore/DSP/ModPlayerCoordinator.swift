@@ -11,13 +11,22 @@ public final class PreviewVoice: Sendable {
 }
 
 public final class RealtimePlaybackState: Sendable {
-    nonisolated(unsafe) public var position: Int = -1
-    nonisolated(unsafe) public var rowIndex: Int = 63
+    // Der neutrale Vorstart steht direkt vor Zeile 0 der ersten Position. Ein
+    // festes rowIndex=63 funktionierte nur zufaellig mit klassischen
+    // 64-Zeilen-Patterns und spielte bei OpenMPT-Patterns ab 65 Zeilen erst den
+    // Pattern-Schwanz und danach dasselbe Pattern noch einmal vollstaendig.
+    nonisolated(unsafe) public var position: Int = 0
+    nonisolated(unsafe) public var rowIndex: Int = -1
     nonisolated(unsafe) public var tick: Int = 5
     nonisolated(unsafe) public var ticksPerRow: Int = 6
     nonisolated(unsafe) public var bpm: Int = 125
     nonisolated(unsafe) public var outputsPerTick: Double = 0.0
     nonisolated(unsafe) public var outputsUntilNextTick: Double = 0.0
+    // OpenMPT kann neben dem klassischen Tracker-Timing auch alternative und
+    // moderne BPM-Semantik speichern. MOD/S3M/XM bleiben beim Classic-Default.
+    nonisolated(unsafe) public var tempoMode: ITTempoMode = .classic
+    nonisolated(unsafe) public var rowsPerBeat: Int = 4
+    nonisolated(unsafe) public var restartPosition: Int = 0
     // IT T0x/T1x verändert das Tempo auf den Folgeticks einer Zeile.
     nonisolated(unsafe) public var tempoSlide: Int = 0
     // Wxy verändert die globale IT-Lautstärke auf Folgeticks.
@@ -55,6 +64,9 @@ public final class RealtimePlaybackState: Sendable {
     // (Wrap auf 0). Der MainActor-Poller liest das Flag und meldet das Songende,
     // damit die UI den loopMode (none/track/playlist) auswerten kann.
     nonisolated(unsafe) public var endReached: Bool = false
+    // Exakter Frame der ersten Endtransition. Offline-Renderer koennen damit
+    // den letzten 1024er Block auf die musikalische Songlaenge kuerzen.
+    nonisolated(unsafe) public var endReachedFrame: UInt64 = .max
 
     public init() {}
 }
@@ -207,7 +219,7 @@ public final class ModPlayerCoordinator: ObservableObject {
             state.bpm = bpm
             // Tick-Laenge in Output-Frames neu bestimmen (gleiche Formel wie play()/seek()).
             let sampleRate = audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
-            state.outputsPerTick = sampleRate * 60.0 / (Double(bpm) * 24.0)
+            SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
         }
     }
     @Published public var speed = 6 {
@@ -215,6 +227,8 @@ public final class ModPlayerCoordinator: ObservableObject {
             // Analog zu `bpm`: Speed = Ticks pro Zeile an den Echtzeit-Zustand geben.
             guard let state = playbackState, state.ticksPerRow != speed, speed > 0 else { return }
             state.ticksPerRow = speed
+            let sampleRate = audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
+            SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
         }
     }
     @Published public var trackName = "Kein Song geladen"
@@ -336,6 +350,11 @@ public final class ModPlayerCoordinator: ObservableObject {
         Self.configure(channels: self.channels, for: mod)
         self.channelCount = count
         self.visualizerState.resize(channelCount: count)
+        // Einmal pro Song denselben Sequencer ohne Audio bis zum Endsignal
+        // vortakten. Die fruehere Rows*Speed/BPM-Schaetzung ignorierte Bxx,
+        // Pattern-Loops, Delays und Tempoaenderungen (Referenz-IT: 01:24 statt
+        // korrekt 00:46). Die schnelle Tick-Probe ist von Blockgroessen frei.
+        self.visualizerState.totalDuration = Self.sequencedDuration(of: mod)
 
         self.currentPosition = 0
         self.currentRow = 0
@@ -412,8 +431,8 @@ public final class ModPlayerCoordinator: ObservableObject {
         
         // Instantiate ARC-managed playback state
         let state = RealtimePlaybackState()
-        state.position = -1
-        state.rowIndex = 63
+        state.position = 0
+        state.rowIndex = -1
         // Start-Tempo aus den aktuellen Coordinator-Werten (self.bpm/self.speed)
         // statt stur aus dem Modul-Header: setMod() setzt beide beim Songwechsel
         // ohnehin auf die Header-Werte, aber eine im gestoppten Zustand per
@@ -423,7 +442,18 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.tick = self.speed - 1
         state.ticksPerRow = self.speed
         state.bpm = self.bpm
-        state.outputsPerTick = sampleRate * 60.0 / (Double(self.bpm) * 24.0)
+        state.tempoMode = mod.itProperties?.openMPTExtensions?.tempoMode ?? .classic
+        let headerRowsPerBeat = mod.itProperties.map { $0.patternHighlight & 0xFF } ?? 4
+        state.rowsPerBeat = max(
+            1,
+            mod.itProperties?.openMPTExtensions?.rowsPerBeat
+                ?? (headerRowsPerBeat > 0 ? headerRowsPerBeat : 4)
+        )
+        state.restartPosition = max(
+            0,
+            min(mod.length - 1, mod.itProperties?.openMPTExtensions?.restartPosition ?? 0)
+        )
+        SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
         state.outputsUntilNextTick = 0.0
         state.positionJump = -1
         state.patternBreak = -1
@@ -434,6 +464,8 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.tempoSlide = 0
         state.globalVolumeSlide = 0
         state.rowTickDelay = 0
+        state.endReached = false
+        state.endReachedFrame = .max
         if let states = channels.first?.itVoicePool?.patternChannels {
             for patternState in states {
                 patternState.patternLoopCount = -1
@@ -450,8 +482,8 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.elapsedFrames = 0
 
         // Wurde im gestoppten Zustand per Slider eine Startposition gewaehlt,
-        // dort beginnen: eine Position davor auf der letzten Zeile stehen —
-        // der erste Tick-Boundary laedt dann (startPos, Zeile 0) frisch.
+        // dort direkt vor Zeile 0 stehen. Das ist unabhaengig von der variablen
+        // Zeilenzahl des vorherigen OpenMPT-Patterns.
         if let startPos = pendingStartPosition, startPos >= 0, startPos < mod.length {
             if let startRow = pendingStartRow, startRow > 0 {
                 // Zeilen-genauer Start (Grid-Klick): direkt auf (startPos, startRow)
@@ -461,8 +493,9 @@ public final class ModPlayerCoordinator: ObservableObject {
                 state.rowIndex = startRow - 1
                 state.tick = state.ticksPerRow - 1
                 state.elapsedFrames = UInt64(Double(Self.cumulativeRows(mod, upTo: startPos, row: startRow) * state.ticksPerRow) * state.outputsPerTick)
-            } else if startPos > 0 {
-                state.position = startPos - 1
+            } else {
+                state.position = startPos
+                state.rowIndex = -1
                 state.elapsedFrames = UInt64(Double(Self.cumulativeRows(mod, upTo: startPos) * mod.initialSpeed) * state.outputsPerTick)
             }
         }
@@ -667,7 +700,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
         state.ticksPerRow = params.speed
         state.bpm = params.bpm
-        state.outputsPerTick = sampleRate * 60.0 / (Double(params.bpm) * 24.0)
+        SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
         state.globalVolume = Float(params.globalVolume)
         applySeek(state: state, mod: mod, position: p, row: r)
     }
@@ -741,6 +774,8 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.tempoSlide = 0
         state.globalVolumeSlide = 0
         state.rowTickDelay = 0
+        state.endReached = false
+        state.endReachedFrame = .max
         if let states = channels.first?.itVoicePool?.patternChannels {
             for patternState in states {
                 patternState.patternLoopCount = -1
@@ -751,8 +786,11 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
 
         let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
-        let outputsPerTick = sampleRate * 60.0 / (Double(state.bpm) * 24.0)
-        state.elapsedFrames = UInt64(Double(Self.cumulativeRows(mod, upTo: position, row: row) * state.ticksPerRow) * outputsPerTick)
+        SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
+        state.elapsedFrames = UInt64(
+            Double(Self.cumulativeRows(mod, upTo: position, row: row) * state.ticksPerRow)
+                * state.outputsPerTick
+        )
 
         self.currentPosition = position
         self.currentRow = max(0, row)
@@ -849,6 +887,7 @@ public final class ModPlayerCoordinator: ObservableObject {
             // Songende-Signal aus dem Renderblock auf den MainActor heben.
             if state.endReached {
                 state.endReached = false
+                state.endReachedFrame = .max
                 self.songEndPulse &+= 1
             }
 
@@ -866,15 +905,6 @@ public final class ModPlayerCoordinator: ObservableObject {
             let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
             vis.elapsedTime = Double(state.elapsedFrames) / sampleRate
 
-            if let mod = self.activeMod {
-                // Schaetzung ueber die aktuelle Zeilendauer: Ticks/Zeile *
-                // Tickdauer (60/(BPM*24)). Die alte Formel nahm implizit
-                // Speed 6 an — bei anderen Speeds lief die Elapsed-Zeit dann
-                // ueber die angezeigte Gesamtdauer hinaus.
-                let currentBpm = state.bpm > 0 ? Double(state.bpm) : 125.0
-                let ticksPerRow = Double(max(1, state.ticksPerRow))
-                vis.totalDuration = Double(Self.cumulativeRows(mod, upTo: mod.length)) * ticksPerRow * 60.0 / (currentBpm * 24.0)
-            }
         }
     }
     
@@ -929,7 +959,10 @@ public final class ModPlayerCoordinator: ObservableObject {
             // ITs reservieren stets 64 logische Kanäle; deren Zahl darf den Mix
             // nicht pauschal absenken. Stattdessen ist das Headerfeld Mixing
             // Volume (0...128, 64 = neutral) der vorgesehene Masterfaktor.
-            mixGain = Float(mod.itProperties?.mixVolume ?? 64) / 64.0
+            let samplePreamp = mod.itProperties?.openMPTExtensions?.samplePreamp
+                ?? mod.itProperties?.mixVolume
+                ?? 64
+            mixGain = Float(samplePreamp) / 64.0
         } else {
             mixGain = voiceCount > 4 ? (4.0 / Float(voiceCount)).squareRoot() : 1.0
         }
@@ -1241,20 +1274,65 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
 
     // Startzustand des Sequencers für ein Modul (Header-Tempo, Global Volume,
-    // S3M-Clock). position/-rowIndex/-tick stehen so, dass der erste Frame
-    // sofort Zeile 0 lädt.
+    // S3M-Clock). Position 0 / Zeile -1 funktioniert fuer jede Pattern-Laenge;
+    // der erste Frame laedt sofort Zeile 0.
     nonisolated static func makeRenderState(for mod: Mod, sampleRate: Double) -> RealtimePlaybackState {
         let state = RealtimePlaybackState()
-        state.position = -1
-        state.rowIndex = 63
+        state.position = 0
+        state.rowIndex = -1
         state.tick = mod.initialSpeed - 1
         state.ticksPerRow = mod.initialSpeed
         state.bpm = mod.initialTempo
-        state.outputsPerTick = sampleRate * 60.0 / (Double(mod.initialTempo) * 24.0)
+        state.tempoMode = mod.itProperties?.openMPTExtensions?.tempoMode ?? .classic
+        let headerRowsPerBeat = mod.itProperties.map { $0.patternHighlight & 0xFF } ?? 4
+        state.rowsPerBeat = max(
+            1,
+            mod.itProperties?.openMPTExtensions?.rowsPerBeat
+                ?? (headerRowsPerBeat > 0 ? headerRowsPerBeat : 4)
+        )
+        state.restartPosition = max(
+            0,
+            min(mod.length - 1, mod.itProperties?.openMPTExtensions?.restartPosition ?? 0)
+        )
+        SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
         state.outputsUntilNextTick = 0.0
         state.globalVolume = Float(mod.initialGlobalVolume)
         state.clockRateOverride = (mod.format == .s3m || mod.format == .it) ? 14317056.0 : 0
         return state
+    }
+
+    // Berechnet die musikalische Dauer ueber echte Row-/Tick-Uebergaenge, ohne
+    // Samples zu mischen. Statt Millionen einzelner Audioframes werden nur die
+    // Tick-Grenzen besucht; der gerundete Frame-Schritt bildet denselben
+    // Restwert-Akkumulator wie der Live-/Offline-Renderblock nach.
+    nonisolated static func sequencedDuration(
+        of mod: Mod,
+        sampleRate: Double = 44_100,
+        maximumSeconds: Double = 600
+    ) -> Double {
+        guard mod.length > 0, sampleRate > 0, maximumSeconds > 0 else { return 0 }
+        let channels = makeRenderChannels(for: mod)
+        let state = makeRenderState(for: mod, sampleRate: sampleRate)
+        let maximumFrames = UInt64(sampleRate * maximumSeconds)
+
+        while state.elapsedFrames < maximumFrames {
+            SequencerCore.advanceIfNeeded(
+                state: state,
+                channels: channels,
+                mod: mod,
+                sampleRate: sampleRate
+            )
+            if state.endReached { break }
+
+            let remaining = maximumFrames - state.elapsedFrames
+            let frameStep = min(
+                remaining,
+                UInt64(max(1, Int(ceil(state.outputsUntilNextTick))))
+            )
+            state.outputsUntilNextTick -= Double(frameStep)
+            state.elapsedFrames += frameStep
+        }
+        return Double(state.elapsedFrames) / sampleRate
     }
 
     nonisolated public func exportActiveModToWav(
@@ -1334,8 +1412,19 @@ public final class ModPlayerCoordinator: ObservableObject {
                 throw NSError(domain: "ModPlayer", code: Int(status), userInfo: [NSLocalizedDescriptionKey: "Audio-Render-Fehler"])
             }
             
-            try audioFile.write(from: pcmBuffer)
-            renderedFrames += UInt64(blockFrames)
+            var validFrames = UInt64(blockFrames)
+            validFrames = min(validFrames, totalFramesToRender - renderedFrames)
+            if state.endReachedFrame != .max {
+                validFrames = min(
+                    validFrames,
+                    state.endReachedFrame > renderedFrames
+                        ? state.endReachedFrame - renderedFrames
+                        : 0
+                )
+            }
+            pcmBuffer.frameLength = AVAudioFrameCount(validFrames)
+            if validFrames > 0 { try audioFile.write(from: pcmBuffer) }
+            renderedFrames += validFrames
             
             // Songende: der Render-Block setzt endReached beim Wrap über
             // mod.length (unabhängig von der Pattern-Reihenzahl — die ist bei XM
