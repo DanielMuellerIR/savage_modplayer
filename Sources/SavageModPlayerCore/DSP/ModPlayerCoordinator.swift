@@ -350,6 +350,7 @@ public final class ModPlayerCoordinator: ObservableObject {
                 ch.itMode = true
                 ch.itLinearMode = mod.linearFrequency
                 ch.itInstrumentMode = mod.itProperties?.usesInstruments ?? false
+                ch.itSamplePool = mod.samplePool
                 ch.itPatternState = ITPatternChannelState(
                     channelVolume: i < mod.channelVolumes.count ? mod.channelVolumes[i] : 64
                 )

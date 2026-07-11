@@ -126,18 +126,27 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var itLinearMode: Bool = false
     nonisolated(unsafe) public var itInstrumentMode: Bool = false
     nonisolated(unsafe) public var itPatternState: ITPatternChannelState?
-    // XM: Note wurde losgelassen (Key-Off / Note 97). Gibt Sustain frei + startet
-    // den Fadeout.
+    // IT-Instrumente referenzieren Samples global per 1-basierter ID. Alle
+    // Kanäle teilen den vorab aufgebauten Array-Puffer per Swift-COW.
+    nonisolated(unsafe) public var itSamplePool: [Sample?] = []
+    // XM/IT: Note wurde losgelassen. Gibt den Sustain-Bereich frei.
     nonisolated(unsafe) public var keyReleased: Bool = false
+    // IT wertet Key-Off für Hüllkurven mit dem Zustand des vorherigen Ticks aus.
+    nonisolated(unsafe) public var itEnvelopeReleased: Bool = false
+    // IT Note Fade läuft unabhängig vom Key-Off: Fade gibt den Sustain nicht frei.
+    nonisolated(unsafe) public var noteFadeActive: Bool = false
 
-    // ---- XM Voice-Zustand (Hüllkurven / Fadeout / Auto-Vibrato / Ping-Pong) ----
+    // ---- Instrument-Voice-Zustand (Hüllkurven / Fadeout / Auto-Vibrato) ----
     // Volume-/Panning-Envelope-Position (x-Achse = Ticks ab Note-Start).
     nonisolated(unsafe) public var volEnvPos: Int = 0
     nonisolated(unsafe) public var panEnvPos: Int = 0
+    nonisolated(unsafe) public var pitchEnvPos: Int = 0
     // Aktueller Envelope-Volume-Faktor 0..1 (1 wenn keine Volume-Hüllkurve).
     nonisolated(unsafe) public var envVolumeFactor: Float = 1.0
     // Aktueller Panning-Envelope-Wert 0..64 (32 = neutral/Mitte).
     nonisolated(unsafe) public var panEnvValue: Float = 32
+    // IT-Pitch-Hüllkurve: 32 ist neutral, 0...64 entspricht -32...+32.
+    nonisolated(unsafe) public var pitchEnvValue: Float = 32
     // Ob das aktive Instrument eine Panning-Hüllkurve hat (steuert effectivePanning).
     nonisolated(unsafe) public var hasPanEnvelope: Bool = false
     // Fade-Volume 0..65536. Sinkt nach Key-Off pro Tick um instrument.fadeout.
@@ -149,10 +158,12 @@ public final class DSPChannel: Sendable {
     // Ping-Pong-Sample-Richtung: +1 vorwärts, -1 rückwärts.
     nonisolated(unsafe) public var sampleDirection: Double = 1.0
 
-    // Render-Skalierung der XM-Voice: Envelope-Volume * Fadeout. Für MOD/S3M 1.0
-    // (kein Einfluss). Wird vom Renderer auf die Kanal-Lautstärke multipliziert.
+    // Render-Skalierung der Instrument-Voice: Envelope-Volume * Fadeout. Der
+    // historische Name bleibt API-kompatibel für die XM-Tests.
     public var xmVolumeScale: Float {
-        xmLinearMode ? envVolumeFactor * (Float(fadeVolume) / 65536.0) : 1.0
+        (xmLinearMode || (itMode && itInstrumentMode))
+            ? envVolumeFactor * (Float(fadeVolume) / 65536.0)
+            : 1.0
     }
 
     // IT-Sample-Global-Volume und Channel Volume sind unabhängig von der
@@ -160,14 +171,23 @@ public final class DSPChannel: Sendable {
     public var itVolumeScale: Float {
         guard itMode else { return 1.0 }
         let sampleGlobal = Float(sample?.itProperties?.globalVolume ?? 64) / 64.0
+        let instrumentGlobal = Float(instrument?.itProperties?.globalVolume ?? 128) / 128.0
         let channelGlobal = (itPatternState?.channelVolume ?? 64) / 64.0
-        return sampleGlobal * channelGlobal
+        return sampleGlobal * instrumentGlobal * channelGlobal
     }
 
-    // Effektives Panning inkl. XM-Panning-Hüllkurve. Ohne XM/ohne Pan-Hüllkurve
-    // das rohe Kanal-Panning (MOD/S3M unverändert). Formel §8 der XM-Referenz.
+    // Effektives Panning inkl. XM-/IT-Panning-Hüllkurve. Ohne Instrument-
+    // Hüllkurve bleibt das rohe Kanal-Panning unverändert.
     public var effectivePanning: Float {
-        guard xmLinearMode, hasPanEnvelope else { return panning }
+        guard (xmLinearMode || (itMode && itInstrumentMode)), hasPanEnvelope else { return panning }
+        if itMode, itInstrumentMode {
+            let pan = panning * 256.0
+            let displacement = panEnvValue - 32.0
+            let finalPan = pan >= 128.0
+                ? pan + displacement * (256.0 - pan) / 32.0
+                : pan + displacement * pan / 32.0
+            return max(0.0, min(1.0, finalPan / 256.0))
+        }
         let pan = panning * 255.0
         let finalPan = pan + (panEnvValue - 32.0) * (128.0 - abs(pan - 128.0)) / 32.0
         return max(0.0, min(1.0, finalPan / 255.0))
@@ -258,11 +278,16 @@ public final class DSPChannel: Sendable {
         itLinearMode = false
         itInstrumentMode = false
         itPatternState = nil
+        itSamplePool = []
         keyReleased = false
+        itEnvelopeReleased = false
+        noteFadeActive = false
         volEnvPos = 0
         panEnvPos = 0
+        pitchEnvPos = 0
         envVolumeFactor = 1.0
         panEnvValue = 32
+        pitchEnvValue = 32
         hasPanEnvelope = false
         fadeVolume = 65536
         autoVibPos = 0
@@ -349,6 +374,7 @@ public final class DSPChannel: Sendable {
     }
     
     public func playNote(_ note: Note, instruments: [Instrument?]) {
+        let previousInstrumentIndex = self.instrument?.index
         self.setInstrument = nil
         self.setSample = nil
         self.setVolume = nil
@@ -359,16 +385,22 @@ public final class DSPChannel: Sendable {
         self.keyOffTick = -1
 
         var hasSetInstrument = false
+        var hasSetSample = false
+        var playbackKey = note.key
         if note.instrument > 0 {
             hasSetInstrument = true
             if note.instrument < instruments.count, let inst = instruments[note.instrument] {
                 self.setInstrument = inst
-                // Sample über Keymap+Note wählen (MOD/S3M: immer Sample 0).
-                let noteForMap = (note.key >= 0 && note.key < 96) ? note.key : 0
-                self.setSample = inst.sample(forNote: noteForMap)
-                self.setVolume = Float(self.setSample?.volume ?? 0)
-                if itMode, let defaultPan = self.setSample?.itProperties?.defaultPanning {
-                    self.setPanning = Float(defaultPan) / 64.0
+                if !(itMode && itInstrumentMode) {
+                    // XM wählt hier über seine 96er-Keymap; Ein-Sample-Formate
+                    // greifen unverändert auf Sample 0 zu.
+                    let noteForMap = (note.key >= 0 && note.key < 96) ? note.key : 0
+                    self.setSample = inst.sample(forNote: noteForMap)
+                    hasSetSample = true
+                    self.setVolume = Float(self.setSample?.volume ?? 0)
+                    if itMode, let defaultPan = self.setSample?.itProperties?.defaultPanning {
+                        self.setPanning = Float(defaultPan) / 64.0
+                    }
                 }
             } else {
                 self.setInstrument = nil
@@ -377,22 +409,66 @@ public final class DSPChannel: Sendable {
             }
         }
 
+        // IT-Instrumente besitzen eine globale 120er Notemap. Die Zielnote kann
+        // transponieren; Sample 0 bedeutet ausdrücklich „kein Sample“.
+        if itMode, itInstrumentMode, note.key >= 0, note.key < 120 {
+            let mappedInstrument = self.setInstrument ?? self.instrument
+            if let inst = mappedInstrument,
+               let entry = inst.noteSampleMapping?.entry(forSourceNote: note.key) {
+                let sampleID = entry.sampleID
+                if sampleID > 0,
+                   itSamplePool.indices.contains(sampleID),
+                   let mappedSample = itSamplePool[sampleID] {
+                    playbackKey = entry.targetNote
+                    hasSetSample = true
+                    self.setSample = mappedSample
+                    self.setVolume = Float(mappedSample.volume)
+                    if let defaultPan = inst.itProperties?.defaultPanning {
+                        self.setPanning = Float(defaultPan) / 64.0
+                    } else if let defaultPan = self.setSample?.itProperties?.defaultPanning {
+                        self.setPanning = Float(defaultPan) / 64.0
+                    }
+                } else {
+                    // Leere/ungültige Map-Slots sind in IT-Instrument-Modus
+                    // echte No-Ops: die laufende Vordergrundstimme bleibt stehen.
+                    playbackKey = -1
+                    hasSetInstrument = false
+                    self.setInstrument = nil
+                    self.setSample = nil
+                    self.setVolume = nil
+                    self.setPanning = nil
+                }
+            } else {
+                playbackKey = -1
+                hasSetInstrument = false
+                self.setSample = nil
+                self.setVolume = nil
+            }
+        }
+
         self.setSampleIndex = nil
         self.setCurrentPeriod = false
 
         if note.key == Note.keyCut {
-            // S3M-Note-Cut (^^): Sample sofort stoppen.
+            // Note Cut stoppt die Stimme ohne Release oder Fadeout.
             self.playing = false
+            if itMode, itInstrumentMode { self.fadeVolume = 0 }
         } else if note.key == Note.keyFade {
-            // Im IT-Sample-Modus ist Note Fade ausdrücklich wirkungslos. Der
-            // Instrument-Modus startet hier ab M6 den Instrument-Fadeout.
-            if itMode, itInstrumentMode { self.playing = false }
+            // Im Sample-Modus wirkungslos; Instrument-Modus startet den Fade,
+            // ohne den Sustain-Bereich freizugeben.
+            if itMode, itInstrumentMode { self.noteFadeActive = true }
         } else if note.key == Note.keyOff {
-            // XM-Key-Off (Note 97): Sustain freigeben, Fadeout startet.
             self.keyReleased = true
-            // FT2-Quirk: Ohne aktive Volume-Hüllkurve stoppt Key-Off den Ton
-            // sofort (statt langsam auszufaden).
-            if self.instrument?.volumeEnvelope == nil {
+            if itMode, itInstrumentMode {
+                // IT startet den Instrument-Fade sofort ohne Volume-Envelope;
+                // bei geloopter Volume-Envelope ebenfalls ab dem Release.
+                if self.instrument?.volumeEnvelope == nil
+                    || (self.instrument?.volumeEnvelope?.loopEnabled == true
+                        && (self.instrument?.fadeout ?? 0) > 0) {
+                    self.noteFadeActive = true
+                }
+            } else if self.instrument?.volumeEnvelope == nil {
+                // FT2-Quirk: Ohne aktive Volume-Hüllkurve stoppt Key-Off sofort.
                 self.playing = false
             }
         } else if note.period > 0 {
@@ -405,28 +481,30 @@ public final class DSPChannel: Sendable {
             self.setCurrentPeriod = true
             self.setSampleIndex = 0.0
             self.keyReleased = false
-        } else if note.key >= 0 {
+            self.noteFadeActive = false
+        } else if playbackKey >= 0 {
             let activeSample = self.setSample ?? self.sample
             if itLinearMode {
-                self.setPeriod = DSPChannel.itLinearPeriod(key: note.key)
+                self.setPeriod = DSPChannel.itLinearPeriod(key: playbackKey)
             } else if itMode {
                 self.setPeriod = DSPChannel.itAmigaPeriod(
-                    key: note.key,
+                    key: playbackKey,
                     c5Speed: activeSample?.itProperties?.c5Speed ?? activeSample?.c2spd ?? 8363
                 )
             } else if xmLinearMode {
                 // XM: Periode aus (Key + Sample-relativeNote) + Sample-Finetune,
                 // lineares Modell.
-                let realNote = note.key + (activeSample?.relativeNote ?? 0)
+                let realNote = playbackKey + (activeSample?.relativeNote ?? 0)
                 self.setPeriod = DSPChannel.xmLinearPeriod(realNote: realNote, finetune: activeSample?.finetune ?? 0)
             } else {
                 // S3M: Period aus Halbton-Key + C2Spd des (neuen oder laufenden)
                 // Samples berechnen.
-                self.setPeriod = DSPChannel.s3mPeriod(key: note.key, c2spd: activeSample?.c2spd ?? 8363)
+                self.setPeriod = DSPChannel.s3mPeriod(key: playbackKey, c2spd: activeSample?.c2spd ?? 8363)
             }
             self.setCurrentPeriod = true
             self.setSampleIndex = 0.0
             self.keyReleased = false
+            self.noteFadeActive = false
         }
 
         // S3M-Volume-Column überschreibt die Instrument-Default-Lautstärke.
@@ -447,6 +525,8 @@ public final class DSPChannel: Sendable {
         
         if hasSetInstrument {
             self.instrument = self.setInstrument
+        }
+        if hasSetSample || (hasSetInstrument && !(itMode && itInstrumentMode)) {
             self.sample = self.setSample
         }
 
@@ -468,35 +548,51 @@ public final class DSPChannel: Sendable {
         
         if let idx = self.setSampleIndex {
             self.sampleIndex = idx
-            self.playing = true
+            self.playing = !(itMode && itInstrumentMode) || self.sample != nil
         }
 
-        // XM: bei echtem Retrigger (neue Note) die Voice zurücksetzen —
-        // Hüllkurven-Positionen, Fadeout, Auto-Vibrato, Sample-Richtung.
-        if xmLinearMode, self.setSampleIndex != nil {
-            initXMVoice()
+        // Bei echtem Retrigger die Instrument-Voice initialisieren. IT-Carry
+        // erhält die jeweilige Envelope-Position nur beim selben Instrument.
+        if (xmLinearMode || (itMode && itInstrumentMode)), self.setSampleIndex != nil {
+            let mayCarry = itMode && itInstrumentMode
+                && previousInstrumentIndex == self.instrument?.index
+            initInstrumentVoice(preserveCarry: mayCarry)
         }
     }
 
-    // XM-Voice bei Note-Trigger initialisieren. Setzt Hüllkurven-Positionen auf 0
-    // (mit sofortigem Startwert für Tick 0), Fadeout auf voll und den Auto-Vibrato
-    // inkl. Sweep-Anlauf. Liest die Parameter aus dem aktuellen Instrument.
-    private func initXMVoice() {
-        volEnvPos = 0
-        panEnvPos = 0
+    // XM-/IT-Voice bei Note-Trigger initialisieren. IT-Carry kann einzelne
+    // Envelope-Positionen erhalten; XM setzt wie bisher alles auf Tick 0.
+    private func initInstrumentVoice(preserveCarry: Bool) {
+        if !(preserveCarry && instrument?.volumeEnvelope?.carryEnabled == true) {
+            volEnvPos = 0
+        }
+        if !(preserveCarry && instrument?.panningEnvelope?.carryEnabled == true) {
+            panEnvPos = 0
+        }
+        if !(preserveCarry && instrument?.pitchEnvelope?.carryEnabled == true) {
+            pitchEnvPos = 0
+        }
         fadeVolume = 65536
+        noteFadeActive = false
+        keyReleased = false
+        itEnvelopeReleased = false
         sampleDirection = 1.0
         hasPanEnvelope = instrument?.panningEnvelope != nil
         // Startwerte für Tick 0 sofort setzen (sonst erst ab dem ersten Tick).
         if let env = instrument?.volumeEnvelope {
-            envVolumeFactor = envelopeValue(env, at: 0) / 64.0
+            envVolumeFactor = envelopeValue(env, at: volEnvPos) / 64.0
         } else {
             envVolumeFactor = 1.0
         }
         if let env = instrument?.panningEnvelope {
-            panEnvValue = envelopeValue(env, at: 0)
+            panEnvValue = envelopeValue(env, at: panEnvPos)
         } else {
             panEnvValue = 32
+        }
+        if let env = instrument?.pitchEnvelope, env.valueMode == .pitch {
+            pitchEnvValue = envelopeValue(env, at: pitchEnvPos)
+        } else {
+            pitchEnvValue = 32
         }
         autoVibPos = 0
         if let av = instrument?.autoVibrato, av.depth > 0 {
@@ -532,15 +628,44 @@ public final class DSPChannel: Sendable {
         return Float(last.value)
     }
 
-    // Envelope-Position einen Tick weiterschieben — mit Sustain (hält, solange
-    // die Note nicht losgelassen ist) und Loop.
-    private func stepEnvelope(_ env: Envelope, pos: inout Int, released: Bool) {
+    // Envelope-Position einen Tick weiterschieben. XM hält an einem einzelnen
+    // Sustain-Punkt; IT schleift den vollständigen Sustain-Bereich inklusiv.
+    // Der Rückgabewert meldet das Ende einer nicht geloopten IT-Hüllkurve.
+    @discardableResult
+    private func stepEnvelope(
+        _ env: Envelope,
+        pos: inout Int,
+        released: Bool,
+        itStyle: Bool = false
+    ) -> Bool {
         let pts = env.points
-        guard pts.count > 1 else { return }
+        guard pts.count > 1 else { return false }
+        if itStyle {
+            pos += 1
+            if env.sustainEnabled, !released,
+               env.sustainStart >= 0, env.sustainStart < pts.count,
+               env.sustainEnd >= env.sustainStart, env.sustainEnd < pts.count,
+               pos > pts[env.sustainEnd].frame {
+                pos = pts[env.sustainStart].frame
+                return false
+            }
+            if env.loopEnabled,
+               env.loopStart >= 0, env.loopStart < pts.count,
+               env.loopEnd >= env.loopStart, env.loopEnd < pts.count,
+               pos > pts[env.loopEnd].frame {
+                pos = pts[env.loopStart].frame
+                return false
+            }
+            if let last = pts.last, pos > last.frame {
+                pos = last.frame
+                return true
+            }
+            return false
+        }
         if env.sustainEnabled, !released,
            env.sustainPoint >= 0, env.sustainPoint < pts.count,
            pos == pts[env.sustainPoint].frame {
-            return // am Sustain-Punkt halten
+            return false // am Sustain-Punkt halten
         }
         pos += 1
         if env.loopEnabled,
@@ -548,6 +673,7 @@ public final class DSPChannel: Sendable {
            pos >= pts[env.loopEnd].frame {
             pos = (env.loopStart >= 0 && env.loopStart < pts.count) ? pts[env.loopStart].frame : 0
         }
+        return false
     }
 
     // Auto-Vibrato einen Tick weiterdrehen und das Perioden-Delta zurückgeben
@@ -1166,10 +1292,10 @@ public final class DSPChannel: Sendable {
             self.tremorCount += 1
         }
 
-        // XM-Voice pro Tick: Volume-/Panning-Hüllkurve fortschreiben, Fadeout nach
-        // Key-Off, Auto-Vibrato als Perioden-Delta (nur für die Frequenz, nicht in
-        // currentPeriod akkumuliert). Alles gegated — MOD/S3M unberührt.
+        // Instrument-Voice pro Tick: Hüllkurven und Fadeout bleiben strikt auf
+        // XM beziehungsweise IT-Instrument-Modus begrenzt; MOD/S3M sind unberührt.
         var xmPeriodDelta: Float = 0
+        var itPitchEnvelopeValue: Float = 32
         // XM und IT besitzen eine zweite Effektspalte. Deren Volume-Slide wirkt
         // wie die Hauptspalten-Slides erst ab Tick 1.
         if (xmLinearMode || itMode), self.volColVolSlide != 0, tick > 0 {
@@ -1198,6 +1324,40 @@ public final class DSPChannel: Sendable {
                 if fadeVolume < 0 { fadeVolume = 0 }
             }
             xmPeriodDelta = advanceAutoVibrato()
+        } else if itMode, itInstrumentMode {
+            let envelopeReleased = itEnvelopeReleased
+            if let env = instrument?.volumeEnvelope {
+                envVolumeFactor = envelopeValue(env, at: volEnvPos) / 64.0
+                let ended = stepEnvelope(
+                    env, pos: &volEnvPos, released: envelopeReleased, itStyle: true
+                )
+                if ended {
+                    noteFadeActive = true
+                    if env.points.last?.value == 0 {
+                        fadeVolume = 0
+                        playing = false
+                    }
+                }
+            } else {
+                envVolumeFactor = 1.0
+            }
+            if let env = instrument?.panningEnvelope {
+                panEnvValue = envelopeValue(env, at: panEnvPos)
+                stepEnvelope(env, pos: &panEnvPos, released: envelopeReleased, itStyle: true)
+            }
+            if let env = instrument?.pitchEnvelope, env.valueMode == .pitch {
+                pitchEnvValue = envelopeValue(env, at: pitchEnvPos)
+                itPitchEnvelopeValue = pitchEnvValue
+                stepEnvelope(env, pos: &pitchEnvPos, released: envelopeReleased, itStyle: true)
+            } else {
+                pitchEnvValue = 32
+            }
+
+            if noteFadeActive, let inst = instrument, inst.fadeout > 0 {
+                fadeVolume = max(0, fadeVolume - inst.fadeout * 2)
+                if fadeVolume == 0 { playing = false }
+            }
+            itEnvelopeReleased = keyReleased
         }
 
         if self.currentPeriod < self.periodMin { self.currentPeriod = self.periodMin }
@@ -1205,7 +1365,17 @@ public final class DSPChannel: Sendable {
 
         // Auto-Vibrato-Delta nur für die Frequenzberechnung addieren (nicht clampen
         // in currentPeriod, damit es sich nicht aufsummiert). MOD/S3M: Delta 0.
-        let effPeriod = self.currentPeriod + xmPeriodDelta
+        var effPeriod = self.currentPeriod + xmPeriodDelta
+        if itMode, itInstrumentMode, itPitchEnvelopeValue != 32 {
+            let signedValue = itPitchEnvelopeValue - 32
+            if itLinearMode {
+                // IT-Pitch-Envelope: eine rohe Einheit entspricht einem halben
+                // Halbton, also 32 linearen Periodeneinheiten.
+                effPeriod -= signedValue * 32
+            } else {
+                effPeriod *= Float(pow(2.0, Double(-signedValue / 24.0)))
+            }
+        }
         if effPeriod > 0, sampleRate > 0 {
             // XM linear: Frequenz exponentiell aus der Periode. MOD/S3M: Paula-/
             // ST3-Clock geteilt durch die Periode. (pow ist alloc-frei — wie das

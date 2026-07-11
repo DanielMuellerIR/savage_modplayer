@@ -60,7 +60,7 @@ func printUsageAndExit() -> Never {
       -r, --rate R         Samplerate (Standard 44100)
           --normalize      Peak-Normalisierung (wie Quick Look; sonst roh)
           --no-interp      lineare Interpolation aus
-          --info           nur Modul-Struktur ausgeben (kein Render)
+          --info           nur Modul-Struktur ausgeben (IT intern analysierbar)
           --pattern N      Pattern an Order-Position N als Text ausgeben
       -q, --quiet          keine Fortschrittsausgabe
 
@@ -75,9 +75,10 @@ func log(_ s: String, quiet: Bool) {
 // ---- Struktur-Ausgabe (--info) ----------------------------------------------
 
 func noteName(_ key: Int) -> String {
-    // 0-basierter Halbton-Key -> "C-4" o.ä.; -1 = leer, keyOff/keyCut markiert.
+    // 0-basierter Halbton-Key -> "C-4" o.ä.; Spezialnoten separat markieren.
     if key == Note.keyOff { return "===" }
     if key == Note.keyCut { return "^^^" }
+    if key == Note.keyFade { return "~~~" }
     guard key >= 0 else { return "..." }
     let names = ["C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-"]
     return names[key % 12] + String(key / 12)
@@ -93,6 +94,10 @@ func printInfo(_ mod: Mod) {
     print("Init Speed/BPM:  \(mod.initialSpeed) Ticks/Row @ \(mod.initialTempo) BPM")
     print("Global Volume:   \(mod.initialGlobalVolume)")
     print("Lineare Freq.:   \(mod.linearFrequency)")
+    if mod.format == .it {
+        printITInfo(mod)
+        return
+    }
     let realInstruments = mod.instruments.compactMap { $0 }
     print("Instrumente:     \(realInstruments.count)")
     for inst in realInstruments {
@@ -119,6 +124,90 @@ func printInfo(_ mod: Mod) {
                 print("      keymap: \(inst.keymap.map { String($0) }.joined(separator: ""))")
             }
         }
+    }
+}
+
+func envelopeDescription(_ label: String, _ envelope: Envelope?) -> String {
+    guard let envelope else { return "\(label)=none" }
+    let points = envelope.points.map { "(\($0.frame),\($0.value))" }.joined(separator: " ")
+    let sustain = envelope.sustainEnabled
+        ? "\(envelope.sustainStart)..\(envelope.sustainEnd)"
+        : "-"
+    let loop = envelope.loopEnabled ? "\(envelope.loopStart)..\(envelope.loopEnd)" : "-"
+    return "\(label)[mode=\(envelope.valueMode.rawValue),sus=\(sustain),loop=\(loop),carry=\(envelope.carryEnabled)]: \(points)"
+}
+
+func printITInfo(_ mod: Mod) {
+    if let properties = mod.itProperties {
+        print(String(format: "IT-Versionen:    cwtv=0x%04X cmwt=0x%04X", properties.createdWithVersion, properties.compatibleWithVersion))
+        print("IT-Modus:         \(properties.usesInstruments ? "Instrument" : "Sample")")
+        print("IT-Mix/PanSep:    \(properties.mixVolume) / \(properties.panSeparation)")
+        if case let .impulseTracker(compatibility)? = mod.playbackSemantics {
+            print("IT-Flags:         oldFx=\(compatibility.oldEffects) compatGxx=\(compatibility.compatibleGxx)")
+        }
+    }
+
+    let instruments = mod.instruments.compactMap { $0 }
+    print("Instrumente:     \(instruments.count)")
+    for instrument in instruments {
+        if let properties = instrument.itProperties {
+            let pan = properties.defaultPanning.map(String.init) ?? "sample/channel"
+            print(String(
+                format: "  #%02d '%@' NNA=%d DCT=%d DCA=%d fade=%d gv=%d pan=%@ pps=%d/center%d",
+                instrument.index, instrument.name,
+                properties.newNoteAction.rawValue,
+                properties.duplicateCheckType.rawValue,
+                properties.duplicateCheckAction.rawValue,
+                instrument.fadeout,
+                properties.globalVolume,
+                pan,
+                properties.pitchPanSeparation,
+                properties.pitchPanCenter
+            ))
+            let cutoff = properties.initialFilterCutoff.map(String.init) ?? "-"
+            let resonance = properties.initialFilterResonance.map(String.init) ?? "-"
+            print("      swing vol/pan=\(properties.randomVolumeVariation)/\(properties.randomPanningVariation) filter=\(cutoff)/\(resonance)")
+        } else {
+            print(String(format: "  #%02d '%@' fade=%d", instrument.index, instrument.name, instrument.fadeout))
+        }
+        print("      \(envelopeDescription("volEnv", instrument.volumeEnvelope))")
+        print("      \(envelopeDescription("panEnv", instrument.panningEnvelope))")
+        print("      \(envelopeDescription("pitchEnv", instrument.pitchEnvelope))")
+        if let mapping = instrument.noteSampleMapping {
+            let empty = mapping.entries.count { $0.sampleID == 0 }
+            let transposed = mapping.entries.enumerated().count { $0.offset != $0.element.targetNote }
+            let sampleIDs = Set(mapping.entries.map(\.sampleID).filter { $0 > 0 }).sorted()
+            print("      notemap entries=120 samples=\(sampleIDs) empty=\(empty) transposed=\(transposed)")
+            let exceptions = mapping.entries.enumerated().compactMap { source, entry -> String? in
+                guard entry.sampleID == 0 || entry.targetNote != source else { return nil }
+                return "\(noteName(source))->\(noteName(entry.targetNote))/S\(entry.sampleID)"
+            }
+            if !exceptions.isEmpty { print("      notemap exceptions: \(exceptions.joined(separator: " "))") }
+        }
+    }
+
+    let samples = mod.samplePool.enumerated().compactMap { index, sample in
+        sample.map { (index, $0) }
+    }
+    print("Samples:         \(samples.count)")
+    for (index, sample) in samples {
+        let loop = sample.loopType == .none
+            ? "none"
+            : "\(sample.loopType)[\(sample.loopStart)..\(sample.loopStart + sample.loopLength)]"
+        let sustain = sample.sustainLoop.map {
+            "\($0.type)[\($0.start)..\($0.start + $0.length)]"
+        } ?? "none"
+        let properties = sample.itProperties
+        print(String(
+            format: "  S%02d '%@' len=%d vol=%d gv=%d c5=%d pan=%@ loop=%@ sustain=%@ stereo=%@",
+            index, sample.name, sample.pcm.count, sample.volume,
+            properties?.globalVolume ?? 64,
+            properties?.c5Speed ?? sample.c2spd,
+            properties?.defaultPanning.map(String.init) ?? "-",
+            loop,
+            sustain,
+            sample.rightPCM == nil ? "no" : "yes"
+        ))
     }
 }
 
@@ -162,7 +251,13 @@ guard let data = try? Data(contentsOf: inputURL) else {
 
 let mod: Mod
 do {
-    mod = try ModuleLoader.parse(data: data)
+    // Bis M10 bleibt IT aus Loader/App/Quick Look heraus. M6 darf die Struktur
+    // jedoch explizit per --info/--pattern untersuchen, ohne Wiedergabe zu bewerben.
+    if (opts.infoOnly || opts.dumpPattern != nil), ITParser.canParse(data: data) {
+        mod = try ITParser.parse(data: data)
+    } else {
+        mod = try ModuleLoader.parse(data: data)
+    }
 } catch {
     FileHandle.standardError.write(Data("Parse-Fehler: \(error.localizedDescription)\n".utf8))
     exit(1)

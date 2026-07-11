@@ -2,7 +2,8 @@ import Foundation
 
 // Strikter Parser für den strukturellen IT-Kern. M2 liest Header, Orders und
 // Patterns, aktiviert das Format aber noch nicht im öffentlichen ModuleLoader.
-// Instrumente, Samples und Wiedergabe folgen in den späteren Meilensteinen.
+// Instrumente, Samples und Wiedergabe werden intern meilensteinweise ergänzt;
+// der öffentliche ModuleLoader aktiviert das Format erst nach dem M10-Gate.
 public enum ITParser {
     public enum ParserError: Error, LocalizedError, Equatable {
         case fileTooSmall
@@ -15,6 +16,9 @@ public enum ITParser {
         case invalidPatternRows(pattern: Int, rows: Int)
         case invalidPatternValue(pattern: Int, row: Int, channel: Int, field: String, value: Int)
         case truncatedPattern(Int)
+        case invalidInstrumentHeader(Int)
+        case invalidInstrumentValue(instrument: Int, field: String, value: Int)
+        case invalidInstrumentEnvelope(instrument: Int, envelope: String, reason: String)
         case invalidSampleHeader(Int)
         case unsupportedSampleEncoding(sample: Int, convertFlags: Int)
         case invalidSampleLoop(sample: Int, kind: String, start: Int, end: Int, length: Int)
@@ -42,6 +46,12 @@ public enum ITParser {
                 return "IT-Pattern \(pattern), Zeile \(row), Kanal \(channel): ungültiges Feld \(field)=\(value)."
             case let .truncatedPattern(pattern):
                 return "IT-Pattern \(pattern) ist abgeschnitten."
+            case let .invalidInstrumentHeader(instrument):
+                return "IT-Instrument \(instrument) besitzt keinen gültigen IMPI-Header."
+            case let .invalidInstrumentValue(instrument, field, value):
+                return "IT-Instrument \(instrument) hat einen ungültigen Wert \(field)=\(value)."
+            case let .invalidInstrumentEnvelope(instrument, envelope, reason):
+                return "IT-Instrument \(instrument) hat eine ungültige \(envelope)-Hüllkurve: \(reason)."
             case let .invalidSampleHeader(sample):
                 return "IT-Sample \(sample) besitzt keinen gültigen IMPS-Header."
             case let .unsupportedSampleEncoding(sample, convertFlags):
@@ -73,6 +83,10 @@ public enum ITParser {
         func byte(_ offset: Int) throws -> Int {
             guard offset >= 0, offset < data.count else { throw ParserError.fileTooSmall }
             return Int(data[base + offset])
+        }
+
+        func signedByte(_ offset: Int) throws -> Int {
+            Int(Int8(bitPattern: UInt8(try byte(offset))))
         }
 
         func word(_ offset: Int) throws -> Int {
@@ -246,9 +260,11 @@ public enum ITParser {
         let usesInstruments = flags & 0x04 != 0
         let instruments: [Instrument?]
         if usesInstruments {
-            // Die IMPI-Inhalte folgen in M6; die 1-basierten Slots bleiben schon
-            // jetzt stabil und greifen später auf den globalen Sample-Pool zu.
-            instruments = [Instrument?](repeating: nil, count: instrumentOffsets.count + 1)
+            instruments = try parseInstruments(
+                reader: reader,
+                offsets: instrumentOffsets,
+                compatibleWithVersion: compatibleWithVersion
+            )
         } else {
             instruments = [nil] + samples.enumerated().map { index, sample in
                 Instrument(index: index + 1, name: sample.name, samples: [sample])
@@ -297,6 +313,303 @@ public enum ITParser {
             channelDisabled: channelDisabled,
             playbackSemantics: .impulseTracker(compatibility),
             itProperties: properties
+        )
+    }
+
+    // MARK: - Instrumente
+
+    private static let instrumentSize = 554
+
+    private static func parseInstruments(
+        reader: Reader,
+        offsets: [Int],
+        compatibleWithVersion: Int
+    ) throws -> [Instrument?] {
+        var instruments: [Instrument?] = [nil]
+        instruments.reserveCapacity(offsets.count + 1)
+        for (zeroBasedIndex, offset) in offsets.enumerated() {
+            let index = zeroBasedIndex + 1
+            guard offset <= reader.data.count - instrumentSize,
+                  try reader.byte(offset) == 0x49,
+                  try reader.byte(offset + 1) == 0x4D,
+                  try reader.byte(offset + 2) == 0x50,
+                  try reader.byte(offset + 3) == 0x49 else {
+                throw ParserError.invalidInstrumentHeader(index)
+            }
+            if compatibleWithVersion < 0x0200 {
+                instruments.append(try parseOldInstrument(
+                    reader: reader, offset: offset, index: index
+                ))
+            } else {
+                instruments.append(try parseModernInstrument(
+                    reader: reader, offset: offset, index: index
+                ))
+            }
+        }
+        return instruments
+    }
+
+    private static func parseModernInstrument(
+        reader: Reader,
+        offset: Int,
+        index: Int
+    ) throws -> Instrument {
+        let nnaRaw = try reader.byte(offset + 0x11)
+        let dctRaw = try reader.byte(offset + 0x12)
+        let dcaRaw = try reader.byte(offset + 0x13)
+        guard let nna = NewNoteAction(rawValue: nnaRaw) else {
+            throw ParserError.invalidInstrumentValue(instrument: index, field: "NNA", value: nnaRaw)
+        }
+        guard let dct = DuplicateCheckType(rawValue: dctRaw) else {
+            throw ParserError.invalidInstrumentValue(instrument: index, field: "DCT", value: dctRaw)
+        }
+        guard let dca = DuplicateCheckAction(rawValue: dcaRaw) else {
+            throw ParserError.invalidInstrumentValue(instrument: index, field: "DCA", value: dcaRaw)
+        }
+
+        let globalVolume = try reader.byte(offset + 0x18)
+        let rawDefaultPanning = try reader.byte(offset + 0x19)
+        let pitchPanCenter = try reader.byte(offset + 0x17)
+        guard globalVolume <= 128 else {
+            throw ParserError.invalidInstrumentValue(instrument: index, field: "globalVolume", value: globalVolume)
+        }
+        guard pitchPanCenter < 120 else {
+            throw ParserError.invalidInstrumentValue(instrument: index, field: "pitchPanCenter", value: pitchPanCenter)
+        }
+
+        let mapping = try parseNoteSampleMapping(
+            reader: reader, offset: offset + 0x40, instrument: index
+        )
+        let volumeEnvelope = try parseEnvelope(
+            reader: reader, offset: offset + 0x130, instrument: index,
+            name: "Volume", valueOffset: 0, allowFilter: false
+        )
+        let panningEnvelope = try parseEnvelope(
+            reader: reader, offset: offset + 0x182, instrument: index,
+            name: "Panning", valueOffset: 32, allowFilter: false
+        )
+        let pitchEnvelope = try parseEnvelope(
+            reader: reader, offset: offset + 0x1D4, instrument: index,
+            name: "Pitch/Filter", valueOffset: 32, allowFilter: true
+        )
+
+        let rawCutoff = try reader.byte(offset + 0x3A)
+        let rawResonance = try reader.byte(offset + 0x3B)
+        let defaultPanValue = rawDefaultPanning & 0x7F
+        let defaultPanning: Int? = rawDefaultPanning & 0x80 != 0
+            ? nil
+            : (defaultPanValue <= 64 ? defaultPanValue : 32)
+        let properties = ITInstrumentProperties(
+            newNoteAction: nna,
+            duplicateCheckType: dct,
+            duplicateCheckAction: dca,
+            globalVolume: globalVolume,
+            defaultPanning: defaultPanning,
+            pitchPanSeparation: try reader.signedByte(offset + 0x16),
+            pitchPanCenter: pitchPanCenter,
+            randomVolumeVariation: min(100, try reader.byte(offset + 0x1A)),
+            randomPanningVariation: min(64, try reader.byte(offset + 0x1B)),
+            initialFilterCutoff: rawCutoff & 0x80 != 0 ? rawCutoff & 0x7F : nil,
+            initialFilterResonance: rawResonance & 0x80 != 0 ? rawResonance & 0x7F : nil
+        )
+        return Instrument(
+            index: index,
+            name: try reader.string(offset + 0x20, length: 26),
+            samples: [],
+            volumeEnvelope: volumeEnvelope,
+            panningEnvelope: panningEnvelope,
+            fadeout: try reader.word(offset + 0x14) << 5,
+            pitchEnvelope: pitchEnvelope,
+            noteSampleMapping: mapping,
+            itProperties: properties
+        )
+    }
+
+    // Das Vor-2.00-Format besitzt nur eine Volume-Hüllkurve und kodiert deren
+    // Knoten separat hinter einer ungenutzten, vorinterpolierten 200-Byte-Tabelle.
+    private static func parseOldInstrument(
+        reader: Reader,
+        offset: Int,
+        index: Int
+    ) throws -> Instrument {
+        let flags = try reader.byte(offset + 0x11)
+        guard flags & ~0x07 == 0 else {
+            throw ParserError.invalidInstrumentValue(instrument: index, field: "envelopeFlags", value: flags)
+        }
+        let nnaRaw = try reader.byte(offset + 0x1A)
+        let dctRaw = try reader.byte(offset + 0x1B)
+        guard let nna = NewNoteAction(rawValue: nnaRaw) else {
+            throw ParserError.invalidInstrumentValue(instrument: index, field: "NNA", value: nnaRaw)
+        }
+        guard let dct = DuplicateCheckType(rawValue: dctRaw) else {
+            throw ParserError.invalidInstrumentValue(instrument: index, field: "DCT", value: dctRaw)
+        }
+
+        var points = [EnvelopePoint]()
+        points.reserveCapacity(25)
+        for node in 0..<25 {
+            let tick = try reader.byte(offset + 0x1F8 + node * 2)
+            if tick == 0xFF { break }
+            let value = try reader.byte(offset + 0x1F9 + node * 2)
+            guard value <= 64, points.last.map({ tick >= $0.frame }) ?? true else {
+                throw ParserError.invalidInstrumentEnvelope(
+                    instrument: index, envelope: "Volume", reason: "ungültiger Knoten \(node)"
+                )
+            }
+            points.append(EnvelopePoint(frame: tick, value: value))
+        }
+        let volumeEnvelope = try makeEnvelope(
+            points: points,
+            flags: flags,
+            loopStart: try reader.byte(offset + 0x12),
+            loopEnd: try reader.byte(offset + 0x13),
+            sustainStart: try reader.byte(offset + 0x14),
+            sustainEnd: try reader.byte(offset + 0x15),
+            instrument: index,
+            name: "Volume",
+            valueMode: .standard
+        )
+        let mapping = try parseNoteSampleMapping(
+            reader: reader, offset: offset + 0x40, instrument: index
+        )
+        let properties = ITInstrumentProperties(
+            newNoteAction: nna,
+            duplicateCheckType: dct,
+            duplicateCheckAction: .cut,
+            globalVolume: 128,
+            defaultPanning: nil,
+            pitchPanSeparation: 0,
+            pitchPanCenter: 60,
+            randomVolumeVariation: 0,
+            randomPanningVariation: 0,
+            initialFilterCutoff: nil,
+            initialFilterResonance: nil
+        )
+        return Instrument(
+            index: index,
+            name: try reader.string(offset + 0x20, length: 26),
+            samples: [],
+            volumeEnvelope: volumeEnvelope,
+            fadeout: try reader.word(offset + 0x18) << 6,
+            noteSampleMapping: mapping,
+            itProperties: properties
+        )
+    }
+
+    private static func parseNoteSampleMapping(
+        reader: Reader,
+        offset: Int,
+        instrument: Int
+    ) throws -> NoteSampleMapping {
+        let entries = try (0..<120).map { sourceNote in
+            let rawTarget = try reader.byte(offset + sourceNote * 2)
+            let sampleID = try reader.byte(offset + sourceNote * 2 + 1)
+            guard sampleID <= maximumSamples else {
+                throw ParserError.invalidInstrumentValue(
+                    instrument: instrument,
+                    field: "noteMap[\(sourceNote)].sample",
+                    value: sampleID
+                )
+            }
+            return try NoteSampleMapping.Entry(
+                targetNote: rawTarget < 120 ? rawTarget : sourceNote,
+                sampleID: sampleID
+            )
+        }
+        return try NoteSampleMapping(entries: entries)
+    }
+
+    private static func parseEnvelope(
+        reader: Reader,
+        offset: Int,
+        instrument: Int,
+        name: String,
+        valueOffset: Int,
+        allowFilter: Bool
+    ) throws -> Envelope? {
+        let flags = try reader.byte(offset)
+        let allowedFlags = allowFilter ? 0x8F : 0x0F
+        guard flags & ~allowedFlags == 0 else {
+            throw ParserError.invalidInstrumentEnvelope(
+                instrument: instrument, envelope: name,
+                reason: "unbekannte Flags 0x\(String(flags, radix: 16))"
+            )
+        }
+        let count = try reader.byte(offset + 1)
+        guard count <= 25 else {
+            throw ParserError.invalidInstrumentEnvelope(
+                instrument: instrument, envelope: name, reason: "\(count) Knoten"
+            )
+        }
+        var points = [EnvelopePoint]()
+        points.reserveCapacity(count)
+        for node in 0..<count {
+            let rawValue = try reader.signedByte(offset + 6 + node * 3)
+            let value = rawValue + valueOffset
+            let tick = try reader.word(offset + 7 + node * 3)
+            guard value >= 0, value <= 64, points.last.map({ tick >= $0.frame }) ?? true else {
+                throw ParserError.invalidInstrumentEnvelope(
+                    instrument: instrument, envelope: name, reason: "ungültiger Knoten \(node)"
+                )
+            }
+            points.append(EnvelopePoint(frame: tick, value: value))
+        }
+        let valueMode: EnvelopeValueMode = allowFilter && flags & 0x80 != 0 ? .filter
+            : (allowFilter ? .pitch : .standard)
+        return try makeEnvelope(
+            points: points,
+            flags: flags,
+            loopStart: try reader.byte(offset + 2),
+            loopEnd: try reader.byte(offset + 3),
+            sustainStart: try reader.byte(offset + 4),
+            sustainEnd: try reader.byte(offset + 5),
+            instrument: instrument,
+            name: name,
+            valueMode: valueMode
+        )
+    }
+
+    private static func makeEnvelope(
+        points: [EnvelopePoint],
+        flags: Int,
+        loopStart: Int,
+        loopEnd: Int,
+        sustainStart: Int,
+        sustainEnd: Int,
+        instrument: Int,
+        name: String,
+        valueMode: EnvelopeValueMode
+    ) throws -> Envelope? {
+        guard flags & 0x01 != 0 else { return nil }
+        guard !points.isEmpty else {
+            throw ParserError.invalidInstrumentEnvelope(
+                instrument: instrument, envelope: name, reason: "aktiv, aber ohne Knoten"
+            )
+        }
+        if flags & 0x02 != 0 {
+            guard loopStart <= loopEnd, loopEnd < points.count else {
+                throw ParserError.invalidInstrumentEnvelope(
+                    instrument: instrument, envelope: name, reason: "ungültiger Loop"
+                )
+            }
+        }
+        if flags & 0x04 != 0 {
+            guard sustainStart <= sustainEnd, sustainEnd < points.count else {
+                throw ParserError.invalidInstrumentEnvelope(
+                    instrument: instrument, envelope: name, reason: "ungültiger Sustain-Bereich"
+                )
+            }
+        }
+        return Envelope(
+            points: points,
+            sustainStart: sustainStart,
+            sustainEnd: sustainEnd,
+            loopStart: loopStart,
+            loopEnd: loopEnd,
+            sustainEnabled: flags & 0x04 != 0,
+            loopEnabled: flags & 0x02 != 0,
+            carryEnabled: flags & 0x08 != 0,
+            valueMode: valueMode
         )
     }
 

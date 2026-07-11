@@ -513,6 +513,15 @@ Wichtige Leitplanken:
   A/B-Fälle bestätigen Note-Fade und Kurz-Retrigger. 151 Tests, beide
   Audio-Regressionen, JS-Parität und signierter App-Build sind grün. Loader,
   UTI und Quick Look führen `.it` weiterhin nicht öffentlich.
+- **M6-Abschluss (Version 1.5.20):** Moderne und alte 554-Byte-Instrumente,
+  120er Notemap, NNA/DCT/DCA-Parameter, Volume-/Pan-/Pitch-/Filter-Envelopes,
+  Fadeout und Instrumentlautstärke sind intern angebunden. Die einzelne
+  Vordergrundstimme nutzt den globalen Sample-Pool, Transposition, leere
+  Map-Slots, Sustain-Bereiche, Release, Carry sowie getrennte Off-/Cut-/Fade-
+  Semantik; XM bleibt unverändert. `savage-cli --info` analysiert IT intern,
+  normales IT-Rendering und öffentliche Dateizuordnungen bleiben bis M10
+  gesperrt. Zwei OpenMPT-NNA=Cut-Dateien, 162 Gesamttests, beide Audio-
+  Regressionen, JS-Parität und signierter App-Build sind grün.
 
 ## Fallen / Agent-Hinweise
 
