@@ -154,9 +154,14 @@ class ReferenceCompareTests(unittest.TestCase):
         self.assertLessEqual(inside["max_error_ms"], 50.0)
         self.assertEqual(outside["matches"], 0)
 
-    def test_it_is_rejected_before_any_subprocess(self) -> None:
+    def test_it_is_accepted_after_public_integration(self) -> None:
         module = self.directory / "fixture.it"
         module.write_bytes(b"IMPM")
+        self.assertEqual(reference_compare.validate_modules([module]), [module.resolve()])
+
+    def test_unknown_format_is_rejected_before_any_subprocess(self) -> None:
+        module = self.directory / "fixture.unknown"
+        module.write_bytes(b"synthetic-module")
         with mock.patch.object(reference_compare.subprocess, "run") as run:
             with self.assertRaises(reference_compare.ComparisonError):
                 reference_compare.run_comparison([module], self.directory / "out")

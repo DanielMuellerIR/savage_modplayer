@@ -36,15 +36,17 @@ final class PlaylistScannerTests: XCTestCase {
         _ = try makeFile("root.mod")
         _ = try makeFile("Chiptunes/tune.mod")
         _ = try makeFile("Chiptunes/Deep/nested.s3m")
+        _ = try makeFile("Chiptunes/Deep/impulse.it")
         _ = try makeFile("Chiptunes/notes.txt") // kein Mod — muss ignoriert werden
 
         let entries = PlaylistScanner.collectEntries(from: [workDir], tempDir: tempDir)
 
-        XCTAssertEqual(entries.count, 3)
+        XCTAssertEqual(entries.count, 4)
         let byName = Dictionary(uniqueKeysWithValues: entries.map { ($0.displayName, $0.folderPath) })
         XCTAssertEqual(byName["root.mod"], [])
         XCTAssertEqual(byName["tune.mod"], ["Chiptunes"])
         XCTAssertEqual(byName["nested.s3m"], ["Chiptunes", "Deep"])
+        XCTAssertEqual(byName["impulse.it"], ["Chiptunes", "Deep"])
         // Kopien liegen im Temp-Ziel, nicht im Quellordner.
         for entry in entries {
             XCTAssertTrue(entry.url.path.hasPrefix(tempDir.path))

@@ -2,7 +2,7 @@ import Foundation
 import SavageModPlayerCore
 
 // Kopflose Kommandozeilen-Schnittstelle zum Core: lädt ein Tracker-Modul (MOD/
-// S3M/XM), rendert es mit DERSELBEN DSP-Engine wie die App zu einer WAV-Datei
+// S3M/XM/IT), rendert es mit DERSELBEN DSP-Engine wie die App zu einer WAV-Datei
 // und/oder gibt die geparste Struktur als Text aus. Zweck: XM-/DSP-Korrektheit
 // headless prüfen (A/B gegen Referenz-Renderer wie openmpt123), ohne die GUI
 // bedienen zu müssen. Gleichzeitig das Fundament des geplanten Linux-CLI-Ports.
@@ -52,7 +52,7 @@ func parseArgs(_ argv: [String]) -> Options {
 
 func printUsageAndExit() -> Never {
     FileHandle.standardError.write(Data("""
-    savage-cli — headless Tracker-Modul-Renderer (MOD/S3M/XM)
+    savage-cli — headless Tracker-Modul-Renderer (MOD/S3M/XM/IT)
 
     savage-cli <datei> [optionen]
       -o, --out <pfad>     WAV-Ausgabepfad (Standard: <datei>.wav)
@@ -258,13 +258,7 @@ guard let data = try? Data(contentsOf: inputURL) else {
 
 let mod: Mod
 do {
-    // Bis M10 bleibt IT aus Loader/App/Quick Look heraus. M6 darf die Struktur
-    // jedoch explizit per --info/--pattern untersuchen, ohne Wiedergabe zu bewerben.
-    if (opts.infoOnly || opts.dumpPattern != nil), ITParser.canParse(data: data) {
-        mod = try ITParser.parse(data: data)
-    } else {
-        mod = try ModuleLoader.parse(data: data)
-    }
+    mod = try ModuleLoader.parse(data: data)
 } catch {
     FileHandle.standardError.write(Data("Parse-Fehler: \(error.localizedDescription)\n".utf8))
     exit(1)

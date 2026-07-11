@@ -29,7 +29,7 @@ OPENMPT_VERSION_MARKERS = (
     "openmpt123 v0.8.7",
     "libopenmpt 0.8.7+r25325.pkg",
 )
-SUPPORTED_EXTENSIONS = {".mod", ".s3m", ".xm"}
+SUPPORTED_EXTENSIONS = {".mod", ".s3m", ".xm", ".it"}
 SCHEMA = "savage-reference-report/v1"
 
 

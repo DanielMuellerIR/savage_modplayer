@@ -85,6 +85,12 @@ final class ITParserTests: XCTestCase {
         XCTAssertTrue(module.compatibilityWarnings.contains { $0.contains("MPTM-/IT-Erweiterungen") })
     }
 
+    func testModuleLoaderDispatchesITByContent() throws {
+        let module = try ModuleLoader.parse(data: makeIT(patterns: [nil]))
+        XCTAssertEqual(module.format, .it)
+        XCTAssertEqual(module.name, "Synthetic IT")
+    }
+
     func testAllDirectMaskBitsAndEveryReuseCombination() throws {
         var rows = [[UInt8]]()
         // Direkte Bits 1/2/4/8 setzen alle Last-Values; A00 bleibt explizit präsent.

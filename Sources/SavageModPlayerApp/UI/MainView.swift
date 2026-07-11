@@ -88,6 +88,7 @@ struct MainView: View {
     @State private var showFileImporter = false
     @State private var dragOver = false
     @State private var errorMessage: String? = nil
+    @State private var compatibilityMessage: String? = nil
     // Wurde beim Start bereits Inhalt über ein Startargument oder „Öffnen mit"
     // (.onOpenURL) geladen? Dann NICHT zusätzlich den Autoplay-Ordner laden —
     // sonst überschrieb/übertönte der Default-Ordner den bewusst geöffneten
@@ -214,6 +215,23 @@ struct MainView: View {
                     headerView
                         .padding()
                         .background(theme == .workbench ? Color.lightSurface : Color.spaceSurface.opacity(0.4))
+
+                    // Nicht-fatale Formatwarnungen bleiben auch bei laufender
+                    // Wiedergabe sichtbar. Im Drop-Bereich verschwanden sie direkt
+                    // nach erfolgreichem Laden zusammen mit der leeren Ansicht.
+                    if let compatibilityMessage {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                            Text(compatibilityMessage)
+                                .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
+                            Spacer()
+                        }
+                        .font(.system(size: 11))
+                        .padding(.horizontal)
+                        .padding(.vertical, 6)
+                        .background(Color.orange.opacity(theme == .workbench ? 0.12 : 0.08))
+                    }
                     
                     Divider()
                         .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.2))
@@ -289,7 +307,7 @@ struct MainView: View {
             .font(theme == .workbench ? .system(.body) : .body)
             .fileImporter(
                 isPresented: $showFileImporter,
-                allowedContentTypes: [.data, UTType(filenameExtension: "mod"), UTType(filenameExtension: "s3m"), UTType(filenameExtension: "xm")].compactMap { $0 },
+                allowedContentTypes: [.data, UTType(filenameExtension: "mod"), UTType(filenameExtension: "s3m"), UTType(filenameExtension: "xm"), UTType(filenameExtension: "it")].compactMap { $0 },
                 allowsMultipleSelection: true
             ) { result in
                 switch result {
@@ -329,7 +347,7 @@ struct MainView: View {
                 }
                 return true
             }
-            // Finder „Öffnen mit" / Doppelklick auf eine .mod/.s3m/.xm: die App
+            // Finder „Öffnen mit" / Doppelklick auf eine .mod/.s3m/.xm/.it: die App
             // erhält die URL hierüber (nicht als argv) — direkt laden und abspielen.
             .onOpenURL { url in
                 // „Öffnen mit" / Dock-Drop / Doppelklick: bewusst geöffneten Titel
@@ -521,6 +539,7 @@ struct MainView: View {
     // rufen mit dem Default false auf und laden nur, ohne loszuspielen.
     private func handleDroppedURLs(_ urls: [URL], autoPlay: Bool = false) {
         self.errorMessage = nil
+        self.compatibilityMessage = nil
         // Dateisystem-Traversal + Kopieren laufen im Hintergrund — ein grosser
         // Ordner-Drop blockierte sonst den Main-Thread (Beachball). Nur die
         // @State-Mutation und das Laden der ersten Datei kehren auf den Main-Thread
@@ -534,7 +553,7 @@ struct MainView: View {
             let flat = PlaylistScanner.flattenedFiles(tree)
             DispatchQueue.main.async {
                 guard !flat.isEmpty else {
-                    self.errorMessage = "Keine passenden .mod/.s3m Dateien gefunden."
+                    self.errorMessage = "Keine unterstützten Tracker-Dateien gefunden."
                     return
                 }
                 let sorted = flat.map(\.url)
@@ -633,17 +652,21 @@ struct MainView: View {
     @discardableResult
     private func loadModFile(from url: URL) -> Bool {
         self.errorMessage = nil
+        self.compatibilityMessage = nil
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
         
         do {
             let fileData = try Data(contentsOf: url)
-            // ModuleLoader erkennt das Format am Inhalt (MOD-Varianten, S3M).
+            // ModuleLoader erkennt das Format am Inhalt (MOD, S3M, XM und IT).
             let mod = try ModuleLoader.parse(data: fileData)
             // Dateiname (ohne UUID-Praefix der Temp-Kopie und ohne Endung) als
             // Fallback-Titel, falls das Modul kein Titelfeld gesetzt hat.
             let fallbackName = (cleanFilename(url) as NSString).deletingPathExtension
             coordinator.setMod(mod, fallbackName: fallbackName)
+            if !mod.compatibilityWarnings.isEmpty {
+                self.compatibilityMessage = mod.compatibilityWarnings.joined(separator: "\n")
+            }
             // Stabilen Namen fuer "zuletzt gespielt" merken (ueberlebt Neustart).
             self.lastPlayedSongName = cleanFilename(url)
             // "ZULETZT GESPIELT"-Liste hier zentral pflegen, damit JEDER Ladepfad
@@ -1242,6 +1265,7 @@ struct MainView: View {
         switch coordinator.activeMod?.format {
         case .s3m: return "S3M"
         case .xm: return "FASTTRACKER II"
+        case .it: return "IMPULSE TRACKER"
         case .multichannel: return "MULTICHANNEL"
         case .soundtracker: return "SOUNDTRACKER"
         default: return "PROTRACKER"
@@ -1569,7 +1593,6 @@ struct MainView: View {
                 .font(.system(size: 11))
                 .padding(.top, 4)
             }
-            
             Spacer()
         }
         .background(theme == .workbench ? Color.lightSurfaceAlt : Color.clear)

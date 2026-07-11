@@ -6,7 +6,7 @@ Diese Datei ist die zentrale Projektdokumentation. Sie beschreibt die Architektu
 
 ## Typ & Zweck
 - **Typ:** GUI-App
-- **Zweck:** Nativer Amiga/Tracker-Modul-Player (ProTracker/S3M) mit SwiftUI, AVAudioEngine und Quick-Look-Plugin; plus HTML5-Variante.
+- **Zweck:** Nativer Amiga/Tracker-Modul-Player (MOD/S3M/XM/IT) mit SwiftUI, AVAudioEngine und Quick-Look-Plugin; plus HTML5-Variante.
 - **Plattform:** macOS-GUI, iOS
 
 ## Datei-Verzeichnis
@@ -29,7 +29,7 @@ Der **Savage Mod Player** ist ein plattformübergreifender Amiga-/Tracker-Modul-
 1. **HTML5-Variante**: Ein kompakter (unter 40 KB minifizierter) Single-File-Browser-Player (`savage-mod-player.html`), der ohne Webserver direkt aus dem Dateisystem per Doppelklick gestartet werden kann. Bewusst auf klassische 4-Kanal-ProTracker-MODs beschränkt (Kompaktheit).
 2. **Swift-Variante**: Eine native, hochperformante macOS- & iOS-Anwendung (`Savage Mod Player.app`), implementiert in SwiftUI und `AVAudioEngine`/`AVAudioSourceNode` für eine ressourcenschonende und latenzfreie Wiedergabe.
 
-### Unterstützte Formate (Stand 1.3.0)
+### Unterstützte Formate (Stand 1.5.24)
 
 | Format | HTML5 | Swift + Quick Look |
 |---|---|---|
@@ -38,14 +38,15 @@ Der **Savage Mod Player** ist ein plattformübergreifender Amiga-/Tracker-Modul-
 | Ur-Soundtracker (15 Instrumente, ohne Signatur, per Struktur-Heuristik) | ❌ | ✅ |
 | ScreamTracker 3 (S3M, bis 32 PCM-Kanäle) | ❌ | ✅ |
 | FastTracker II (XM, Multi-Sample-Instrumente, Hüllkurven) | ❌ | ✅ |
+| Impulse Tracker 2.14/2.15 (IT, Sample-/Instrument-Modus, bis 64 Pattern-Kanäle und 256 Voices) | ❌ | ✅ |
 
-Format-Dispatch am Dateiinhalt: `ModuleLoader.parse(data:)` (`"Extended Module: "` → `XMParser`, SCRM-Header → `S3MParser`, sonst `ModParser`).
+Format-Dispatch am Dateiinhalt: `ModuleLoader.parse(data:)` (`"Extended Module: "` → `XMParser`, `IMPM` → `ITParser`, SCRM-Header → `S3MParser`, sonst `ModParser`).
 
 **S3M — bewusste Vereinfachungen** (nur exotische Module betroffen): AdLib-Instrumente stumm, Stereo-Samples nur linker Kanal, 16-Bit-Samples auf 8 Bit reduziert (High-Byte), Qxy ohne Volume-Modifier, kein Tempo-Slide (Txx mit x<2), keine ST3.00-„Fast Volume Slides".
 
 ### Quick-Look-Plugin
 
-`quicklook/PreviewProvider.swift` + Appex-Bau in `build_app.sh` (swiftc kompiliert Core-Quellen + Provider zu EINEM Modul, Linker-Entry `_NSExtensionMain`; SwiftPM kann keine .appex bauen). Datenbasierte Preview (`QLIsDataBasedPreview`): Modul wird via `ModuleRenderer.renderWavData` offline zu WAV gerendert, Quick Look zeigt den nativen macOS-Audio-Player (Play/Scrubbing im Finder per Leertaste). Der Appex MUSS sandboxed signiert werden (Entitlements in `quicklook/`, Signier-Reihenfolge: erst Appex MIT Entitlements, dann App OHNE `--deep`). Die App-Info.plist deklariert UTIs für .mod/.s3m; zusätzlich claimt der Appex `org.videolan.mod`/`org.videolan.s3m`, weil VLCs exportierte UTIs sonst gewinnen.
+`quicklook/PreviewProvider.swift` + Appex-Bau in `build_app.sh` (swiftc kompiliert Core-Quellen + Provider zu EINEM Modul, Linker-Entry `_NSExtensionMain`; SwiftPM kann keine .appex bauen). Datenbasierte Preview (`QLIsDataBasedPreview`): Modul wird via `ModuleRenderer.renderWavData` offline zu WAV gerendert, Quick Look zeigt den nativen macOS-Audio-Player (Play/Scrubbing im Finder per Leertaste). Der Appex MUSS sandboxed signiert werden (Entitlements in `quicklook/`, Signier-Reihenfolge: erst Appex MIT Entitlements, dann App OHNE `--deep`). Die App-Info.plist deklariert UTIs für `.mod`, `.s3m`, `.xm` und `.it`; zusätzlich claimt der Appex die verifizierten VLC-UTIs einschließlich `org.videolan.it`, damit bereits exportierte Fremd-UTIs die Zuordnung nicht verhindern.
 
 ---
 
@@ -98,8 +99,8 @@ p_savage_modplayer/
 - **UI (`src/`)**: Vanilla JS und CSS, orientiert am Amiga-Workbench-1.3-Look und einem modernen "Cyber Charcoal"-Farbschema.
 
 ### 2. Swift-Variante
-- **Parser (`SavageModPlayerCore/Parser/`)**: Reines Swift, parst `.mod`-Varianten (`ModParser`) und `.s3m` (`S3MParser`) in typsichere Werttypen (`struct`); Einstieg ist `ModuleLoader`. S3M-Noten liegen als Halbton-Keys (`Note.key`) vor, S3M-Effekte werden auf ProTracker-IDs bzw. `ModuleEffect.*`-IDs (>= 0x100) übersetzt.
-- **DSP / Synthesizer (`SavageModPlayerCore/DSP/`)**: Verwendet `AVAudioSourceNode` innerhalb von `AVAudioEngine`. Läuft direkt auf dem Core Audio Echtzeit-Thread. Kanalzahl dynamisch (bis 32, vorallozierte Puffer); Frequenzmodell pro Modul: Amiga-Paula-Perioden (MOD) oder ST3-Perioden mit C2Spd + 14,3-MHz-Clock (`DSPChannel.s3mMode`).
+- **Parser (`SavageModPlayerCore/Parser/`)**: Reines Swift, parst `.mod`, `.s3m`, `.xm` und `.it` in typsichere Werttypen (`struct`); Einstieg ist `ModuleLoader`. IT besitzt einen eigenen strikten `ITParser` für Header, Patterns, Instrumente sowie unkomprimierte und IT214-/IT215-komprimierte Samples.
+- **DSP / Synthesizer (`SavageModPlayerCore/DSP/`)**: Verwendet `AVAudioSourceNode` innerhalb von `AVAudioEngine`. Läuft direkt auf dem Core Audio Echtzeit-Thread. Kanalzahl dynamisch (bis 64 logische IT-Kanäle, vorallozierte Puffer); IT-Instrument-Mode trennt Pattern-Kanäle von einem festen 256er-Voice-Pool. Die Frequenz-, Effekt- und Kompatibilitätssemantik wird pro Modulformat gewählt.
   - *Wichtig*: Keine Heap-Alloziierungen, Sperren oder dynamische Objective-C-Aufrufe im Render-Block!
 - **Offline-Renderer (`ModuleRenderer`)**: rendert Module mit demselben Render-Block zu WAV-Daten (Quick Look, Tests).
 - **UI (`SavageModPlayerApp/UI/`)**: Deklaratives SwiftUI. Enthält zentrierende Tracker-Zeilen-Tabellen (dynamische Spaltenzahl, horizontales Scrollen ab 5 Kanälen), Visualizer und CRT-Effekt-Filter.
@@ -144,9 +145,10 @@ p_savage_modplayer/
 - **JS↔Swift-Parität (headless)**: `node Tests/js/worklet-timing.mjs` — prüft, dass die Browser-Worklet-DSP dieselben Tick-/Amplituden-/Offset-Werte liefert wie `DSPChannel.swift`. Nach jeder DSP-Änderung in EINER Variante beide angleichen (siehe Synchronisierungsregel oben). Die Parität gilt für den gemeinsamen 4-Kanal-MOD-Kern; Multichannel/S3M sind Swift-only.
 - **Multiformat**: `swift test --filter MultiFormatTests` — Multichannel-MOD (6CHN/8CHN/xxCH/FLT8), Soundtracker-15-Heuristik, S3M-Parsing (synthetisch + echte Dateien aus `audio/`), S3M-DSP (Perioden, Slides mit Memory, Tremor, Fine-Porta) und WAV-Offline-Render (RIFF-Validität, Nicht-Stille).
 - **XM**: `swift test --filter XMParserTests` — Header/Pattern-Entpacker (gepackt + leer), Delta-Dekodierung 8/16-Bit, Keymap/Envelopes/Auto-Vibrato/Fadeout, Effekt-/Volume-Column-Übersetzung, Garbage-Ablehnung; plus Realwelt-Test über alle `.xm` aus `audio/`. XM-DSP (lineare Frequenz, Key-Off, Fadeout, Envelope-Interpolation, Volume-Column) in `DSPChannelTimingTests`.
+- **Impulse Tracker**: `swift test --filter IT` — Header/Pattern-/Instrument-/Sampleparser, IT214/IT215, Sample- und Instrument-Wiedergabe, 256er-Voice-Pool, NNA/DCT/DCA, Effekte, Filter und vollständige Klassifikation des lokalen `.it`-Korpus. Planunterstützte Dateien müssen hörbar rendern; Pattern mit weniger als 32 Reihen bleiben als bekannte Grenze klassifiziert.
 - **Länge-1-Modul**: `swift test --filter LengthOneModuleTests` — `SongPositionScale` liefert für jede Songlänge (0/1/2/…) einen nicht-leeren Slider-Bereich (Länge 1 = 0…1, nicht das crashende 0…0); Länge-1-Modul parst/rendert/seekt ohne Crash. Hardware-frei.
 - **Native App-Build**: Nach jedem Swift-Fix zusätzlich `./build_app.sh` ausführen, nicht nur `swift build` (baut auch die Quick-Look-Extension).
-- **Quick Look (manuell)**: Nach App-Build/-Installation im Finder Leertaste auf einer `.mod`/`.s3m` — Audio-Player-Preview muss erscheinen und abspielen. Headless nur teilverifizierbar (Appex-Registrierung via `pluginkit -m -p com.apple.quicklook.preview`).
+- **Quick Look (manuell)**: Nach App-Build/-Installation im Finder Leertaste auf einer `.mod`/`.s3m`/`.xm`/`.it` — Audio-Player-Preview muss erscheinen und abspielen. Headless nur teilverifizierbar (Appex-Registrierung via `pluginkit -m -p com.apple.quicklook.preview`).
 
 - [x] **Todo 24**: GitHub-Auftritt mit README-Icon und Social-Preview-Bild aus dem App-Icon aufwerten
 
@@ -167,7 +169,7 @@ Swift-Variante um weitere Tracker-Formate + Quick-Look-Plugin erweitert (Details
 - **Parser**: Multichannel-MOD (xCHN/xxCH/CD81/OKTA, FLT8 als Pattern-Paare), Ur-Soundtracker-15-Heuristik (strenge Struktur-Checks gegen False-Positives; Repeat-Offset dort in Bytes statt Words), neuer `S3MParser` (Order-Filterung 254/255 mit Bxx-Remap, gepackte Patterns, unsigned→signed Samples).
 - **Engine**: Kanäle dynamisch bis 32 (Puffer vorher fix 4), ST3-Periodenmodell pro Kanal konfigurierbar, S3M-Effekte (geteiltes Effekt-Memory D/E/F/I, Fine-/Extra-Fine-Porta, Tremor, Fine-Vibrato, Global Volume, Set Speed/Tempo als eigene interne IDs), Mix-Gain 4/N ab 5 Kanälen, Initial-Tempo/-Speed/-GlobalVolume aus dem Modul-Header.
 - **Erledigt damit**: das frühere Deferred-Item „echte Multichannel-Unterstützung (6/8 Kanäle)".
-- **Offen/optional**: XM/IT bewusst NICHT geplant (eigene Instrument-Engine nötig).
+- **Historischer Stand**: XM/IT waren in diesem Ausbau noch nicht geplant; beide Formate wurden später mit eigener Instrument- beziehungsweise Voice-Engine umgesetzt.
 
 ## Fix-Runde 2026-07-02 (Release 1.3.1)
 
@@ -552,6 +554,15 @@ Wichtige Leitplanken:
   praktisch 1,0. 196 Swift-Tests, Release-Voice-Stress, JS-Parität und der
   signierte App-/Quick-Look-Build sind grün; öffentliche `.it`-Integration folgt
   ausschließlich in M10.
+- **M10-Abschluss (Version 1.5.24):** IT ist über Inhalts-Dispatch, CLI,
+  PlaylistScanner, Dateiimport, Drag & Drop, Startargumente, Tracker-Grid,
+  Kompatibilitätswarnungen, App-UTI und Quick Look öffentlich integriert. Das
+  Referenz-Harness akzeptiert `.it`; der lokale Korpus klassifiziert alle 33
+  Dateien und weist die planmäßige 32-Row-Untergrenze ausdrücklich aus.
+  198 Swift-Tests, beide Audio-Regressionen, Release-Voice-Stress, 15 Python-
+  Harness-Tests, JS-Parität, signierter App-/Quick-Look-Build sowie die sichtbare
+  Finder-Leertasten-Wiedergabe von `CarryNNA.it` sind grün. M0 bis M10 sind damit
+  vollständig abgeschlossen.
 
 ## Fallen / Agent-Hinweise
 

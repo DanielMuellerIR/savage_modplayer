@@ -1,27 +1,25 @@
-The macOS app now plays **FastTracker II modules (`.xm`)** — the fourth supported tracker format after ProTracker MOD, Soundtracker, and ScreamTracker 3. Alongside the new format, playback CPU usage was roughly halved and a number of playback and UI issues were fixed.
+The macOS app now plays **Impulse Tracker modules (`.it`)** in sample and instrument mode. The new engine covers native IT 2.14/2.15 playback from parsing through real-time audio, CLI rendering, drag & drop, and Quick Look.
 
 ## Added
 
-- **FastTracker II (`.xm`) support**: a dedicated XM engine with multi-sample instruments and keymaps, volume/panning envelopes (sustain and loop), key-off with volume fadeout, auto-vibrato, ping-pong sample loops, the linear frequency table, and the XM effect set including the volume column and per-channel effect memory. Playback was verified A/B against libopenmpt with real 8–32 channel modules.
-- **Quick Look, drag & drop, and file dialog** accept `.xm` everywhere `.mod`/`.s3m` already worked; pressing the space bar on an `.xm` file in Finder shows the playable audio preview.
-- **Row-accurate seeking**: −10 s/+10 s transport buttons, −15 s/+30 s buttons next to the position slider, and clicking a row in the pattern grid jumps straight to it.
-- **Command-line playback**: `SavageModPlayer <song.xm|folder>` (or Finder's "Open with") loads and plays immediately — handy for scripts and automated checks.
+- **Impulse Tracker (`.it`) support**: up to 64 logical channels, a preallocated 256-voice NNA pool, NNA/DCT/DCA, 120-note sample maps, envelopes, fadeout, sustain loops, stereo samples, surround, sample vibrato, pitch-pan, volume/pan swing, and resonant per-voice filters.
+- **IT 2.14/2.15 samples**: uncompressed and compressed 8-/16-bit mono or stereo PCM, signed/unsigned and delta variants, forward and ping-pong loops, and separate sustain loops.
+- **IT effect semantics**: effect and volume-column memory, `Old Effects`, `Compatible Gxx`, pattern/row delays and loops, tempo/global/channel volume, retrigger, tremor, vibrato, panbrello, and common filter macros.
+- **Public integration**: `.it` works in the loader, playlist scanner, file dialog, drag & drop, Finder “Open with”, `savage-cli`, and the bundled Quick Look extension. The app shows an Impulse Tracker format badge and renders all pattern rows and up to 64 channels.
+- **Compatibility reporting**: unsupported MIDI/plugin routing, limited custom MIDI macros, newer tracker versions, and unknown MPTM/IT extensions produce visible non-fatal warnings.
 
-## Improved
+## Verification
 
-- **Playback CPU usage roughly halved** (e.g. a 32-channel XM dropped from 127 % to 63 %, a 4-channel MOD from 65 % to 37 %): the pattern grid and the per-channel scopes each render as a single canvas, and UI state was split so timers no longer re-render the whole window.
-- **Single-window behavior**: opening files no longer spawns a second window.
-- **Playlist readability**: proportional font and draggable sidebar splitters.
+- The full Swift suite, dedicated filter/NNA/stereo fixtures, a 64-channel/256-voice release stress test, JS↔Swift MOD parity, the signed app build, and the Quick Look extension pass.
+- Playback was compared against the pinned `openmpt123`/libopenmpt reference and, for filter and compatibility details, the OpenMPT and Schism Tracker source implementations.
 
-## Fixed
+## Known limitations
 
-- Dropping a file onto the player failed to open it when the path contained special characters (URL decoding).
-- Seeking could leave notes hanging; channels are now muted across the jump.
-- Time and position display drifted on modules with variable pattern lengths.
-- Unmuting a channel restores its last audible volume instead of full volume.
-- Modules with a single song position crashed the position slider.
+- MPTM, proprietary OpenMPT extensions, VST/plugin playback, and external MIDI output are not supported.
+- Embedded MIDI macros are limited to common cutoff/resonance filter macros.
+- Pattern lengths from 32 through 200 rows are supported; shorter or longer extension patterns are rejected with a parser error.
+- The HTML5 player remains intentionally limited to classic 4-channel ProTracker MOD files.
 
 ## Notes
 
-- The DMG is signed and notarized and contains the app including the Quick Look plugin; no module files are bundled.
-- Known limitation: the rare XM modules using Amiga frequency mode are approximated with the linear frequency table for now.
+- The DMG is signed and notarized and includes the app and Quick Look extension; no module files are bundled.

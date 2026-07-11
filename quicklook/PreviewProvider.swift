@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 // QLIsDataBasedPreview = true in der Info.plist des Appex).
 //
 // Funktionsweise: Die Extension parst das Tracker-Modul (alle MOD-Varianten
-// + S3M über ModuleLoader) und rendert es mit der identischen DSP-Engine des
+// + S3M/XM/IT über ModuleLoader) und rendert es mit der identischen DSP-Engine des
 // Players offline zu WAV-Daten. Quick Look zeigt für die gelieferten
 // WAV-Daten den nativen macOS-Audio-Player — damit ist das Modul direkt im
 // Finder (Leertaste) abspielbar, inklusive Scrubbing und Lautstärke.

@@ -86,6 +86,7 @@ cat <<EOF > "$QL_APPEX/Contents/Info.plist"
                 <string>com.viben.savage-modplayer.mod</string>
                 <string>com.viben.savage-modplayer.s3m</string>
                 <string>com.viben.savage-modplayer.xm</string>
+                <string>com.viben.savage-modplayer.it</string>
                 <!-- Ist VLC (o.ae.) installiert, gewinnen dessen EXPORTIERTE
                      UTIs gegen unsere importierten — .mod ist dann
                      org.videolan.mod. Diese UTIs zusaetzlich claimen, damit
@@ -93,6 +94,9 @@ cat <<EOF > "$QL_APPEX/Contents/Info.plist"
                 <string>org.videolan.mod</string>
                 <string>org.videolan.s3m</string>
                 <string>org.videolan.xm</string>
+                <!-- Auf dem Testsystem per mdls als tatsaechlicher VLC-UTI
+                     fuer .it verifiziert (2026-07-11). -->
+                <string>org.videolan.it</string>
             </array>
         </dict>
         <key>NSExtensionPointIdentifier</key>
@@ -162,10 +166,11 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
                 <string>com.viben.savage-modplayer.mod</string>
                 <string>com.viben.savage-modplayer.s3m</string>
                 <string>com.viben.savage-modplayer.xm</string>
+                <string>com.viben.savage-modplayer.it</string>
             </array>
         </dict>
     </array>
-    <!-- UTI-Deklarationen fuer .mod/.s3m: LaunchServices braucht sie, damit
+    <!-- UTI-Deklarationen fuer Tracker-Dateien: LaunchServices braucht sie, damit
          die Quick-Look-Extension (QLSupportedContentTypes) den Dateitypen
          zugeordnet werden kann. -->
     <key>UTImportedTypeDeclarations</key>
@@ -218,6 +223,23 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
                 <key>public.filename-extension</key>
                 <array>
                     <string>xm</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.viben.savage-modplayer.it</string>
+            <key>UTTypeDescription</key>
+            <string>Impulse Tracker Module</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>it</string>
                 </array>
             </dict>
         </dict>

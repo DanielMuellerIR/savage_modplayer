@@ -53,9 +53,8 @@ final class ModuleModelsTests: XCTestCase {
         }
     }
 
-    func testLoaderExtensionsRemainUnchangedUntilITParserIntegration() {
-        XCTAssertEqual(ModuleLoader.supportedExtensions, Set(["mod", "s3m", "xm"]))
-        XCTAssertFalse(ModuleLoader.supportedExtensions.contains("it"))
+    func testLoaderExtensionsIncludeAllPublicNativeFormats() {
+        XCTAssertEqual(ModuleLoader.supportedExtensions, Set(["mod", "s3m", "xm", "it"]))
     }
 
     func testSpecialNoteSentinelsAreDistinctAndOutsideRegularKeys() {

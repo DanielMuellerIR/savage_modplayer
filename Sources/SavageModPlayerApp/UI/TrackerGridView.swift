@@ -22,8 +22,9 @@ struct RowIndexCell: View {
     }
 }
 
-// Zeichnet ALLE Kanalzellen (bis zu 64 × 32) in EINEM Canvas statt als 2048
-// SwiftUI-Views. Der Canvas wird nur bei Pattern-/Layout-Wechsel neu gezeichnet
+// Zeichnet ALLE Kanalzellen (bis zu 200 × 64 bei IT) in EINEM Canvas statt als
+// tausende einzelne SwiftUI-Views.
+// Der Canvas wird nur bei Pattern-/Layout-Wechsel neu gezeichnet
 // (Equatable ohne currentRow) — beim Scrollen/Zeilenwechsel wird er nur verschoben
 // (CoreAnimation), NICHT neu gelayoutet. Das ersetzt den mit Abstand teuersten
 // Posten: die 2048-Zellen-ScrollView-Layout-Rekursion pro Zeilenwechsel (2026-07-09,
@@ -96,6 +97,7 @@ struct ChannelCellsCanvas: View, Equatable {
     private static func noteName(_ note: Note) -> String {
         if note.key == Note.keyCut { return "^^^" }   // S3M Note-Cut
         if note.key == Note.keyOff { return "===" }   // XM Key-Off (Note 97) korrekt zeigen
+        if note.key == Note.keyFade { return "~~~" }  // IT Note Fade
         if note.key >= 0 { return "\(noteNames[note.key % 12])\(note.key / 12)" }
         // MOD: aus der Amiga-Periode.
         guard note.period >= 113 && note.period <= 856 else { return "---" }
@@ -106,6 +108,11 @@ struct ChannelCellsCanvas: View, Equatable {
 
     private static func effString(_ n: Note) -> String {
         guard n.hasEffect else { return "..." }
+        if n.effectId > ModuleEffect.impulseTrackerCommandBase,
+           n.effectId <= ModuleEffect.impulseTrackerCommandBase + 26 {
+            let scalar = UnicodeScalar(64 + n.effectId - ModuleEffect.impulseTrackerCommandBase)!
+            return String(format: "%@%02X", String(Character(scalar)), n.effectData)
+        }
         if n.effectId >= 0x100 {
             let letter: String
             switch n.effectId {
@@ -218,7 +225,7 @@ struct TrackerGridView: View {
     @State private var hScrollOffset: CGFloat = 0
 
     private var channelCount: Int { pattern.rows.first?.notes.count ?? 4 }
-    private var rowCount: Int { min(64, pattern.rows.count) }
+    private var rowCount: Int { pattern.rows.count }
 
     // Eigene horizontale Scrollbar: duenn, dezent, nur wenn Inhalt breiter als View.
     @ViewBuilder
