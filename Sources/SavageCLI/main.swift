@@ -146,6 +146,10 @@ func printITInfo(_ mod: Mod) {
             print("IT-Flags:         oldFx=\(compatibility.oldEffects) compatGxx=\(compatibility.compatibleGxx)")
         }
     }
+    if !mod.compatibilityWarnings.isEmpty {
+        print("Einschränkungen:")
+        for warning in mod.compatibilityWarnings { print("  WARNUNG: \(warning)") }
+    }
 
     let instruments = mod.instruments.compactMap { $0 }
     print("Instrumente:     \(instruments.count)")
@@ -167,6 +171,9 @@ func printITInfo(_ mod: Mod) {
             let cutoff = properties.initialFilterCutoff.map(String.init) ?? "-"
             let resonance = properties.initialFilterResonance.map(String.init) ?? "-"
             print("      swing vol/pan=\(properties.randomVolumeVariation)/\(properties.randomPanningVariation) filter=\(cutoff)/\(resonance)")
+            if properties.midiChannel > 0 {
+                print("      MIDI-Kanal/Programm/Bank=\(properties.midiChannel)/\(properties.midiProgram)/\(properties.midiBank) (nicht wiedergegeben)")
+            }
         } else {
             print(String(format: "  #%02d '%@' fade=%d", instrument.index, instrument.name, instrument.fadeout))
         }

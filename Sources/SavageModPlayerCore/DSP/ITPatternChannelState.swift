@@ -18,6 +18,7 @@ public final class ITPatternChannelState: Sendable {
     nonisolated(unsafe) public var panbrelloWaveform: Int = 0
     nonisolated(unsafe) public var glissandoEnabled: Bool = false
     nonisolated(unsafe) public var highOffset: Int = 0
+    nonisolated(unsafe) public var activeFilterMacro: Int = 0
     nonisolated(unsafe) public var patternLoopStartRow: Int = 0
     nonisolated(unsafe) public var patternLoopCount: Int = -1
 

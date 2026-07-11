@@ -92,6 +92,16 @@ public final class DSPChannel: Sendable {
     // Auslenkung bleibt so viele Ticks stehen, wie Yxys Geschwindigkeit vorgibt.
     nonisolated(unsafe) private var panbrelloRandomMemory: Float = 0
     nonisolated(unsafe) private var itRandomState: UInt32 = 0x6D2B_79F5
+    // IT-Instrumentvariation und Pitch-Pan werden beim Note-Trigger einmalig
+    // berechnet und bleiben danach Bestandteil der physischen Voice.
+    nonisolated(unsafe) public var itInstrumentVolumeWithSwing: Int = 128
+    nonisolated(unsafe) public var itPanningSwing: Float = 0
+    nonisolated(unsafe) public var itPitchPanOffset: Float = 0
+    // Surround ist eine Voice-Eigenschaft: Eine per NNA abgelöste Stimme darf
+    // nicht nachträglich den Surround-Zustand des Vordergrundkanals übernehmen.
+    nonisolated(unsafe) public var itSurround: Bool = false
+    nonisolated(unsafe) private var itPendingSourceKey: Int = -1
+    nonisolated(unsafe) private var itPendingRetriggering: Bool = false
     
     // Custom Panning (0..1.0, 0.5 = Center)
     nonisolated(unsafe) public var panning: Float = 0.5
@@ -181,6 +191,24 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var autoVibSweepStep: Int = 0
     // Ping-Pong-Sample-Richtung: +1 vorwärts, -1 rückwärts.
     nonisolated(unsafe) public var sampleDirection: Double = 1.0
+    // IT-Sample-Vibrato besitzt einen 8.8-Tiefenakkumulator und eine eigene
+    // 256er Phase; beides ist von Instrument-Autovibrato getrennt.
+    nonisolated(unsafe) public var itSampleVibratoPosition: Int = 0
+    nonisolated(unsafe) public var itSampleVibratoDepth: Int = 0
+
+    // Zweipoliger resonanter IT-Tiefpass. Koeffizienten und Historien liegen
+    // pro Voice fest vor, auch für Stereo-Samples und NNA-Hintergrundstimmen.
+    nonisolated(unsafe) public var itFilterCutoff: Int = 127
+    nonisolated(unsafe) public var itFilterResonance: Int = 0
+    nonisolated(unsafe) public var itFilterActive: Bool = false
+    nonisolated(unsafe) public var itFilterA0: Float = 1
+    nonisolated(unsafe) public var itFilterB0: Float = 0
+    nonisolated(unsafe) public var itFilterB1: Float = 0
+    nonisolated(unsafe) public var itFilterLeftY0: Float = 0
+    nonisolated(unsafe) public var itFilterLeftY1: Float = 0
+    nonisolated(unsafe) public var itFilterRightY0: Float = 0
+    nonisolated(unsafe) public var itFilterRightY1: Float = 0
+    nonisolated(unsafe) public var itFilterNeedsReset: Bool = false
 
     // Render-Skalierung der Instrument-Voice: Envelope-Volume * Fadeout. Der
     // historische Name bleibt API-kompatibel für die XM-Tests.
@@ -195,23 +223,26 @@ public final class DSPChannel: Sendable {
     public var itVolumeScale: Float {
         guard itMode else { return 1.0 }
         let sampleGlobal = Float(sample?.itProperties?.globalVolume ?? 64) / 64.0
-        let instrumentGlobal = Float(instrument?.itProperties?.globalVolume ?? 128) / 128.0
+        let instrumentGlobal = Float(itInstrumentVolumeWithSwing) / 128.0
         let channelGlobal = (itPatternState?.channelVolume ?? 64) / 64.0
         return sampleGlobal * instrumentGlobal * channelGlobal
     }
 
     // Effektives Panning inkl. XM-/IT-Panning-Hüllkurve und IT-Panbrello.
     public var effectivePanning: Float {
+        let pitchPanned = itMode
+            ? max(0, min(1, panning + itPitchPanOffset))
+            : panning
         guard (xmLinearMode || (itMode && itInstrumentMode)), hasPanEnvelope else {
-            return max(0, min(1, panning + panbrelloDelta))
+            return max(0, min(1, pitchPanned + itPanningSwing + panbrelloDelta))
         }
         if itMode, itInstrumentMode {
-            let pan = panning * 256.0
+            let pan = pitchPanned * 256.0
             let displacement = panEnvValue - 32.0
             let finalPan = pan >= 128.0
                 ? pan + displacement * (256.0 - pan) / 32.0
                 : pan + displacement * pan / 32.0
-            return max(0.0, min(1.0, finalPan / 256.0 + panbrelloDelta))
+            return max(0.0, min(1.0, finalPan / 256.0 + itPanningSwing + panbrelloDelta))
         }
         let pan = panning * 255.0
         let finalPan = pan + (panEnvValue - 32.0) * (128.0 - abs(pan - 128.0)) / 32.0
@@ -288,6 +319,12 @@ public final class DSPChannel: Sendable {
         panbrelloDelta = 0
         panbrelloRandomMemory = 0
         itRandomState = 0x6D2B_79F5
+        itInstrumentVolumeWithSwing = 128
+        itPanningSwing = 0
+        itPitchPanOffset = 0
+        itSurround = false
+        itPendingSourceKey = -1
+        itPendingRetriggering = false
         sampleIndex = 0.0
         sampleSpeed = 0.0
         sampleOffsetMemory = 0.0
@@ -340,6 +377,19 @@ public final class DSPChannel: Sendable {
         autoVibAmp = 0
         autoVibSweepStep = 0
         sampleDirection = 1.0
+        itSampleVibratoPosition = 0
+        itSampleVibratoDepth = 0
+        itFilterCutoff = 127
+        itFilterResonance = 0
+        itFilterActive = false
+        itFilterA0 = 1
+        itFilterB0 = 0
+        itFilterB1 = 0
+        itFilterLeftY0 = 0
+        itFilterLeftY1 = 0
+        itFilterRightY0 = 0
+        itFilterRightY1 = 0
+        itFilterNeedsReset = false
         periodScale = 1
         periodMin = 113
         periodMax = 856
@@ -507,6 +557,12 @@ public final class DSPChannel: Sendable {
             if itMode, itInstrumentMode { self.noteFadeActive = true }
         } else if note.key == Note.keyOff {
             self.keyReleased = true
+            // Ein bidirektionaler Sustain-Loop darf nach dem Release nicht
+            // rückwärts aus dem Sample laufen. Der normale Loop beziehungsweise
+            // der One-Shot-Auslauf setzt ab der aktuellen Position vorwärts fort.
+            if itMode, sample?.sustainLoop?.type == .pingpong {
+                sampleDirection = 1
+            }
             if itMode, itInstrumentMode {
                 // IT startet den Instrument-Fade sofort ohne Volume-Envelope;
                 // bei geloopter Volume-Envelope ebenfalls ab dem Release.
@@ -556,9 +612,15 @@ public final class DSPChannel: Sendable {
         }
 
         // In IT beendet jede echte neue Note die gehaltene Panbrello-
-        // Auslenkung. Instrument-, Effekt- und Spezialnoten tun das nicht.
+        // Auslenkung. Die übrigen Voice-Startdetails werden erst NACH Sxx
+        // vorbereitet, damit SDx die bisherige Stimme bis zum Ziel-Tick nicht
+        // vorzeitig durch Swing, Filter oder Pitch-Pan verändert.
         if itMode, note.period > 0 || playbackKey >= 0 {
             panbrelloDelta = 0
+            let effectCommand = note.effectId - ModuleEffect.impulseTrackerCommandBase
+            let volumePortamento = note.volume >= 193 && note.volume <= 202
+            itPendingSourceKey = note.key
+            itPendingRetriggering = effectCommand != 7 && !volumePortamento
         }
 
         // S3M-Volume-Column überschreibt die Instrument-Default-Lautstärke.
@@ -575,6 +637,14 @@ public final class DSPChannel: Sendable {
 
         if self.delayNote > 0 {
             return
+        }
+        if itMode, itPendingSourceKey >= 0 {
+            configureITNoteDetails(
+                sourceKey: itPendingSourceKey,
+                retriggering: itPendingRetriggering
+            )
+            itPendingSourceKey = -1
+            itPendingRetriggering = false
         }
         
         if hasSetInstrument {
@@ -725,6 +795,48 @@ public final class DSPChannel: Sendable {
         }
     }
 
+    // Deterministische kanalweise Zufallsquelle für IT-Swing und Random-
+    // Wellenformen. Der LCG-Zustand liegt in der Voice und alloziert nicht.
+    @inline(__always)
+    private func nextITRandomSigned() -> Float {
+        itRandomState = itRandomState &* 1_664_525 &+ 1_013_904_223
+        return Float(Int((itRandomState >> 24) & 0xFF) - 128) / 128.0
+    }
+
+    private func configureITNoteDetails(sourceKey: Int, retriggering: Bool) {
+        guard itMode else { return }
+        let properties = (setInstrument ?? instrument)?.itProperties
+        if let properties, sourceKey >= 0 {
+            itPitchPanOffset = Float(
+                (sourceKey - properties.pitchPanCenter) * properties.pitchPanSeparation
+            ) / 512.0
+        } else {
+            itPitchPanOffset = 0
+        }
+
+        if retriggering {
+            let baseVolume = properties?.globalVolume ?? 128
+            if let variation = properties?.randomVolumeVariation, variation > 0 {
+                let swing = floor(
+                    nextITRandomSigned() * Float(variation) / 100.0 * Float(baseVolume)
+                )
+                itInstrumentVolumeWithSwing = max(0, min(128, baseVolume + Int(swing)))
+            } else {
+                itInstrumentVolumeWithSwing = baseVolume
+            }
+            if let variation = properties?.randomPanningVariation, variation > 0 {
+                itPanningSwing = nextITRandomSigned() * Float(variation) / 64.0
+            } else {
+                itPanningSwing = 0
+            }
+            itSampleVibratoPosition = 0
+            itSampleVibratoDepth = 0
+            if let cutoff = properties?.initialFilterCutoff { itFilterCutoff = cutoff }
+            if let resonance = properties?.initialFilterResonance { itFilterResonance = resonance }
+            itFilterNeedsReset = true
+        }
+    }
+
     private func applyITChannelVolumeSlide(
         _ parameter: Int,
         state: ITPatternChannelState
@@ -757,6 +869,8 @@ public final class DSPChannel: Sendable {
             state.panningSlide = -Float(high) / 64.0
         }
         state.isSurround = false
+        itSurround = false
+        itPitchPanOffset = 0
         panbrelloDelta = 0
     }
 
@@ -788,13 +902,21 @@ public final class DSPChannel: Sendable {
             setPanning = normalized
             state.channelPanning = normalized
             state.isSurround = false
+            itSurround = false
+            itPitchPanOffset = 0
             panbrelloDelta = 0
         case 9:
-            if value == 0 { state.isSurround = false }
+            if value == 0 {
+                state.isSurround = false
+                itSurround = false
+                itPitchPanOffset = 0
+            }
             if value == 1 {
                 state.isSurround = true
+                itSurround = true
                 setPanning = 0.5
                 state.channelPanning = 0.5
+                itPitchPanOffset = 0
                 panbrelloDelta = 0
             }
         case 10:
@@ -803,6 +925,8 @@ public final class DSPChannel: Sendable {
             cutNoteTick = value == 0 ? 1 : value
         case 13:
             delayNote = value == 0 ? -1 : value
+        case 15:
+            state.activeFilterMacro = value
         default:
             break
         }
@@ -1260,12 +1384,24 @@ public final class DSPChannel: Sendable {
             setPanning = Float(parameter) / 255.0
             state.channelPanning = Float(parameter) / 255.0
             state.isSurround = false
+            itSurround = false
+            itPitchPanOffset = 0
             panbrelloDelta = 0
         case 25: // Yxy: Panbrello
             let value = state.remembered(command: command, parameter: parameter)
             if value >> 4 > 0 { panbrelloSpeed = Float(value >> 4) }
             if value & 0x0F > 0 { panbrelloDepth = Float(value & 0x0F) }
             panbrelloActive = true
+        case 26: // Zxx: gebräuchliche interne IT-Filtermakros
+            if parameter < 0x80 {
+                if state.activeFilterMacro == 0 {
+                    setITFilterCutoff(parameter)
+                } else if state.activeFilterMacro == 1 {
+                    setITFilterResonance(parameter)
+                }
+            } else if parameter <= 0x8F {
+                setITFilterResonance((parameter & 0x0F) * 8)
+            }
         default:
             break
         }
@@ -1305,6 +1441,8 @@ public final class DSPChannel: Sendable {
         case 128...192:
             setPanning = Float(value - 128) / 64.0
             state.isSurround = false
+            itSurround = false
+            itPitchPanOffset = 0
             panbrelloDelta = 0
         case 193...202:
             // Feste Zuordnung ohne lokales Array: playNote läuft im Audio-Thread.
@@ -1565,6 +1703,14 @@ public final class DSPChannel: Sendable {
             }
         }
         else if self.delayNote >= 0 && self.delayNote == tick {
+            if itMode, itPendingSourceKey >= 0 {
+                configureITNoteDetails(
+                    sourceKey: itPendingSourceKey,
+                    retriggering: itPendingRetriggering
+                )
+                itPendingSourceKey = -1
+                itPendingRetriggering = false
+            }
             self.instrument = self.setInstrument
             self.sample = self.setSample
             if let vol = self.setVolume {
@@ -1625,6 +1771,10 @@ public final class DSPChannel: Sendable {
         // XM beziehungsweise IT-Instrument-Modus begrenzt; MOD/S3M sind unberührt.
         var xmPeriodDelta: Float = 0
         var itPitchEnvelopeValue: Float = 32
+        // Ohne Filter-Hüllkurve ist +256 neutral: cutoff*(256+256)/256.
+        // Der Wert 0 wäre die halbe Grenzfrequenz und würde jede IT-Voice
+        // unbeabsichtigt filtern.
+        var itFilterEnvelopeModifier = 256
         // XM und IT besitzen eine zweite Effektspalte. Deren Volume-Slide wirkt
         // wie die Hauptspalten-Slides erst ab Tick 1.
         if (xmLinearMode || itMode), self.volColVolSlide != 0, tick > 0 {
@@ -1678,11 +1828,19 @@ public final class DSPChannel: Sendable {
                 panEnvValue = 32
             }
             if itPitchEnvelopeEnabled,
-               let env = instrument?.pitchEnvelope,
-               env.valueMode == .pitch {
+               let env = instrument?.pitchEnvelope {
                 pitchEnvValue = envelopeValue(env, at: pitchEnvPos)
-                itPitchEnvelopeValue = pitchEnvValue
-                stepEnvelope(env, pos: &pitchEnvPos, released: envelopeReleased, itStyle: true)
+                if env.valueMode == .filter {
+                    itFilterEnvelopeModifier = max(
+                        -256,
+                        min(256, Int((pitchEnvValue - 32) * 8))
+                    )
+                } else {
+                    itPitchEnvelopeValue = pitchEnvValue
+                }
+                stepEnvelope(
+                    env, pos: &pitchEnvPos, released: envelopeReleased, itStyle: true
+                )
             } else {
                 pitchEnvValue = 32
             }
@@ -1694,12 +1852,24 @@ public final class DSPChannel: Sendable {
             itEnvelopeReleased = keyReleased
         }
 
+        if itMode {
+            updateITFilter(
+                sampleRate: sampleRate,
+                envelopeModifier: itFilterEnvelopeModifier,
+                reset: itFilterNeedsReset
+            )
+            itFilterNeedsReset = false
+        }
+
         if self.currentPeriod < self.periodMin { self.currentPeriod = self.periodMin }
         if self.currentPeriod > self.periodMax { self.currentPeriod = self.periodMax }
 
         // Auto-Vibrato-Delta nur für die Frequenzberechnung addieren (nicht clampen
         // in currentPeriod, damit es sich nicht aufsummiert). MOD/S3M: Delta 0.
         var effPeriod = self.currentPeriod + xmPeriodDelta
+        if itMode {
+            effPeriod -= advanceITSampleVibrato()
+        }
         if itMode, itInstrumentMode, itPitchEnvelopeValue != 32 {
             let signedValue = itPitchEnvelopeValue - 32
             if itLinearMode {
@@ -1755,6 +1925,89 @@ public final class DSPChannel: Sendable {
         default:
             return Float((sin(Double(p) / 256.0 * 2.0 * Double.pi) * 64.0).rounded())
         }
+    }
+
+    @inline(__always)
+    private func advanceITSampleVibrato() -> Float {
+        guard itMode,
+              let vibrato = sample?.itProperties?.vibrato,
+              vibrato.speed > 0,
+              vibrato.depth > 0 else { return 0 }
+        let phase = itSampleVibratoPosition & 255
+        itSampleVibratoDepth = min(
+            vibrato.depth * 256,
+            itSampleVibratoDepth + vibrato.rate
+        )
+        let depth = itSampleVibratoDepth / 256
+        itSampleVibratoPosition = (itSampleVibratoPosition + vibrato.speed) & 255
+        guard depth > 0 else { return 0 }
+        let waveform = itTrackerWaveform(
+            type: vibrato.waveform.rawValue,
+            position: phase
+        )
+        return waveform * Float(depth) / 64.0
+    }
+
+    public func setITFilterCutoff(_ value: Int) {
+        itFilterCutoff = max(0, min(127, value))
+    }
+
+    public func setITFilterResonance(_ value: Int) {
+        itFilterResonance = max(0, min(127, value))
+    }
+
+    // Koeffizienten des originalen zweipoligen IT-Tiefpasses. Die Berechnung
+    // läuft höchstens einmal pro Tick; pro Audioframe folgen nur drei FMAs.
+    private func updateITFilter(
+        sampleRate: Double,
+        envelopeModifier: Int,
+        reset: Bool
+    ) {
+        guard sampleRate > 0 else { return }
+        let modifier = max(-256, min(256, envelopeModifier))
+        let computedCutoff = min(255, itFilterCutoff * (modifier + 256) / 256)
+        if itFilterResonance == 0, computedCutoff >= 254 {
+            if reset { itFilterActive = false }
+            return
+        }
+
+        let cutoffFrequency = min(
+            sampleRate / 2.0,
+            110.0 * pow(2.0, Double(computedCutoff) * 128.0 / (24.0 * 256.0) + 0.25)
+        )
+        let damping = pow(10.0, -3.0 * Double(itFilterResonance) / 320.0)
+        let ratio = sampleRate / (2.0 * Double.pi * cutoffFrequency)
+        let d = damping * ratio + damping - 1.0
+        let e = ratio * ratio
+        let denominator = 1.0 + d + e
+        let shouldResetHistories = reset || !itFilterActive
+        itFilterA0 = Float(1.0 / denominator)
+        itFilterB0 = Float((d + e + e) / denominator)
+        itFilterB1 = Float(-e / denominator)
+        itFilterActive = true
+        if shouldResetHistories {
+            itFilterLeftY0 = 0
+            itFilterLeftY1 = 0
+            itFilterRightY0 = 0
+            itFilterRightY1 = 0
+        }
+    }
+
+    @inline(__always)
+    public func applyITFilter(left: Float, right: Float) -> (Float, Float) {
+        guard itMode, itFilterActive else { return (left, right) }
+        let filteredLeft = left * itFilterA0
+            + itFilterLeftY0 * itFilterB0
+            + itFilterLeftY1 * itFilterB1
+        itFilterLeftY1 = itFilterLeftY0
+        itFilterLeftY0 = filteredLeft
+
+        let filteredRight = right * itFilterA0
+            + itFilterRightY0 * itFilterB0
+            + itFilterRightY1 * itFilterB1
+        itFilterRightY1 = itFilterRightY0
+        itFilterRightY0 = filteredRight
+        return (filteredLeft, filteredRight)
     }
 
     // Lautstärketabelle von IT Qxy. Der Wert bleibt wie alle Tracker-Volumes

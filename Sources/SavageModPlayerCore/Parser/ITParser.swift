@@ -291,7 +291,8 @@ public enum ITParser {
             usesMIDIPitchController: flags & 0x40 != 0,
             hasEmbeddedMIDIConfiguration: flags & 0x80 != 0 || special & 0x08 != 0,
             unknownHeaderFlags: flags & ~0x00FF,
-            unknownSpecialFlags: special & ~0x0009
+            unknownSpecialFlags: special & ~0x0009,
+            hasUnsupportedExtensions: containsUnsupportedExtension(in: data)
         )
 
         return Mod(
@@ -314,6 +315,16 @@ public enum ITParser {
             playbackSemantics: .impulseTracker(compatibility),
             itProperties: properties
         )
+    }
+
+    // OpenMPT hängt proprietäre Instrument-/Songeigenschaften als markierte
+    // Chunks an native IT-Dateien. Sie bleiben außerhalb des Zielumfangs, ihre
+    // Anwesenheit wird aber im Modell für UI/CLI sichtbar festgehalten.
+    private static func containsUnsupportedExtension(in data: Data) -> Bool {
+        for marker in ["MPTX", "XTPM", "MPTS", "STPM"] {
+            if data.range(of: Data(marker.utf8)) != nil { return true }
+        }
+        return false
     }
 
     // MARK: - Instrumente
@@ -410,7 +421,10 @@ public enum ITParser {
             randomVolumeVariation: min(100, try reader.byte(offset + 0x1A)),
             randomPanningVariation: min(64, try reader.byte(offset + 0x1B)),
             initialFilterCutoff: rawCutoff & 0x80 != 0 ? rawCutoff & 0x7F : nil,
-            initialFilterResonance: rawResonance & 0x80 != 0 ? rawResonance & 0x7F : nil
+            initialFilterResonance: rawResonance & 0x80 != 0 ? rawResonance & 0x7F : nil,
+            midiChannel: try reader.byte(offset + 0x3C),
+            midiProgram: try reader.byte(offset + 0x3D),
+            midiBank: try reader.word(offset + 0x3E)
         )
         return Instrument(
             index: index,
@@ -676,7 +690,7 @@ public enum ITParser {
             guard c5Speed <= 9_999_999 else {
                 throw ParserError.invalidHeaderValue("sample[\(sampleIndex)].c5Speed", c5Speed)
             }
-            guard vibratoSpeed <= 64, vibratoDepth <= 64, vibratoRate <= 64,
+            guard vibratoSpeed <= 64, vibratoDepth <= 127,
                   ITSampleVibratoWaveform(rawValue: vibratoType) != nil else {
                 throw ParserError.invalidHeaderValue("sample[\(sampleIndex)].vibrato", vibratoType)
             }

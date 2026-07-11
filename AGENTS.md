@@ -542,6 +542,16 @@ Wichtige Leitplanken:
   folgen in M9. 186 Swift-Tests, beide Audio-Regressionen, JS-Parität und der
   signierte App-/Quick-Look-Build sind grün; `.it` bleibt bis M10 öffentlich
   deaktiviert.
+- **M9-Abschluss (Version 1.5.23):** IT-Voices rendern Sustain-/Release-Loops,
+  planares Stereo, Voice-lokalen Surround, Sample-Vibrato, Pitch-Pan und
+  Volume-/Pan-Swing. Der resonante zweipolige Tiefpass folgt den Schism-/OpenMPT-
+  Koeffizienten und unterstützt Instrument-Startwerte, Filter-Envelopes sowie
+  Standardmakros. MIDI-/Pluginpfade und unbekannte Erweiterungen werden sichtbar
+  als eingeschränkt gemeldet. `filter-nna.it` besteht das eingebettete Stem-Gate;
+  `PanbrelloHold.it`/`RandomWaveform.it` erreichen im 44,1-kHz-A/B STFT 0,993/
+  praktisch 1,0. 196 Swift-Tests, Release-Voice-Stress, JS-Parität und der
+  signierte App-/Quick-Look-Build sind grün; öffentliche `.it`-Integration folgt
+  ausschließlich in M10.
 
 ## Fallen / Agent-Hinweise
 

@@ -297,7 +297,8 @@ public enum ITSampleVibratoWaveform: Int, Sendable, Codable {
 }
 
 // Sample-eigenes IT-Vibrato. Anders als XM-Auto-Vibrato liegt es im Sample-
-// Header und verwendet Speed, Depth und die Anstiegsrate jeweils im Bereich 0...64.
+// Header. Speed liegt in 0...64, Depth in 0...127 und die Sweep-Rate in
+// 0...255; IT nennt das erste Feld historisch „Speed“ und das letzte „Rate“.
 public struct ITSampleVibrato: Sendable, Codable, Equatable {
     public let speed: Int
     public let depth: Int
@@ -545,6 +546,11 @@ public struct ITInstrumentProperties: Sendable, Codable, Equatable {
     public let randomPanningVariation: Int
     public let initialFilterCutoff: Int?
     public let initialFilterResonance: Int?
+    // Native IT-MIDI-Routingfelder. Der Core bewahrt sie zur sichtbaren
+    // Kompatibilitätsmeldung, erzeugt aber bewusst keine externe MIDI-Ausgabe.
+    public let midiChannel: Int
+    public let midiProgram: Int
+    public let midiBank: Int
 
     public init(
         newNoteAction: NewNoteAction,
@@ -557,7 +563,10 @@ public struct ITInstrumentProperties: Sendable, Codable, Equatable {
         randomVolumeVariation: Int,
         randomPanningVariation: Int,
         initialFilterCutoff: Int?,
-        initialFilterResonance: Int?
+        initialFilterResonance: Int?,
+        midiChannel: Int = 0,
+        midiProgram: Int = 0,
+        midiBank: Int = 0
     ) {
         self.newNoteAction = newNoteAction
         self.duplicateCheckType = duplicateCheckType
@@ -570,6 +579,9 @@ public struct ITInstrumentProperties: Sendable, Codable, Equatable {
         self.randomPanningVariation = randomPanningVariation
         self.initialFilterCutoff = initialFilterCutoff
         self.initialFilterResonance = initialFilterResonance
+        self.midiChannel = midiChannel
+        self.midiProgram = midiProgram
+        self.midiBank = midiBank
     }
 }
 
@@ -671,6 +683,7 @@ public struct ITModuleProperties: Sendable, Codable, Equatable {
     public let hasEmbeddedMIDIConfiguration: Bool
     public let unknownHeaderFlags: Int
     public let unknownSpecialFlags: Int
+    public let hasUnsupportedExtensions: Bool
 
     public init(
         createdWithVersion: Int,
@@ -689,7 +702,8 @@ public struct ITModuleProperties: Sendable, Codable, Equatable {
         usesMIDIPitchController: Bool,
         hasEmbeddedMIDIConfiguration: Bool,
         unknownHeaderFlags: Int,
-        unknownSpecialFlags: Int
+        unknownSpecialFlags: Int,
+        hasUnsupportedExtensions: Bool = false
     ) {
         self.createdWithVersion = createdWithVersion
         self.compatibleWithVersion = compatibleWithVersion
@@ -708,6 +722,7 @@ public struct ITModuleProperties: Sendable, Codable, Equatable {
         self.hasEmbeddedMIDIConfiguration = hasEmbeddedMIDIConfiguration
         self.unknownHeaderFlags = unknownHeaderFlags
         self.unknownSpecialFlags = unknownSpecialFlags
+        self.hasUnsupportedExtensions = hasUnsupportedExtensions
     }
 }
 
@@ -744,6 +759,37 @@ public struct Mod: Sendable, Codable {
 
     public var globalVolumeScale: GlobalVolumeScale {
         format == .it ? .impulseTracker128 : .tracker64
+    }
+
+    // Sichtbare, nicht-fatale Einschränkungen. Der Parser behält das spielbare
+    // PCM/Pattern-Material, verschweigt aber externe MIDI-/Pluginpfade und
+    // unbekannte OpenMPT-Erweiterungen nicht.
+    public var compatibilityWarnings: [String] {
+        guard format == .it, let properties = itProperties else { return [] }
+        var warnings = [String]()
+        if properties.compatibleWithVersion > 0x0215
+            || properties.createdWithVersion > 0x0215 {
+            warnings.append(
+                "Die Datei stammt aus einer neueren IT-/Tracker-Version; Erweiterungen können eingeschränkt sein."
+            )
+        }
+        if properties.usesMIDIPitchController {
+            warnings.append("Externe MIDI-Pitchsteuerung wird nicht wiedergegeben.")
+        }
+        if properties.hasEmbeddedMIDIConfiguration {
+            warnings.append(
+                "Eingebettete MIDI-Makros sind auf die gebräuchlichen IT-Filtermakros beschränkt."
+            )
+        }
+        if instruments.compactMap({ $0?.itProperties }).contains(where: { $0.midiChannel > 0 }) {
+            warnings.append("MIDI-/Plugin-Instrumente werden nicht ausgegeben; PCM-Instrumente bleiben hörbar.")
+        }
+        if properties.hasUnsupportedExtensions
+            || properties.unknownHeaderFlags != 0
+            || properties.unknownSpecialFlags != 0 {
+            warnings.append("Unbekannte MPTM-/IT-Erweiterungen wurden erkannt und werden ignoriert.")
+        }
+        return warnings
     }
 
     public init(

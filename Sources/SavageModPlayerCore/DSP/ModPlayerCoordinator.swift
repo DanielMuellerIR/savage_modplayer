@@ -98,6 +98,15 @@ struct RenderCaptureBlock: Sendable {
     let stems: [Float]
 }
 
+// Stack-Wert eines einzelnen Voice-Frames. Mono-Voices tragen links/rechts
+// denselben Wert; Stereo-IT-Samples behalten beide PCM-Seiten bis zum Mixer.
+private struct RenderedVoiceFrame {
+    let left: Float
+    let right: Float
+    let mono: Float
+    let isStereo: Bool
+}
+
 // Wertkopie des Sequencer-Zustands an einer festen Frame-Grenze. Sie enthaelt
 // bewusst keine Referenz auf den laufenden Zustand und kein endReached: Die
 // Probe setzt dieses Live-/Offline-Abbruchsignal heute nicht.
@@ -999,10 +1008,11 @@ public final class ModPlayerCoordinator: ObservableObject {
                         ? voiceIndex
                         : (ch.itPatternState?.channelIndex ?? -1)
                     guard ownerIndex >= 0, ownerIndex < logicalChannelCount else { continue }
-                    let outputSample = Self.renderChannelSample(
+                    let voiceFrame = Self.renderChannelFrame(
                         channel: ch,
                         useInterpolation: state.useInterpolation
-                    ) * globalGain
+                    )
+                    let outputSample = voiceFrame.mono * globalGain
 
                     // Roh-Stem vor Panning, Mix-Gain und Limiter. Bei Capture=nil
                     // bleibt dies nur ein einfacher optionaler Pointer-Check.
@@ -1031,8 +1041,16 @@ public final class ModPlayerCoordinator: ObservableObject {
                     let lGain = 1.0 - pEffective
                     let rGain = pEffective
 
-                    outL += outputSample * lGain * mixGain
-                    outR += outputSample * rGain * mixGain
+                    if ch.itSurround {
+                        let surround = voiceFrame.isStereo
+                            ? (voiceFrame.left + voiceFrame.right) * 0.25 * globalGain
+                            : outputSample * 0.5
+                        outL += surround * mixGain
+                        outR -= surround * mixGain
+                    } else {
+                        outL += voiceFrame.left * globalGain * lGain * mixGain
+                        outR += voiceFrame.right * globalGain * rGain * mixGain
+                    }
 
                 }
 
@@ -1142,16 +1160,20 @@ public final class ModPlayerCoordinator: ObservableObject {
             let left = leftPtr.assumingMemoryBound(to: Float.self)
             let right = rightPtr.assumingMemoryBound(to: Float.self)
             for frame in 0..<Int(frameCount) {
-                var s: Float = 0.0
+                var rendered = RenderedVoiceFrame(
+                    left: 0, right: 0, mono: 0, isStereo: false
+                )
                 if voice.framesLeft > 0 {
-                    s = Self.renderChannelSample(channel: ch, useInterpolation: useInterpolation)
+                    rendered = Self.renderChannelFrame(
+                        channel: ch,
+                        useInterpolation: useInterpolation
+                    )
                     voice.framesLeft -= 1
                 }
-                // Mittig; tanh als weicher Schutz gegen Clipping (der Song-Limiter
-                // fehlt hier, ein Einzel-Sample bleibt aber ohnehin bei ~+/-0,5).
-                let limited = tanh(s)
-                left[frame] = limited
-                right[frame] = limited
+                // Stereo-Samples bleiben in der Instrumentvorschau räumlich
+                // erhalten; tanh schützt wie zuvor weich gegen Clipping.
+                left[frame] = tanh(rendered.left)
+                right[frame] = tanh(rendered.right)
             }
             return noErr
         }
@@ -1384,15 +1406,23 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
 
     @inline(__always)
-    nonisolated private static func renderChannelSample(channel ch: DSPChannel, useInterpolation: Bool) -> Float {
+    nonisolated private static func renderChannelFrame(
+        channel ch: DSPChannel,
+        useInterpolation: Bool
+    ) -> RenderedVoiceFrame {
         // Note-Cut, Key-Off und Stop setzen dieses Flag. Besonders geloopte
         // Samples wuerden ohne den Guard trotz gestoppter Stimme weiterklingen.
-        guard ch.playing else { return 0.0 }
-        guard let smp = ch.sample, smp.pcm.count > 0, ch.currentPeriod > 0 else { return 0.0 }
-        guard ch.sampleIndex.isFinite, !ch.sampleIndex.isNaN else { return 0.0 }
+        guard ch.playing else { return RenderedVoiceFrame(left: 0, right: 0, mono: 0, isStereo: false) }
+        guard let smp = ch.sample, smp.pcm.count > 0, ch.currentPeriod > 0 else {
+            return RenderedVoiceFrame(left: 0, right: 0, mono: 0, isStereo: false)
+        }
+        guard ch.sampleIndex.isFinite, !ch.sampleIndex.isNaN else {
+            return RenderedVoiceFrame(left: 0, right: 0, mono: 0, isStereo: false)
+        }
 
-        if smp.isLooped {
-            wrapLoopedSampleIndexIfNeeded(channel: ch, sample: smp)
+        let loop = activeSampleLoop(channel: ch, sample: smp)
+        if let loop {
+            wrapLoopedSampleIndexIfNeeded(channel: ch, sample: smp, loop: loop)
         }
 
         let idx = Int(ch.sampleIndex)
@@ -1400,38 +1430,122 @@ public final class ModPlayerCoordinator: ObservableObject {
             // Ein beendetes One-Shot bleibt beendet. Das ist insbesondere für
             // IT Qxy wichtig: sehr kurze Samples werden nicht später aus dem
             // Nichts erneut gestartet.
-            if !smp.isLooped { ch.playing = false }
-            return 0.0
+            if loop == nil { ch.playing = false }
+            return RenderedVoiceFrame(
+                left: 0,
+                right: 0,
+                mono: 0,
+                isStereo: smp.rightPCM != nil
+            )
         }
 
-        let sampleVal: Float
-        if smp.isLooped && useInterpolation {
-            sampleVal = ch.getInterpolatedSampleLooped(
-                from: smp.pcm,
-                index: ch.sampleIndex,
-                repeatOffset: smp.loopStart,
-                repeatLength: smp.loopLength
+        let leftSample = readVoiceSample(
+            pcm: smp.pcm,
+            channel: ch,
+            loop: loop,
+            useInterpolation: useInterpolation
+        )
+        let rightSample: Float
+        if let rightPCM = smp.rightPCM {
+            rightSample = readVoiceSample(
+                pcm: rightPCM,
+                channel: ch,
+                loop: loop,
+                useInterpolation: useInterpolation
             )
-        } else if useInterpolation {
-            sampleVal = ch.getInterpolatedSample(from: smp.pcm, index: ch.sampleIndex)
         } else {
-            sampleVal = ch.getNearestSample(from: smp.pcm, index: ch.sampleIndex)
+            rightSample = leftSample
         }
 
         // sampleDirection ist bei MOD/S3M immer +1 (unverändert); nur XM-Ping-Pong
         // dreht sie auf -1. xmVolumeScale ist bei MOD/S3M 1.0 (Envelope/Fadeout aus).
         ch.sampleIndex += ch.sampleSpeed * ch.sampleDirection
-        if smp.isLooped {
-            wrapLoopedSampleIndexIfNeeded(channel: ch, sample: smp)
+        if let loop {
+            wrapLoopedSampleIndexIfNeeded(channel: ch, sample: smp, loop: loop)
         }
 
-        return sampleVal * ch.currentVolume / 64.0 * ch.xmVolumeScale * ch.itVolumeScale
+        let gain = ch.currentVolume / 64.0 * ch.xmVolumeScale * ch.itVolumeScale
+        let filtered = ch.applyITFilter(left: leftSample * gain, right: rightSample * gain)
+        return RenderedVoiceFrame(
+            left: filtered.0,
+            right: filtered.1,
+            mono: (filtered.0 + filtered.1) * 0.5,
+            isStereo: smp.rightPCM != nil
+        )
     }
 
-    nonisolated private static func wrapLoopedSampleIndexIfNeeded(channel ch: DSPChannel, sample smp: Sample) {
+    @inline(__always)
+    nonisolated private static func renderChannelSample(
+        channel ch: DSPChannel,
+        useInterpolation: Bool
+    ) -> Float {
+        renderChannelFrame(channel: ch, useInterpolation: useInterpolation).mono
+    }
+
+    // Schmale interne Testnaht für Loop-, Stereo- und Filterdetails. Der
+    // Produktionsmixer verwendet weiterhin direkt den privaten Stack-Wert.
+    nonisolated static func renderChannelStereoSampleForTesting(
+        channel ch: DSPChannel,
+        useInterpolation: Bool
+    ) -> (left: Float, right: Float) {
+        let frame = renderChannelFrame(channel: ch, useInterpolation: useInterpolation)
+        return (frame.left, frame.right)
+    }
+
+    @inline(__always)
+    nonisolated private static func readVoiceSample(
+        pcm: [Float],
+        channel ch: DSPChannel,
+        loop: SampleLoop?,
+        useInterpolation: Bool
+    ) -> Float {
+        if let loop, useInterpolation {
+            return ch.getInterpolatedSampleLooped(
+                from: pcm,
+                index: ch.sampleIndex,
+                repeatOffset: loop.start,
+                repeatLength: loop.length
+            )
+        }
+        if useInterpolation {
+            return ch.getInterpolatedSample(from: pcm, index: ch.sampleIndex)
+        }
+        return ch.getNearestSample(from: pcm, index: ch.sampleIndex)
+    }
+
+    @inline(__always)
+    nonisolated private static func activeSampleLoop(
+        channel ch: DSPChannel,
+        sample smp: Sample
+    ) -> SampleLoop? {
+        if ch.itMode, !ch.keyReleased,
+           let sustain = smp.sustainLoop,
+           sustain.type != .none,
+           sustain.length > 0 {
+            return sustain
+        }
+        // IT kennt auch absichtlich sehr kurze Loops. Die historische >2-
+        // Schwelle des neutralen Modells bleibt für MOD/S3M-Sentinel-Loops
+        // erhalten, wird für echte IT-Loopflags aber nicht übernommen.
+        if ch.itMode, smp.loopType != .none, smp.loopLength > 0 {
+            return SampleLoop(
+                start: smp.loopStart,
+                length: smp.loopLength,
+                type: smp.loopType
+            )
+        }
+        guard smp.isLooped else { return nil }
+        return SampleLoop(start: smp.loopStart, length: smp.loopLength, type: smp.loopType)
+    }
+
+    nonisolated private static func wrapLoopedSampleIndexIfNeeded(
+        channel ch: DSPChannel,
+        sample smp: Sample,
+        loop: SampleLoop
+    ) {
         let frameCount = smp.pcm.count
-        let loopStart = max(0, min(smp.loopStart, frameCount - 1))
-        let declaredLoopEnd = smp.loopStart + smp.loopLength
+        let loopStart = max(0, min(loop.start, frameCount - 1))
+        let declaredLoopEnd = loop.start + loop.length
         let loopEnd = max(loopStart + 1, min(declaredLoopEnd, frameCount))
         guard loopEnd > loopStart else { return }
 
@@ -1439,7 +1553,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         let end = Double(loopEnd)
         let length = end - start
 
-        if smp.loopType == .pingpong {
+        if loop.type == .pingpong {
             // Ping-Pong: an den Loop-Grenzen die Richtung umkehren und den
             // Überschuss zurückreflektieren. Spiegel um die Grenze (2·Grenze−pos)
             // OHNE Endpunkt-Duplizierung — wie openmpt/FT2. (Früher `end-1-over`:

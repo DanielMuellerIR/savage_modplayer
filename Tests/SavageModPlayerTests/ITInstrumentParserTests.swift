@@ -16,6 +16,9 @@ final class ITInstrumentParserTests: XCTestCase {
         instrument[0x1B] = 80  // OpenMPT-kompatibel auf 64 begrenzen
         instrument[0x3A] = 0x80 | 70
         instrument[0x3B] = 0x80 | 23
+        instrument[0x3C] = 17
+        instrument[0x3D] = 42
+        putWord(513, at: 0x3E, in: &instrument)
 
         for note in 0..<120 {
             instrument[0x40 + note * 2] = UInt8(note == 7 ? 255 : 119 - note)
@@ -53,6 +56,12 @@ final class ITInstrumentParserTests: XCTestCase {
         XCTAssertEqual(properties.randomPanningVariation, 64)
         XCTAssertEqual(properties.initialFilterCutoff, 70)
         XCTAssertEqual(properties.initialFilterResonance, 23)
+        XCTAssertEqual(properties.midiChannel, 17)
+        XCTAssertEqual(properties.midiProgram, 42)
+        XCTAssertEqual(properties.midiBank, 513)
+        XCTAssertTrue(module.compatibilityWarnings.contains {
+            $0.contains("MIDI-/Plugin-Instrumente")
+        })
 
         let mapping = try XCTUnwrap(parsed.noteSampleMapping)
         XCTAssertEqual(mapping.entry(forSourceNote: 0)?.targetNote, 119)

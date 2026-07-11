@@ -60,6 +60,7 @@ public final class ITPlaybackVoicePool: Sendable {
                 state.foregroundVoiceIndex = index
                 voice.itPatternState = state
                 voice.panning = state.channelPanning
+                voice.itSurround = state.isSurround
             }
         }
     }
@@ -155,6 +156,7 @@ public final class ITPlaybackVoicePool: Sendable {
         voice.itPatternState = owner
         voice.itIsBackgroundVoice = false
         voice.panning = owner.channelPanning
+        voice.itSurround = owner.isSurround
         owner.foregroundVoiceIndex = index
     }
 

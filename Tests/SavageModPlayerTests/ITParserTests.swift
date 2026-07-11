@@ -66,12 +66,23 @@ final class ITParserTests: XCTestCase {
         XCTAssertTrue(properties.hasEmbeddedMIDIConfiguration)
         XCTAssertEqual(properties.unknownHeaderFlags, 0)
         XCTAssertEqual(properties.unknownSpecialFlags, 0x8000)
+        XCTAssertTrue(module.compatibilityWarnings.contains { $0.contains("MIDI-Pitchsteuerung") })
+        XCTAssertTrue(module.compatibilityWarnings.contains { $0.contains("MIDI-Makros") })
+        XCTAssertTrue(module.compatibilityWarnings.contains { $0.contains("Erweiterungen") })
 
         let jump = module.patterns[0].rows[0].notes[0]
         XCTAssertTrue(jump.hasEffect)
         XCTAssertEqual(jump.effectId, ModuleEffect.impulseTrackerCommand(2))
         XCTAssertEqual(jump.effectData, 1)
         XCTAssertEqual(module.patterns[1].rows.count, 64)
+    }
+
+    func testOpenMPTExtensionMarkerIsReportedWithoutRejectingPlayableCore() throws {
+        var data = makeIT(patterns: [nil])
+        data.append(contentsOf: Data("MPTX".utf8))
+        let module = try ITParser.parse(data: data)
+        XCTAssertTrue(module.itProperties?.hasUnsupportedExtensions == true)
+        XCTAssertTrue(module.compatibilityWarnings.contains { $0.contains("MPTM-/IT-Erweiterungen") })
     }
 
     func testAllDirectMaskBitsAndEveryReuseCombination() throws {
