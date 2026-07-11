@@ -659,6 +659,10 @@ public struct Mod: Sendable, Codable {
     public let channelPannings: [Float]
     // Kanal-Startlautstärken 0...64. Immer channelCount Einträge.
     public let channelVolumes: [Int]
+    // IT kann einen Kanal als Surround markieren oder seine Notenausgabe
+    // deaktivieren, während Effekte weiterlaufen. Andere Formate nutzen false.
+    public let channelSurrounds: [Bool]
+    public let channelDisabled: [Bool]
     // XM: true = lineare Frequenztabelle, false = Amiga-Periodentabelle. Andere
     // Formate lassen es false (sie nutzen ihr eigenes Perioden-/Clock-Modell).
     public let linearFrequency: Bool
@@ -684,6 +688,8 @@ public struct Mod: Sendable, Codable {
         channelPannings: [Float] = [],
         linearFrequency: Bool = false,
         channelVolumes: [Int] = [],
+        channelSurrounds: [Bool] = [],
+        channelDisabled: [Bool] = [],
         playbackSemantics: PlaybackSemantics? = nil
     ) {
         self.linearFrequency = linearFrequency
@@ -703,6 +709,12 @@ public struct Mod: Sendable, Codable {
         self.channelVolumes = channelVolumes.count == channelCount
             ? channelVolumes
             : Array(repeating: 64, count: max(0, channelCount))
+        self.channelSurrounds = channelSurrounds.count == channelCount
+            ? channelSurrounds
+            : Array(repeating: false, count: max(0, channelCount))
+        self.channelDisabled = channelDisabled.count == channelCount
+            ? channelDisabled
+            : Array(repeating: false, count: max(0, channelCount))
         self.playbackSemantics = playbackSemantics ?? Self.inferredSemantics(
             format: format,
             linearFrequency: linearFrequency
@@ -729,7 +741,8 @@ public struct Mod: Sendable, Codable {
     private enum CodingKeys: String, CodingKey {
         case name, length, patternTable, instruments, patterns, channelCount
         case format, initialSpeed, initialTempo, initialGlobalVolume
-        case channelPannings, channelVolumes, linearFrequency, playbackSemantics
+        case channelPannings, channelVolumes, channelSurrounds, channelDisabled
+        case linearFrequency, playbackSemantics
     }
 
     // Alte gespeicherte Module besitzen weder Kanal-Volumes noch ein explizites
@@ -751,6 +764,8 @@ public struct Mod: Sendable, Codable {
             channelPannings: values.decodeIfPresent([Float].self, forKey: .channelPannings) ?? [],
             linearFrequency: values.decodeIfPresent(Bool.self, forKey: .linearFrequency) ?? false,
             channelVolumes: values.decodeIfPresent([Int].self, forKey: .channelVolumes) ?? [],
+            channelSurrounds: values.decodeIfPresent([Bool].self, forKey: .channelSurrounds) ?? [],
+            channelDisabled: values.decodeIfPresent([Bool].self, forKey: .channelDisabled) ?? [],
             playbackSemantics: values.decodeIfPresent(PlaybackSemantics.self, forKey: .playbackSemantics)
         )
     }
@@ -769,6 +784,8 @@ public struct Mod: Sendable, Codable {
         try values.encode(initialGlobalVolume, forKey: .initialGlobalVolume)
         try values.encode(channelPannings, forKey: .channelPannings)
         try values.encode(channelVolumes, forKey: .channelVolumes)
+        try values.encode(channelSurrounds, forKey: .channelSurrounds)
+        try values.encode(channelDisabled, forKey: .channelDisabled)
         try values.encode(linearFrequency, forKey: .linearFrequency)
         try values.encodeIfPresent(playbackSemantics, forKey: .playbackSemantics)
     }

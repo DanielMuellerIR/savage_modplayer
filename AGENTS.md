@@ -475,10 +475,11 @@ Wichtige Leitplanken:
   Tabellenlänge und manipulierte Codable-Daten werden kontrolliert geprüft;
   Instrument, Parser und DSP bleiben bewusst unverdrahtet. Reviewer-`ACCEPT`,
   108 Swift-Tests, JS-Parität und signierter App-/Quick-Look-Build sind grün.
-- **M1-Abschluss (Version 1.5.14):** Das formatneutrale Modell unterstützt jetzt
+- **M1-Abschluss (Version 1.5.15):** Das formatneutrale Modell unterstützt jetzt
   IT-Sustain-Bereiche, Carry, Pitch-/Filter-Envelope, NNA/DCT/DCA,
   Instrument-Pan/-Zufall/-Filter, Stereo-PCM, Sustain-Loops, C5Speed,
-  Sample-Vibrato, Kanal-Startlautstärken und die 64/128-Globalvolumen-Skalierung.
+  Sample-Vibrato, Kanal-Startlautstärken, Surround-/Disabled-Kanalflags und die
+  64/128-Globalvolumen-Skalierung.
   Bestehende MOD-/S3M-/XM-Initializer und Legacy-Codable-Daten bleiben
   kompatibel; 114 Swift-Tests, beide Audio-Regressionen, JS-Parität und der
   signierte App-/Quick-Look-Build sind grün. `.it` bleibt öffentlich deaktiviert.

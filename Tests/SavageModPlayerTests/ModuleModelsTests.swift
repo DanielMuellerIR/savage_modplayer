@@ -330,6 +330,8 @@ final class ModuleModelsTests: XCTestCase {
                 linearFrequency: linearFrequency
             )
             XCTAssertEqual(module.channelVolumes, [64, 64, 64])
+            XCTAssertEqual(module.channelSurrounds, [false, false, false])
+            XCTAssertEqual(module.channelDisabled, [false, false, false])
             XCTAssertEqual(module.globalVolumeScale, .tracker64)
             XCTAssertEqual(module.playbackSemantics, semantics)
         }
@@ -346,14 +348,20 @@ final class ModuleModelsTests: XCTestCase {
             initialGlobalVolume: 128,
             channelPannings: [0.0, 1.0],
             channelVolumes: [12, 34],
+            channelSurrounds: [true, false],
+            channelDisabled: [false, true],
             playbackSemantics: .impulseTracker(compatibility)
         )
         XCTAssertEqual(module.channelVolumes, [12, 34])
+        XCTAssertEqual(module.channelSurrounds, [true, false])
+        XCTAssertEqual(module.channelDisabled, [false, true])
         XCTAssertEqual(module.globalVolumeScale, .impulseTracker128)
         XCTAssertEqual(module.playbackSemantics, .impulseTracker(compatibility))
 
         let decoded = try JSONDecoder().decode(Mod.self, from: JSONEncoder().encode(module))
         XCTAssertEqual(decoded.channelVolumes, [12, 34])
+        XCTAssertEqual(decoded.channelSurrounds, [true, false])
+        XCTAssertEqual(decoded.channelDisabled, [false, true])
         XCTAssertEqual(decoded.playbackSemantics, .impulseTracker(compatibility))
     }
 
@@ -372,6 +380,8 @@ final class ModuleModelsTests: XCTestCase {
             JSONSerialization.jsonObject(with: JSONEncoder().encode(module)) as? [String: Any]
         )
         object.removeValue(forKey: "channelVolumes")
+        object.removeValue(forKey: "channelSurrounds")
+        object.removeValue(forKey: "channelDisabled")
         object.removeValue(forKey: "playbackSemantics")
 
         let decoded = try JSONDecoder().decode(
@@ -379,6 +389,8 @@ final class ModuleModelsTests: XCTestCase {
             from: JSONSerialization.data(withJSONObject: object)
         )
         XCTAssertEqual(decoded.channelVolumes, [64, 64])
+        XCTAssertEqual(decoded.channelSurrounds, [false, false])
+        XCTAssertEqual(decoded.channelDisabled, [false, false])
         XCTAssertEqual(decoded.playbackSemantics, .fastTracker2(linearFrequency: true))
     }
 
