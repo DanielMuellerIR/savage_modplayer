@@ -504,6 +504,15 @@ Wichtige Leitplanken:
   OpenMPT-1.32.10-Referenzrender korreliert samplegenau mit 1,0. 141
   Gesamttests, beide Audio-Regressionen, JS-Parität und signierter App-Build
   sind grün. `.it` bleibt bis zur Integration öffentlich deaktiviert.
+- **M5-Abschluss (Version 1.5.19):** 64 vorallozierte
+  `ITPatternChannelState`-Instanzen halten Channel Volume und Effekt-Memory;
+  bis M7 steuert jeder genau eine Vordergrundstimme. Sample-Mode rendert intern
+  mit C5Speed, linearen/Amiga-Slides, IT-Global-/Mix-/Channel-/Sample-Volume,
+  A/B/C/T/V, D/E/F/G/H/I/J/K/L/O/Q/R/U/X und IT-Volume-Column. Sechs
+  OpenMPT-Player-Tests sind hörbar und zeitlich innerhalb eines Ticks; gezielte
+  A/B-Fälle bestätigen Note-Fade und Kurz-Retrigger. 151 Tests, beide
+  Audio-Regressionen, JS-Parität und signierter App-Build sind grün. Loader,
+  UTI und Quick Look führen `.it` weiterhin nicht öffentlich.
 
 ## Fallen / Agent-Hinweise
 

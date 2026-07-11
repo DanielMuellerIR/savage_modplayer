@@ -227,6 +227,38 @@ final class ITSampleParserTests: XCTestCase {
         XCTAssertEqual(sample.pcm, waveform.map { Float($0) / 256.0 })
     }
 
+    func testParsedSampleModeITRendersAudibleWav() throws {
+        var spec = SampleSpec(
+            name: "render", frameCount: 64,
+            data: (0..<64).map { UInt8(truncatingIfNeeded: $0 * 4 - 128) }
+        )
+        spec.loopEnabled = true
+        spec.loopEnd = 64
+        spec.c5Speed = 8_000
+        var data = makeSampleIT([spec])
+
+        // Pattern 0: C-5, Sample 1 und volle Lautstärke auf Kanal 1. Das Fixture
+        // bleibt vollständig selbst erzeugt und läuft durch Parser UND Renderer.
+        let packed = [UInt8(0x81), 0x07, 60, 1, 64, 0]
+            + [UInt8](repeating: 0, count: 63)
+        var pattern = [UInt8](repeating: 0, count: 8)
+        putWord(packed.count, at: 0, in: &pattern)
+        putWord(64, at: 2, in: &pattern)
+        pattern += packed
+        let patternOffset = data.count
+        data.append(contentsOf: pattern)
+        setDword(patternOffset, at: 0xC6, in: &data)
+
+        let module = try ITParser.parse(data: data)
+        let wav = try ModuleRenderer.renderWavData(
+            mod: module, sampleRate: 8_000, maxDurationSeconds: 1,
+            normalize: false, useInterpolation: false
+        )
+        XCTAssertEqual(module.format, .it)
+        XCTAssertEqual(String(data: wav.prefix(4), encoding: .ascii), "RIFF")
+        XCTAssertTrue(wav.dropFirst(44).contains { $0 != 0 })
+    }
+
     func testMissingDataFlagCreatesSilentButDescribedSample() throws {
         var spec = SampleSpec(name: "empty", frameCount: 4, data: [])
         spec.dataPresent = false

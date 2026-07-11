@@ -18,6 +18,8 @@ public final class RealtimePlaybackState: Sendable {
     nonisolated(unsafe) public var bpm: Int = 125
     nonisolated(unsafe) public var outputsPerTick: Double = 0.0
     nonisolated(unsafe) public var outputsUntilNextTick: Double = 0.0
+    // IT T0x/T1x verändert das Tempo auf den Folgeticks einer Zeile.
+    nonisolated(unsafe) public var tempoSlide: Int = 0
     
     nonisolated(unsafe) public var positionJump: Int = -1
     nonisolated(unsafe) public var patternBreak: Int = -1
@@ -30,7 +32,7 @@ public final class RealtimePlaybackState: Sendable {
     nonisolated(unsafe) public var useInterpolation: Bool = true
     nonisolated(unsafe) public var palClock: Bool = true
 
-    // Globale Lautstärke 0..64 (S3M Vxx; MOD bleibt konstant 64).
+    // Globale Lautstärke: 0...64 für MOD/S3M/XM, 0...128 für IT.
     nonisolated(unsafe) public var globalVolume: Float = 64
 
     // S3M rechnet Perioden gegen die feste ST3-Clock (14317056 Hz) statt
@@ -243,7 +245,9 @@ public final class ModPlayerCoordinator: ObservableObject {
     
     // Obergrenze der unterstützten Kanäle — bestimmt die Größe der
     // vorallozierten VU-/Waveform-Puffer (S3M erlaubt bis zu 32 Kanäle).
-    nonisolated public static let maxChannels = 32
+    // IT-Patterns besitzen bis zu 64 logische Kanäle. Die zugehörigen
+    // VU-/Scope-Puffer werden wie zuvor einmalig vor dem Audiostart reserviert.
+    nonisolated public static let maxChannels = 64
 
     // Vorallozierte DSP-Kanäle. Wird in setMod() passend zur Kanalzahl des
     // Moduls neu aufgebaut (der Render-Block captured das Array bei play()).
@@ -342,6 +346,19 @@ public final class ModPlayerCoordinator: ObservableObject {
                 ch.xmLinearMode = true
                 ch.periodMin = 1
                 ch.periodMax = 7680
+            } else if mod.format == .it {
+                ch.itMode = true
+                ch.itLinearMode = mod.linearFrequency
+                ch.itInstrumentMode = mod.itProperties?.usesInstruments ?? false
+                ch.itPatternState = ITPatternChannelState(
+                    channelVolume: i < mod.channelVolumes.count ? mod.channelVolumes[i] : 64
+                )
+                ch.periodScale = 4
+                ch.periodMin = 1
+                ch.periodMax = mod.linearFrequency ? 7680 : 65_535
+                if i < mod.channelDisabled.count, mod.channelDisabled[i] {
+                    ch.isMuted = true
+                }
             }
         }
     }
@@ -398,7 +415,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.useInterpolation = self.useInterpolation
         state.palClock = self.palClock
         state.globalVolume = Float(mod.initialGlobalVolume)
-        state.clockRateOverride = mod.format == .s3m ? 14317056.0 : 0
+        state.clockRateOverride = (mod.format == .s3m || mod.format == .it) ? 14317056.0 : 0
         state.elapsedFrames = 0
 
         // Wurde im gestoppten Zustand per Slider eine Startposition gewaehlt,
@@ -560,7 +577,19 @@ public final class ModPlayerCoordinator: ObservableObject {
         var gvol = mod.initialGlobalVolume
         func scan(_ r: Row) {
             for n in r.notes where n.hasEffect {
-                if n.effectId == 0x0F {
+                if n.effectId > ModuleEffect.impulseTrackerCommandBase,
+                   n.effectId <= ModuleEffect.impulseTrackerCommandBase + 26 {
+                    switch n.effectId - ModuleEffect.impulseTrackerCommandBase {
+                    case 1:
+                        if n.effectData > 0 { speed = n.effectData }
+                    case 20:
+                        if n.effectData >= 0x20 { bpm = n.effectData }
+                    case 22:
+                        if n.effectData <= 128 { gvol = n.effectData }
+                    default:
+                        break
+                    }
+                } else if n.effectId == 0x0F {
                     if n.effectData >= 1 && n.effectData <= 31 { speed = n.effectData }
                     else if n.effectData >= 32 { bpm = n.effectData }
                 } else if n.effectId == ModuleEffect.setSpeed {
@@ -825,7 +854,16 @@ public final class ModPlayerCoordinator: ObservableObject {
         // lineares 4/N machte 16-Kanal-S3Ms ~12 dB zu leise (praktisch stumm).
         // Rest-Spitzen fängt der tanh-Limiter weich ab.
         let channelCount = dspChannels.count
-        let mixGain: Float = channelCount > 4 ? (4.0 / Float(channelCount)).squareRoot() : 1.0
+        let mixGain: Float
+        if mod.format == .it {
+            // ITs reservieren stets 64 logische Kanäle; deren Zahl darf den Mix
+            // nicht pauschal absenken. Stattdessen ist das Headerfeld Mixing
+            // Volume (0...128, 64 = neutral) der vorgesehene Masterfaktor.
+            mixGain = Float(mod.itProperties?.mixVolume ?? 64) / 64.0
+        } else {
+            mixGain = channelCount > 4 ? (4.0 / Float(channelCount)).squareRoot() : 1.0
+        }
+        let globalVolumeScale = Float(mod.globalVolumeScale.rawValue)
 
         return { (isSilence, timestamp, frameCount, outputData) -> OSStatus in
             let buffers = UnsafeMutableAudioBufferListPointer(outputData)
@@ -858,7 +896,7 @@ public final class ModPlayerCoordinator: ObservableObject {
 
                 let hasSolo = dspChannels.contains(where: { $0.isSoloed })
                 // Globale Lautstärke (S3M Vxx) wirkt auf alle Kanäle gleich.
-                let globalGain = state.globalVolume / 64.0
+                let globalGain = state.globalVolume / globalVolumeScale
                 let captureStems = capture?.stemsPointer
                 let captureFrameCapacity = capture?.frameCapacity ?? 0
 
@@ -1055,7 +1093,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.outputsPerTick = sampleRate * 60.0 / (Double(mod.initialTempo) * 24.0)
         state.outputsUntilNextTick = 0.0
         state.globalVolume = Float(mod.initialGlobalVolume)
-        state.clockRateOverride = mod.format == .s3m ? 14317056.0 : 0
+        state.clockRateOverride = (mod.format == .s3m || mod.format == .it) ? 14317056.0 : 0
         return state
     }
 
@@ -1243,7 +1281,13 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
 
         let idx = Int(ch.sampleIndex)
-        guard idx >= 0, idx < smp.pcm.count else { return 0.0 }
+        guard idx >= 0, idx < smp.pcm.count else {
+            // Ein beendetes One-Shot bleibt beendet. Das ist insbesondere für
+            // IT Qxy wichtig: sehr kurze Samples werden nicht später aus dem
+            // Nichts erneut gestartet.
+            if !smp.isLooped { ch.playing = false }
+            return 0.0
+        }
 
         let sampleVal: Float
         if smp.isLooped && useInterpolation {
@@ -1266,7 +1310,7 @@ public final class ModPlayerCoordinator: ObservableObject {
             wrapLoopedSampleIndexIfNeeded(channel: ch, sample: smp)
         }
 
-        return sampleVal * ch.currentVolume / 64.0 * ch.xmVolumeScale
+        return sampleVal * ch.currentVolume / 64.0 * ch.xmVolumeScale * ch.itVolumeScale
     }
 
     nonisolated private static func wrapLoopedSampleIndexIfNeeded(channel ch: DSPChannel, sample smp: Sample) {

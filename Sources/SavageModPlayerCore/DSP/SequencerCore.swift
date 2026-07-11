@@ -29,6 +29,12 @@ enum SequencerCore {
             }
         }
 
+        // IT-Tempo-Slides wirken nur auf den Folgeticks der aktuellen Zeile.
+        if mod.format == .it, state.tempoSlide != 0, state.tick > 0 {
+            state.bpm = max(32, min(255, state.bpm + state.tempoSlide))
+            state.outputsPerTick = sampleRate * 60.0 / (Double(state.bpm) * 24.0)
+        }
+
         let clockRate = state.clockRateOverride > 0
             ? state.clockRateOverride
             : (state.palClock ? 3546894.6 : 3579545.25)
@@ -77,6 +83,11 @@ enum SequencerCore {
             }
         }
 
+        if mod.format == .it {
+            let rowCount = max(1, patternRowCount(mod, at: targetPosition))
+            targetRow = max(0, min(rowCount - 1, targetRow))
+        }
+
         state.position = targetPosition
         state.rowIndex = targetRow
 
@@ -95,6 +106,7 @@ enum SequencerCore {
         let row = pattern.rows[state.rowIndex]
         guard row.notes.count >= channels.count else { return }
 
+        if mod.format == .it { state.tempoSlide = 0 }
         for i in 0..<channels.count {
             let note = row.notes[i]
             let channel = channels[i]
@@ -115,6 +127,40 @@ enum SequencerCore {
         state: RealtimePlaybackState,
         sampleRate: Double
     ) {
+        if note.hasEffect,
+           note.effectId > ModuleEffect.impulseTrackerCommandBase,
+           note.effectId <= ModuleEffect.impulseTrackerCommandBase + 26 {
+            let command = note.effectId - ModuleEffect.impulseTrackerCommandBase
+            switch command {
+            case 1: // Axx: Speed
+                if note.effectData > 0 { state.ticksPerRow = note.effectData }
+            case 2: // Bxx: Order-Sprung; Parser hat das Ziel bereits remappt.
+                state.positionJump = note.effectData
+            case 3: // Cxx: hexadezimale Zielzeile im nächsten Pattern.
+                state.patternBreak = note.effectData
+            case 20: // Txx: Tempo setzen oder pro Folgetick verschieben.
+                let value = channel.itPatternState?.remembered(
+                    command: command,
+                    parameter: note.effectData
+                ) ?? note.effectData
+                if value >= 0x20 {
+                    state.bpm = value
+                    state.outputsPerTick = sampleRate * 60.0 / (Double(value) * 24.0)
+                } else if value >= 0x10 {
+                    state.tempoSlide = value & 0x0F
+                } else {
+                    state.tempoSlide = -(value & 0x0F)
+                }
+            case 22: // Vxx: IT Global Volume 0...128
+                if note.effectData <= 128 {
+                    state.globalVolume = Float(note.effectData)
+                }
+            default:
+                break
+            }
+            return
+        }
+
         if note.hasEffect && note.effectId == 0x0B {
             state.positionJump = note.effectData
         } else if note.hasEffect && note.effectId == 0x0D {

@@ -35,6 +35,21 @@ public final class DSPChannel: Sendable {
         return Float(7680 - realNote * 64) - Float(finetune) / 2.0
     }
 
+    // IT linear: 64 Periodeneinheiten pro Halbton, C-5 liegt bei 3840. Die
+    // Sample-C5Speed fließt erst bei der Frequenzberechnung ein.
+    public static func itLinearPeriod(key: Int) -> Float {
+        guard key >= 0, key < 120 else { return 0 }
+        return Float(7680 - key * 64)
+    }
+
+    // IT Amiga-Slides arbeiten auf echten Perioden. Aus C5Speed und Zielnote
+    // entsteht die Periode gegen die IT/ST3-Clock von 14.317056 MHz.
+    public static func itAmigaPeriod(key: Int, c5Speed: Int) -> Float {
+        guard key >= 0, key < 120, c5Speed > 0 else { return 0 }
+        let frequency = Double(c5Speed) * pow(2.0, Double(key - 60) / 12.0)
+        return Float(14_317_056.0 / frequency)
+    }
+
     // Nonisolated unsafe to bypass strict concurrency warnings inside lock-free real-time audio thread
     // instrument = aktuelles Instrument (für XM-Hüllkurven/Fadeout/Auto-Vibrato).
     // sample = das gerade klingende Sample (PCM/Loop/Tuning) — bei XM per Keymap
@@ -84,6 +99,8 @@ public final class DSPChannel: Sendable {
     // XM Kxx: Key-Off soll auf diesem Tick ausgelöst werden (-1 = inaktiv).
     nonisolated(unsafe) public var keyOffTick: Int = -1
     nonisolated(unsafe) public var retrigger: Int = 0
+    // IT Qxy verändert bei jedem Retrigger zusätzlich die Lautstärke über x.
+    nonisolated(unsafe) public var retriggerVolumeMode: Int = 0
     // -1 bedeutet: kein EDx-Delay aktiv. 0 ist ein echter Tick und darf
     // leere Rows nicht versehentlich wie eine verzögerte Note auslösen.
     nonisolated(unsafe) public var delayNote: Int = -1
@@ -103,6 +120,12 @@ public final class DSPChannel: Sendable {
     // XM-Modus mit linearer Frequenztabelle: Periode aus Halbton (Key +
     // relativeNote) + Finetune, Frequenz exponentiell statt clockRate/Periode.
     nonisolated(unsafe) public var xmLinearMode: Bool = false
+    // IT benutzt einen eigenen logischen Kanalzustand. `itLinearMode` wählt
+    // zwischen logarithmischer linearer Periode und klassischer Amiga-Periode.
+    nonisolated(unsafe) public var itMode: Bool = false
+    nonisolated(unsafe) public var itLinearMode: Bool = false
+    nonisolated(unsafe) public var itInstrumentMode: Bool = false
+    nonisolated(unsafe) public var itPatternState: ITPatternChannelState?
     // XM: Note wurde losgelassen (Key-Off / Note 97). Gibt Sustain frei + startet
     // den Fadeout.
     nonisolated(unsafe) public var keyReleased: Bool = false
@@ -132,6 +155,15 @@ public final class DSPChannel: Sendable {
         xmLinearMode ? envVolumeFactor * (Float(fadeVolume) / 65536.0) : 1.0
     }
 
+    // IT-Sample-Global-Volume und Channel Volume sind unabhängig von der
+    // normalen 0...64-Voice-Lautstärke. Andere Formate bleiben exakt bei 1.
+    public var itVolumeScale: Float {
+        guard itMode else { return 1.0 }
+        let sampleGlobal = Float(sample?.itProperties?.globalVolume ?? 64) / 64.0
+        let channelGlobal = (itPatternState?.channelVolume ?? 64) / 64.0
+        return sampleGlobal * channelGlobal
+    }
+
     // Effektives Panning inkl. XM-Panning-Hüllkurve. Ohne XM/ohne Pan-Hüllkurve
     // das rohe Kanal-Panning (MOD/S3M unverändert). Formel §8 der XM-Referenz.
     public var effectivePanning: Float {
@@ -145,7 +177,7 @@ public final class DSPChannel: Sendable {
     // Skaliert den Portamento-Slide-Schritt (1xx/2xx/3xx). Amiga (MOD) = 1;
     // S3M und XM haben 4x feinere Perioden (64 Einheiten/Halbton) -> ×4.
     // Getrennt von periodScale gehalten (Vibrato-Skalierung ist separat/ungeklärt).
-    private var portaScale: Float { (s3mMode || xmLinearMode) ? 4.0 : 1.0 }
+    private var portaScale: Float { (s3mMode || xmLinearMode || itMode) ? 4.0 : 1.0 }
     // Perioden-Klemmgrenzen (Amiga: 113..856, S3M: 64..32767).
     nonisolated(unsafe) public var periodMin: Float = 113
     nonisolated(unsafe) public var periodMax: Float = 856
@@ -170,6 +202,7 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var setInstrument: Instrument?
     nonisolated(unsafe) public var setSample: Sample?
     nonisolated(unsafe) public var setVolume: Float?
+    nonisolated(unsafe) public var setPanning: Float?
     nonisolated(unsafe) public var setPeriod: Float?
     nonisolated(unsafe) public var setCurrentPeriod: Bool = false
     nonisolated(unsafe) public var setSampleIndex: Double?
@@ -211,6 +244,7 @@ public final class DSPChannel: Sendable {
         cutNoteTick = -1
         keyOffTick = -1
         retrigger = 0
+        retriggerVolumeMode = 0
         delayNote = -1
         arpActive = false
         arpX = 0
@@ -220,6 +254,10 @@ public final class DSPChannel: Sendable {
 
         s3mMode = false
         xmLinearMode = false
+        itMode = false
+        itLinearMode = false
+        itInstrumentMode = false
+        itPatternState = nil
         keyReleased = false
         volEnvPos = 0
         panEnvPos = 0
@@ -246,6 +284,7 @@ public final class DSPChannel: Sendable {
         setInstrument = nil
         setSample = nil
         setVolume = nil
+        setPanning = nil
         setPeriod = nil
         setCurrentPeriod = false
         setSampleIndex = nil
@@ -313,6 +352,7 @@ public final class DSPChannel: Sendable {
         self.setInstrument = nil
         self.setSample = nil
         self.setVolume = nil
+        self.setPanning = nil
         self.setPeriod = nil
         self.delayNote = -1
         self.cutNoteTick = -1
@@ -327,6 +367,9 @@ public final class DSPChannel: Sendable {
                 let noteForMap = (note.key >= 0 && note.key < 96) ? note.key : 0
                 self.setSample = inst.sample(forNote: noteForMap)
                 self.setVolume = Float(self.setSample?.volume ?? 0)
+                if itMode, let defaultPan = self.setSample?.itProperties?.defaultPanning {
+                    self.setPanning = Float(defaultPan) / 64.0
+                }
             } else {
                 self.setInstrument = nil
                 self.setSample = nil
@@ -340,6 +383,10 @@ public final class DSPChannel: Sendable {
         if note.key == Note.keyCut {
             // S3M-Note-Cut (^^): Sample sofort stoppen.
             self.playing = false
+        } else if note.key == Note.keyFade {
+            // Im IT-Sample-Modus ist Note Fade ausdrücklich wirkungslos. Der
+            // Instrument-Modus startet hier ab M6 den Instrument-Fadeout.
+            if itMode, itInstrumentMode { self.playing = false }
         } else if note.key == Note.keyOff {
             // XM-Key-Off (Note 97): Sustain freigeben, Fadeout startet.
             self.keyReleased = true
@@ -360,7 +407,14 @@ public final class DSPChannel: Sendable {
             self.keyReleased = false
         } else if note.key >= 0 {
             let activeSample = self.setSample ?? self.sample
-            if xmLinearMode {
+            if itLinearMode {
+                self.setPeriod = DSPChannel.itLinearPeriod(key: note.key)
+            } else if itMode {
+                self.setPeriod = DSPChannel.itAmigaPeriod(
+                    key: note.key,
+                    c5Speed: activeSample?.itProperties?.c5Speed ?? activeSample?.c2spd ?? 8363
+                )
+            } else if xmLinearMode {
                 // XM: Periode aus (Key + Sample-relativeNote) + Sample-Finetune,
                 // lineares Modell.
                 let realNote = note.key + (activeSample?.relativeNote ?? 0)
@@ -376,7 +430,7 @@ public final class DSPChannel: Sendable {
         }
 
         // S3M-Volume-Column überschreibt die Instrument-Default-Lautstärke.
-        if note.volume >= 0 {
+        if note.volume >= 0, !itMode {
             self.setVolume = Float(min(64, note.volume))
         }
 
@@ -385,6 +439,7 @@ public final class DSPChannel: Sendable {
         // XM-Volume-Column (zweite Effektspalte) NACH dem Haupteffekt auswerten,
         // damit sie bei Lautstärke/Panning Vorrang hat (FT2-Verhalten).
         if xmLinearMode { self.applyXMVolumeColumn(note.volCmd) }
+        if itMode { self.applyITVolumeColumn(note.volume) }
 
         if self.delayNote > 0 {
             return
@@ -398,6 +453,9 @@ public final class DSPChannel: Sendable {
         if let vol = self.setVolume {
             self.volume = vol
             self.currentVolume = vol
+        }
+        if let pan = self.setPanning {
+            self.panning = max(0, min(1, pan))
         }
         
         if let per = self.setPeriod {
@@ -538,6 +596,16 @@ public final class DSPChannel: Sendable {
         let effectData = note.effectData
         let effectHigh = note.effectHigh
         let effectLow = note.effectLow
+
+        if itMode,
+           effectId > ModuleEffect.impulseTrackerCommandBase,
+           effectId <= ModuleEffect.impulseTrackerCommandBase + 26 {
+            applyITEffect(
+                command: effectId - ModuleEffect.impulseTrackerCommandBase,
+                parameter: effectData
+            )
+            return
+        }
         
         switch effectId {
         case 0x00: // ARPEGGIO
@@ -757,6 +825,168 @@ public final class DSPChannel: Sendable {
         }
     }
 
+    // IT-Buchstabeneffekte im Sample-Modus. Globale Befehle (A/B/C/T/V)
+    // verarbeitet der Sequencer; hier bleiben die kanalbezogenen Familien.
+    private func applyITEffect(command: Int, parameter: Int) {
+        guard let state = itPatternState else { return }
+        switch command {
+        case 4: // Dxy: Volume Slide, Memory wird später auch von K/L genutzt.
+            applyITVolumeSlide(state.remembered(command: command, parameter: parameter))
+        case 5: // Exx: Portamento down
+            applyITPorta(
+                state.remembered(command: command, parameter: parameter),
+                direction: 1
+            )
+        case 6: // Fxx: Portamento up
+            applyITPorta(
+                state.remembered(command: command, parameter: parameter),
+                direction: -1
+            )
+        case 7: // Gxx: Tone Portamento
+            let value = state.remembered(command: command, parameter: parameter)
+            portamento = true
+            if value > 0 { portamentoSpeed = Float(value) * portaScale }
+            periodDelta = portamentoSpeed
+            setCurrentPeriod = false
+            setSampleIndex = nil
+        case 8: // Hxy: Vibrato
+            let value = state.remembered(command: command, parameter: parameter)
+            if value >> 4 > 0 { vibratoSpeed = Float(value >> 4) }
+            if value & 0x0F > 0 { vibratoDepth = Float(value & 0x0F) }
+            vibrato = true
+        case 9: // Ixy: Tremor
+            let value = state.remembered(command: command, parameter: parameter)
+            tremorOn = ((value >> 4) & 0x0F) + 1
+            tremorOff = (value & 0x0F) + 1
+            tremorActive = true
+        case 10: // Jxy: Arpeggio
+            let value = state.remembered(command: command, parameter: parameter)
+            arpX = (value >> 4) & 0x0F
+            arpY = value & 0x0F
+            arpActive = value != 0
+        case 11: // Kxy: Vibrato + Dxy-Memory
+            vibrato = true
+            applyITVolumeSlide(state.remembered(
+                command: command, parameter: parameter, memoryCommand: 4
+            ))
+        case 12: // Lxy: Tone Portamento + Dxy-Memory
+            portamento = true
+            periodDelta = portamentoSpeed
+            setCurrentPeriod = false
+            setSampleIndex = nil
+            applyITVolumeSlide(state.remembered(
+                command: command, parameter: parameter, memoryCommand: 4
+            ))
+        case 15: // Oxx: Sample Offset
+            let value = state.remembered(command: command, parameter: parameter)
+            sampleOffsetMemory = Double(value) * 256.0
+            setSampleIndex = sampleOffsetMemory
+        case 17: // Qxy: Retrigger mit Lautstärkemodus x alle y Ticks
+            let value = state.remembered(command: command, parameter: parameter)
+            retriggerVolumeMode = (value >> 4) & 0x0F
+            retrigger = value & 0x0F
+        case 18: // Rxy: Tremolo
+            let value = state.remembered(command: command, parameter: parameter)
+            if value >> 4 > 0 { tremoloSpeed = Float(value >> 4) }
+            if value & 0x0F > 0 { tremoloDepth = Float(value & 0x0F) }
+            tremolo = true
+        case 21: // Uxy: Fine Vibrato; H/U teilen Phase und Parameterzustand.
+            let value = state.remembered(command: command, parameter: parameter, memoryCommand: 8)
+            if value >> 4 > 0 { vibratoSpeed = Float(value >> 4) }
+            if value & 0x0F > 0 { vibratoDepth = Float(value & 0x0F) / 4.0 }
+            vibrato = true
+        case 24: // Xxx: absolutes Panning 0...255
+            setPanning = Float(parameter) / 255.0
+        default:
+            break
+        }
+    }
+
+    // IT-Volume-Column bleibt roh im Patternmodell. Die Bereiche entsprechen
+    // ITTECH/OpenMPT; 213...222 sind reserviert und werden ignoriert.
+    private func applyITVolumeColumn(_ value: Int) {
+        guard value >= 0 else { return }
+        switch value {
+        case 0...64:
+            setVolume = Float(value)
+        case 65...74:
+            applyFineVolume(delta: Float(value - 65))
+        case 75...84:
+            applyFineVolume(delta: -Float(value - 75))
+        case 85...94:
+            volColVolSlide = Float(value - 85)
+        case 95...104:
+            volColVolSlide = -Float(value - 95)
+        case 105...114:
+            periodDelta = Float(value - 105) * portaScale
+        case 115...124:
+            periodDelta = -Float(value - 115) * portaScale
+        case 128...192:
+            setPanning = Float(value - 128) / 64.0
+        case 193...202:
+            // Feste Zuordnung ohne lokales Array: playNote läuft im Audio-Thread.
+            let speed: Int
+            switch value - 193 {
+            case 1: speed = 1
+            case 2: speed = 4
+            case 3: speed = 8
+            case 4: speed = 16
+            case 5: speed = 32
+            case 6: speed = 64
+            case 7: speed = 96
+            case 8: speed = 128
+            default: speed = 0
+            }
+            portamento = true
+            if speed > 0 { portamentoSpeed = Float(speed) }
+            periodDelta = portamentoSpeed
+            setCurrentPeriod = false
+            setSampleIndex = nil
+        case 203...212:
+            let depth = value - 203
+            if depth > 0 { vibratoDepth = Float(depth) }
+            vibrato = true
+        case 223...232:
+            setSampleIndex = Double(value - 223) * 256.0
+        default:
+            break
+        }
+    }
+
+    // IT Dxy: reguläre Slides auf Tick > 0, Fine-/Extra-Fine-Formen einmalig
+    // auf Tick 0. Exakte Old-Effects-Abweichungen folgen gesammelt in M8.
+    private func applyITVolumeSlide(_ parameter: Int) {
+        let high = (parameter >> 4) & 0x0F
+        let low = parameter & 0x0F
+        if low == 0x0F, high > 0 {
+            applyFineVolume(delta: Float(high))
+        } else if high == 0x0F, low > 0 {
+            applyFineVolume(delta: -Float(low))
+        } else if low == 0x0E, high > 0 {
+            applyFineVolume(delta: Float(high))
+        } else if high == 0x0E, low > 0 {
+            applyFineVolume(delta: -Float(low))
+        } else if high > 0 {
+            volumeSlide = Float(high)
+        } else if low > 0 {
+            volumeSlide = -Float(low)
+        }
+    }
+
+    // IT E/F: normale Portamenti laufen pro Tick, F-/E-Highnibble sind
+    // Fine/Extra-Fine und wirken sofort auf die aktuelle Zielperiode.
+    private func applyITPorta(_ parameter: Int, direction: Float) {
+        let high = (parameter >> 4) & 0x0F
+        let low = parameter & 0x0F
+        if high == 0x0F {
+            applyFinePeriod(delta: direction * Float(low) * portaScale)
+        } else if high == 0x0E {
+            applyFinePeriod(delta: direction * Float(low))
+        } else {
+            periodDelta = direction * Float(parameter) * portaScale
+        }
+    }
+
     // S3M Dxy inkl. Fine-Slides (DxF/DFy) und geteiltem Memory (Param 0 =
     // letzten Wert wiederholen). Fine-Slides wirken einmalig auf Tick 0,
     // normale Slides pro Tick > 0 (volumeSlide).
@@ -899,10 +1129,15 @@ public final class DSPChannel: Sendable {
             case 1: semis = self.arpX
             default: semis = self.arpY
             }
-            self.currentPeriod = self.period / Float(pow(2.0, Double(Float(semis) / 12.0)))
+            if itLinearMode {
+                self.currentPeriod = self.period - Float(semis * 64)
+            } else {
+                self.currentPeriod = self.period / Float(pow(2.0, Double(Float(semis) / 12.0)))
+            }
         }
-        else if self.retrigger > 0 && (tick % self.retrigger) == 0 {
+        else if self.retrigger > 0 && self.playing && tick > 0 && (tick % self.retrigger) == 0 {
             self.sampleIndex = 0.0
+            if itMode { applyITRetriggerVolume() }
         }
         else if self.delayNote >= 0 && self.delayNote == tick {
             self.instrument = self.setInstrument
@@ -935,12 +1170,14 @@ public final class DSPChannel: Sendable {
         // Key-Off, Auto-Vibrato als Perioden-Delta (nur für die Frequenz, nicht in
         // currentPeriod akkumuliert). Alles gegated — MOD/S3M unberührt.
         var xmPeriodDelta: Float = 0
+        // XM und IT besitzen eine zweite Effektspalte. Deren Volume-Slide wirkt
+        // wie die Hauptspalten-Slides erst ab Tick 1.
+        if (xmLinearMode || itMode), self.volColVolSlide != 0, tick > 0 {
+            self.currentVolume = max(0.0, min(64.0, self.currentVolume + self.volColVolSlide))
+        }
+
         if xmLinearMode {
-            // Volume-Column-Volume-Slide und Panning-Slide (erst ab Tick 1, wie
-            // die anderen Slides).
-            if self.volColVolSlide != 0 && tick > 0 {
-                self.currentVolume = max(0.0, min(64.0, self.currentVolume + self.volColVolSlide))
-            }
+            // Panning-Slide der XM-Volume-Column (erst ab Tick 1).
             if self.panSlide != 0 && tick > 0 {
                 self.panning = max(0.0, min(1.0, self.panning + self.panSlide / 255.0))
             }
@@ -974,7 +1211,10 @@ public final class DSPChannel: Sendable {
             // ST3-Clock geteilt durch die Periode. (pow ist alloc-frei — wie das
             // Arpeggio oben — und damit im Render-Block zulässig.)
             let hz: Double
-            if xmLinearMode {
+            if itLinearMode {
+                let c5Speed = sample?.itProperties?.c5Speed ?? sample?.c2spd ?? 8363
+                hz = Double(c5Speed) * pow(2.0, (3840.0 - Double(effPeriod)) / 768.0)
+            } else if xmLinearMode {
                 hz = 8363.0 * pow(2.0, (4608.0 - Double(effPeriod)) / 768.0)
             } else {
                 hz = clockRate / Double(effPeriod)
@@ -988,5 +1228,31 @@ public final class DSPChannel: Sendable {
         if self.cutNoteTick == tick {
             self.currentVolume = 0.0
         }
+    }
+
+    // Lautstärketabelle von IT Qxy. Der Wert bleibt wie alle Tracker-Volumes
+    // im Bereich 0...64 und aktualisiert Basis- und aktuelle Lautstärke.
+    private func applyITRetriggerVolume() {
+        var value = currentVolume
+        switch retriggerVolumeMode {
+        case 0x1: value -= 1
+        case 0x2: value -= 2
+        case 0x3: value -= 4
+        case 0x4: value -= 8
+        case 0x5: value -= 16
+        case 0x6: value *= 2.0 / 3.0
+        case 0x7: value *= 0.5
+        case 0x9: value += 1
+        case 0xA: value += 2
+        case 0xB: value += 4
+        case 0xC: value += 8
+        case 0xD: value += 16
+        case 0xE: value *= 1.5
+        case 0xF: value *= 2.0
+        default: break
+        }
+        value = max(0, min(64, value))
+        volume = value
+        currentVolume = value
     }
 }
