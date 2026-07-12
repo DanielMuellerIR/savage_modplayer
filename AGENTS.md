@@ -391,6 +391,140 @@ XM-Kern (M0–M5) steht, committet, getestet; im echten App-GUI verifiziert (spi
 
 **Hinweis Standard-Playlist-Ordner:** Durch das App-Starten aus dem Repo wurde der Auto-Load-/Standard-Ordner auf `audio/` gezogen; Daniel hatte einen anderen gesetzt. Nächste Session ggf. zurückstellen anbieten (Wert steckt in `@AppStorage`).
 
+## UI-/Fix-Plan 2026-07-12 (GEPLANT — Ausführung nächste Session)
+
+Stand nach dieser Session: bei **v1.5.37** (Splitter-Optik/Greifbarkeit/Cursor +
+Playlist-Favoriten sind schon umgesetzt und committet). Die folgenden Punkte hat
+Daniel **nur planen** lassen; Umsetzung nächste Session. Reihenfolge unten =
+sinnvolle Bearbeitungsreihenfolge (klein→groß, Unabhängiges zuerst). Vor Beginn
+diesen Block lesen; nach jedem erledigten Punkt hier abhaken/streichen.
+
+Beantwortete Rückfragen (2026-07-12):
+- **Font-Skalierung:** NUR UI-Text skalieren, das **Tracker-Pattern-Grid bleibt
+  fix** (evtl. später eigener Zoom).
+- **Datei-Check:** „funktioniert" = parst + rendert ein paar Sekunden ohne
+  Fehler/Absturz. Engine/Parser-Bugs fixen; wirklich kaputte/unsupportete
+  Dateien mit Begründung melden (nicht erzwingen).
+- **Master-Oszi-Zeile:** vorerst NICHT anfassen, nur als Notiz (Punkt 9).
+
+### 1. Format-Badge auch im Light Mode (klein) — Punkt „Badges fehlen"
+Die Modul-Typ-Badge („IMPULSE TRACKER" etc.) wird aktuell nur im Dark-Mode
+gerendert: `MainView+HeaderViews.swift:33` steht `if theme == .cyber { … }`.
+→ Badge auch im `.workbench` (Light) zeigen, mit light-tauglichen Farben
+(Dark: `background(spaceAccent)` + `foregroundColor(.black)`; Light-Vorschlag:
+`background(lightAccent)` + `foregroundColor(.white)`, `cornerRadius` wie sonst
+im Light = 0). `formatBadgeText` (Zeile 10) bleibt unverändert.
+Abnahme: Badge in beiden Themes sichtbar/lesbar.
+
+### 2. Verlauf („ZULETZT GESPIELT") Light-Mode lesbar + eine Stufe größer — Punkt B
+In `MainView+PlaylistViews.swift`, Abschnitt „ZULETZT GESPIELT":
+- Der Titel-Text „ZULETZT GESPIELT" nutzt `.foregroundColor(.spaceTextSecondary)`
+  (~Zeile 240) und die Einträge `.foregroundColor(.spaceTextSecondary.opacity(0.8))`
+  (~Zeile 271) — im Light-Mode ist `spaceTextSecondary` ein helles Blau-Grau →
+  auf hellem Grund unlesbar. → themen-abhängig machen: Light =
+  `lightTextPrimary`/`lightTextSecondary` (dunkel), Dark = wie bisher.
+- Schrift der Einträge von `size: 10` auf `12` (eine Stufe größer); Titel ggf.
+  von 9 auf 10.
+Abnahme: Verlauf im Light-Mode klar lesbar, Einträge sichtbar größer.
+
+### 3. Favoriten-Stern-Farbe themen-abhängig — Punkt G
+Die neuen Favoriten-Sterne (umgesetzt in dieser Session) im Light-Mode NICHT gelb,
+sondern mit dem dunklen Blau `lightAccent` (#0055B5) füllen; Dark-Mode bleibt gelb.
+Betrifft in `MainView+PlaylistViews.swift`: (a) Zeilen-Stern (`fav ? .yellow : …`)
+und (b) Kopf-Filter-Stern (`favoritesOnly ? .yellow : …`). → statt `.yellow`
+jeweils `theme == .workbench ? Color.lightAccent : .yellow`.
+Abnahme: markierte Sterne im Light dunkelblau, im Dark gelb.
+
+### 4. Sidebar-Tabs (PLAYLIST/INSTRUMENTE) als Segmented-Control — Punkt F
+Aktuell: `TabButton` (`SmallControls.swift:9`) mit Unterstrich-`Rectangle` (height 2)
+unter dem aktiven Tab; darunter zusätzlich ein `Divider()` (`MainView.swift:140-141`).
+Der Tab-Block frisst viel vertikalen Platz und sieht mäßig aus.
+→ Umbau nach Vorbild des Light/Dark-Switchers (`MainView+HeaderViews.swift:123-144`):
+kompaktes Segmented-Control (padded Text, aktiv = Akzent-Hintergrund + weiße
+Schrift, inaktiv = Flächen-Hintergrund; Wrapper mit `padding(3)` + `background` +
+`cornerRadius`). KEIN Unterstrich mehr, den **`Divider()` darunter entfernen**
+(`MainView.swift:140`), vertikales Padding reduzieren. Das Suchfeld „Titel
+filtern…" reicht als optischer Trenner.
+Abnahme: Tabs kompakt im Switcher-Look, keine Linien mehr, weniger Höhe.
+
+### 5. Transport: vier Seek-Buttons neben Stopp; 15/30 am Slider raus — Punkt E
+In `MainView+ControlPanel.swift`:
+- Linker Block (`:38-52`): die zwei Buttons `gobackward.10`/`goforward.10` durch
+  VIER ersetzen — `gobackward.30` (−30s), `gobackward.10` (−10s), `goforward.10`
+  (+10s), `goforward.30` (+30s), je `coordinator.seek(bySeconds: ∓30/∓10)`,
+  gleiches Label/Style (`transportButtonLabel`, `PremiumHoverButtonStyle`),
+  Tooltips „30/10 Sekunden zurück/vor".
+- Mittelblock am Slider: die Buttons `gobackward.15` (`:115-122`) und
+  `goforward.30` (`:139-146`) **entfernen** — Slider steht dann allein zwischen
+  verstrichener und Gesamtzeit.
+Abnahme: nur noch EIN Satz Seek-Buttons (−30/−10/+10/+30) neben Stopp; am Slider
+keine Sprung-Buttons mehr.
+
+### 6. Globale Schriftgrößen-Skalierung CMD+ / CMD− / CMD+0 — Punkt C (GRÖSSTER)
+Vorbild Mucke_Baby (`/Users/danielmuller/git/Mucke_Baby/Sources/MacRadioApp.swift`).
+Kein globaler Auto-Trick möglich (SwiftUI-macOS ignoriert `dynamicTypeSize`) —
+jede UI-`.system(size: N)`-Stelle muss den Faktor selbst einrechnen. Nur UI, NICHT
+das Grid (Antwort Daniel).
+Mechanik zum Nachbauen:
+1. `@AppStorage("savage.uiZoom") var uiZoom = 0` (ganzzahlige Stufe, persistiert).
+2. `static func fontScale(_ z: Int) -> CGFloat { max(0.7, min(1.8, 1 + CGFloat(z)*0.13)) }`
+   (Clamp/Schrittweite wie Mucke_Baby; Stufen-Clamp in den Buttons −3…+5).
+3. Eigener `EnvironmentKey` `uiFontScale` (Default 1), am Szenen-Root gesetzt:
+   `.environment(\.uiFontScale, Self.fontScale(uiZoom))` (in `AppMain.swift` am
+   `MainView()` bzw. am `Window`-Inhalt).
+4. `CommandMenu("Darstellung")` in `AppMain.swift` (dort gibt es schon `.commands`)
+   mit `keyboardShortcut("+"/"-"/"0", modifiers: .command)` → `uiZoom` erhöhen/
+   senken/0; zusätzlich versteckter `"="`-Button (CMD+= als zweites Zoom-in, weil
+   ⌘+ auf manchen Layouts Shift braucht) im `.background` von MainView.
+5. Views lesen `@Environment(\.uiFontScale) var uiFontScale` und multiplizieren.
+   Sauberster Weg für die vielen Stellen: EIN zentraler Helfer, z.B. ViewModifier
+   `.scaledFont(size:weight:)` oder freie Funktion `scaledSystem(_ size:_ weight:)`,
+   der `uiFontScale` aus dem Environment zieht und `.system(size: size*scale)`
+   liefert. Dann alle UI-`.font(.system(size: N …))` in den View-Dateien
+   (`MainView*.swift`, `SmallControls.swift`, `TransportViews.swift`,
+   `MainView+ControlPanel.swift`, `MainView+HeaderViews.swift`, `MainView+PlaylistViews.swift`)
+   mechanisch darauf umstellen. **NICHT** die `TrackerGridView`-Schrift anfassen
+   (Grid bleibt fix). Achtung: fixe `.frame`/Höhen an skalierten Texten ggf.
+   mitskalieren oder auf intrinsische Größe umstellen, sonst wird Text
+   abgeschnitten. Genug Umfang → als eigener Commit, ggf. teilweise delegierbar.
+Abnahme: CMD+/−/0 skaliert die gesamte UI-Schrift sichtbar, Grid unverändert,
+Stufe überlebt Neustart; Layout bricht bei ±Extremen nicht.
+
+### 7. Tooltips für alle Buttons (außer Play/Pause & Stopp) — Punkt H
+Audit aller `Button`/klickbaren Controls in den View-Dateien; wo `.help("…")`
+fehlt, ergänzen (kurz, präzise, Deutsch, generisches Maskulinum). Ausdrücklich
+AUSGENOMMEN: Play/Pause und Stopp (selbsterklärend). Explizit genannt: der
+Kopf-Filter-Stern („nur Favoriten") hat zwar schon ein `.help`, im Audit
+gegenprüfen. Kandidaten ohne Tooltip prüfen: LED-FILTER/HI-FI-Checkboxen,
+LOOP-Auswahl, Mute/Solo je Kanal, Öffnen, Instrumenten-Tab-Elemente, Volume,
+WAV-Export, Keyboard-HUD, Info, Pattern-Marker, „Leeren", Zeilen-Stern.
+Abnahme: jeder Button außer Play/Pause/Stopp zeigt beim Hover einen Tooltip.
+
+### 8. Defekte abspielbare Dateien in „game mods" reparieren — Punkt A (GROSS)
+Quelle: `~/Nextcloud/Musik/mods/game mods/` — enthält **61 ZIP-Archive**, KEINE
+losen Modul-Dateien; die abspielbaren Module (mod/s3m/xm/it) stecken IN den ZIPs
+(Daniel-Ergänzung: „alle abspielbaren Dateien dort, auch in den zips"). Test-
+Harness: die headless Render-CLI `savage-cli` (Target `SavageCLI`,
+`Sources/SavageCLI/main.swift`) rendert mit DERSELBEN Engine wie die App:
+`savage-cli <datei> --seconds 5 -q -o /dev/null` bzw. `--info`. Plan:
+1. Alle ZIPs nach `$TMP` entpacken (oder pro ZIP), alle Modul-Dateien einsammeln.
+2. Jede Datei durch `savage-cli` jagen (parse + ~5s Render), Exit-Code + stderr
+   erfassen → Liste der Fehlschläge (Crash/Parse-Fehler/Exception).
+3. Fehlschläge nach Format/Ursache gruppieren, Engine/Parser fixen (mit
+   Regressionstest je Fix-Klasse, s. Pflicht-Regressionstests). Wirklich
+   kaputte/unsupportete Dateien mit Begründung sammeln und Daniel melden statt
+   erzwingen.
+Achtung: `~/Nextcloud/**` ist Cloud-Sync — nur LESEN, keine Repos/Code dort
+anlegen; Fixes passieren im Repo-Code, nicht an den Musikdateien.
+Abnahme: Report „X/Y Module spielen, Z mit Begründung nicht"; die fixbaren sind
+grün, Regressionstests dazu.
+
+### 9. Master-Oszilloskop-Zeile — nur Notiz (Punkt I)
+Vorerst NICHT anfassen (Daniel). Das sehr breite Oszi ist platzintensiv, aber
+Leerraum wäre nicht besser. Erst verkleinern/umbauen, wenn ein sinnvoller Inhalt
+für den freiwerdenden Platz existiert (Kandidat, falls mal dringend Platz
+gebraucht wird). Als Idee offen halten.
+
 ## IT-Ausbau (seit 2026-07-10)
 
 Daniel hat die schrittweise Unterstützung von Impulse Tracker (`.it`) freigegeben.
