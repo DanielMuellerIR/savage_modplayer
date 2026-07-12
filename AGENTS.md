@@ -393,10 +393,15 @@ XM-Kern (M0–M5) steht, committet, getestet; im echten App-GUI verifiziert (spi
 
 ## UI-/Fix-Plan 2026-07-12 (in Ausführung)
 
-**Fortschritt (v1.5.38, 2026-07-12, M5):** Punkte **1–7 ERLEDIGT** und auf M5
-per Fenster-Screenshot in Light+Dark verifiziert (Font-Zoom −3…+5 getestet, Grid
-bleibt fix). **Offen: 8 (61-ZIP-Engine-Test, GROSS), 9 (nur Notiz), 10
-(responsiver Kompaktmodus, GROSS).** Randnotiz aus dem Test: Start MIT
+**Fortschritt (v1.5.39, 2026-07-12, M5):** Punkte **1–8 ERLEDIGT**. 1–7 auf M5
+per Fenster-Screenshot in Light+Dark verifiziert (Font-Zoom −3…+5, Grid bleibt
+fix). **Punkt 8:** 61 ZIPs = 646 Module durch `savage-cli` (3 s Render) getestet;
+101 Fehlschläge → drei zu strenge IT-Parser-Validierungen tolerant gemacht
+(channelPan 0xFF → klemmen; Sample-Vibrato außerhalb Spec → klemmen; Loop bei
+Sample-Länge 0 → ignorieren). Ergebnis **646/646 spielen**, 3 Regressionstests
+(synthetische IT-Puffer, keine copyright-Fixtures) in `ITSampleParserTests.swift`,
+volle Suite grün (230 Tests). **Offen: 9 (nur Notiz — nichts zu tun), 10
+(responsiver Kompaktmodus, GROSS).** Randnotiz aus dem GUI-Test: Start MIT
 Datei-Argument (`savage-cli`-Weg NICHT betroffen, nur GUI `open --args <mod>`)
 zeigte im Testlauf kein Hauptfenster — via Autoplay-Ordner startet die GUI normal;
 ist unabhängig von den 1–7-Änderungen (nicht angefasster Code), separat prüfen.
@@ -506,7 +511,7 @@ LOOP-Auswahl, Mute/Solo je Kanal, Öffnen, Instrumenten-Tab-Elemente, Volume,
 WAV-Export, Keyboard-HUD, Info, Pattern-Marker, „Leeren", Zeilen-Stern.
 Abnahme: jeder Button außer Play/Pause/Stopp zeigt beim Hover einen Tooltip.
 
-### 8. Defekte abspielbare Dateien in „game mods" reparieren — Punkt A (GROSS)
+### 8. Defekte abspielbare Dateien in „game mods" reparieren — ✅ ERLEDIGT v1.5.39 — Punkt A (GROSS)
 Quelle: `~/Nextcloud/Musik/mods/game mods/` — enthält **61 ZIP-Archive**, KEINE
 losen Modul-Dateien; die abspielbaren Module (mod/s3m/xm/it) stecken IN den ZIPs
 (Daniel-Ergänzung: „alle abspielbaren Dateien dort, auch in den zips"). Test-

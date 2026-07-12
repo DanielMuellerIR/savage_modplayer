@@ -334,6 +334,49 @@ final class ITSampleParserTests: XCTestCase {
         }
     }
 
+    // MARK: - Regressionen: tolerante IT-Header (game-mods-Sammlung, 2026-07-12)
+    // Die 61 „game mods"-ZIPs enthielten 646 Module; 101 scheiterten an drei zu
+    // strengen Validierungen. OpenMPT klemmt/ignoriert diese Fälle. Die Original-
+    // dateien sind urheberrechtlich geschützte Spielemusik und dürfen nicht ins
+    // (öffentliche) Repo — daher hier minimale, selbst erzeugte IT-Puffer.
+
+    // Deaktivierte/ungenutzte Kanäle werden von manchen Trackern als Pan 0xFF
+    // (Disable-Bit + Pan-Anteil 127, außerhalb 0..64) abgelegt. Früher warf der
+    // Parser „channelPan[..]=255"; jetzt klemmt er auf Mitte.
+    func testChannelPan255IsClampedInsteadOfRejected() throws {
+        var data = makeSampleIT([SampleSpec(name: "s", frameCount: 2, data: [0, 1])])
+        data[data.startIndex + 0x40] = 0xFF   // Kanal 0: 0xFF
+        let module = try ITParser.parse(data: data)   // darf NICHT werfen
+        XCTAssertEqual(module.channelPannings[0], 0.5) // auf Mitte (32/64) geklemmt
+        XCTAssertTrue(module.channelDisabled[0])       // Disable-Bit erkannt
+    }
+
+    // Ungenutzte Sample-Vibrato-Felder außerhalb der IT-Spec (Speed/Depth 0..64,
+    // Typ 0..3) — früher „sample[..].vibrato"-Fehler; jetzt geklemmt.
+    func testOutOfRangeSampleVibratoIsClampedInsteadOfRejected() throws {
+        var spec = SampleSpec(name: "vib", frameCount: 3, data: [0x80, 0x00, 0x7F])
+        spec.vibratoSpeed = 200   // > 64
+        spec.vibratoDepth = 200   // > 64
+        spec.vibratoType = 99     // ungültige Waveform
+        let module = try ITParser.parse(data: makeSampleIT([spec]))   // darf NICHT werfen
+        let sample = try XCTUnwrap(module.samplePool[1])
+        XCTAssertEqual(sample.itProperties?.vibrato,
+                       ITSampleVibrato(speed: 64, depth: 64, rate: 0, waveform: .sine))
+    }
+
+    // Leeres Sample (Länge 0) mit gesetztem Loop-Flag samt Müll-Grenzen — früher
+    // „ungültiger Loop bei Länge 0"; jetzt wird der Loop ignoriert.
+    func testLoopOnZeroLengthSampleIsIgnoredInsteadOfRejected() throws {
+        var spec = SampleSpec(name: "emptyloop", frameCount: 0, data: [])
+        spec.loopEnabled = true
+        spec.loopStart = 1
+        spec.loopEnd = 5
+        let module = try ITParser.parse(data: makeSampleIT([spec]))   // darf NICHT werfen
+        let sample = try XCTUnwrap(module.samplePool[1])
+        XCTAssertTrue(sample.pcm.isEmpty)
+        XCTAssertEqual(sample.loopLength, 0)   // Loop verworfen
+    }
+
     // MARK: - Selbst erzeugte, frei eincheckbare Sample-Fixtures
 
     private func makeSampleIT(_ specs: [SampleSpec]) -> Data {
