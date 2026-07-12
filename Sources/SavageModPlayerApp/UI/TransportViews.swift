@@ -22,13 +22,34 @@ struct ResizableDivider: View {
     @State private var startValue: Double? = nil
 
     var body: some View {
-        Rectangle()
-            .fill(theme == .workbench ? Color.lightTextPrimary.opacity(0.5) : Color.spaceAccent.opacity(0.3))
-            .frame(width: axis == .vertical ? 5 : nil, height: axis == .horizontal ? 5 : nil)
-            .frame(maxWidth: axis == .horizontal ? .infinity : nil,
-                   maxHeight: axis == .vertical ? .infinity : nil)
-            .contentShape(Rectangle())
-            .gesture(
+        // Die SICHTBARE Linie ist bewusst dünn (1 pt) und dezent gehalten, damit der
+        // Trenner nicht ins Auge sticht. Die eigentliche KLICK-/ZIEHFLÄCHE ist über
+        // `contentShape` aber deutlich breiter (`hitSize`) — sonst trifft man den
+        // schmalen Handle mit der Maus kaum. So bleibt die Optik ruhig, das
+        // Ziehen aber gut greifbar.
+        let thickness: CGFloat = 1     // sichtbare Linienstärke (dünn)
+        let hitSize: CGFloat = 11      // unsichtbare Trefferfläche (großzügig)
+        // Light-Mode: etwas heller/dezenter als zuvor (war fast-schwarz bei 0.5).
+        // Dark-Mode: neutral-dunkler Grauton statt des hellen Cyan-Akzents.
+        let lineColor: Color = theme == .workbench
+            ? Color.lightTextSecondary.opacity(0.35)
+            : Color.spaceTextSecondary.opacity(0.20)
+        return ZStack {
+            // Transparente, großzügige Trefferfläche (füllt den hitSize-Rahmen).
+            Color.clear
+            // Dünne Linie mittig im Handle.
+            Rectangle()
+                .fill(lineColor)
+                .frame(width: axis == .vertical ? thickness : nil,
+                       height: axis == .horizontal ? thickness : nil)
+                .frame(maxWidth: axis == .horizontal ? .infinity : nil,
+                       maxHeight: axis == .vertical ? .infinity : nil)
+        }
+        .frame(width: axis == .vertical ? hitSize : nil, height: axis == .horizontal ? hitSize : nil)
+        .frame(maxWidth: axis == .horizontal ? .infinity : nil,
+               maxHeight: axis == .vertical ? .infinity : nil)
+        .contentShape(Rectangle())
+        .gesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         let base = startValue ?? width

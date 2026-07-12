@@ -3,6 +3,27 @@ import SwiftUI
 import AppKit
 #endif
 
+// Version + Build-Datum aus dem App-Bundle (Info.plist). Beide Werte setzt
+// build_app.sh beim Erzeugen des .app-Bundles (CFBundleShortVersionString aus
+// der VERSION-Datei, BuildDate = Build-Tag). Beim reinen `swift run` ohne
+// Bundle fehlen die Keys — dann fällt der Titel auf den bloßen Namen zurück.
+enum AppInfo {
+    static var version: String? {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+    }
+    static var buildDate: String? {
+        Bundle.main.infoDictionary?["BuildDate"] as? String
+    }
+    // Fenstertitel: "Savage Mod Player 1.5.31 · 2026-07-12" (Datum nur, wenn im
+    // Bundle vorhanden; Version nur, wenn nicht der SwiftPM-Platzhalter "1.0").
+    static var windowTitle: String {
+        var title = "Savage Mod Player"
+        if let version, version != "1.0" { title += " \(version)" }
+        if let buildDate { title += " · \(buildDate)" }
+        return title
+    }
+}
+
 @main
 struct SavageModPlayerApp: App {
     init() {
@@ -28,7 +49,7 @@ struct SavageModPlayerApp: App {
         // hören; ein „Öffnen mit"/Dock-Drop soll das bestehende Fenster nutzen
         // (via .onOpenURL) statt ein zweites zu erzeugen. WindowGroup hatte pro
         // geöffneter Datei ein neues, leeres Fenster gespawnt.
-        Window("Savage Mod Player", id: "main") {
+        Window(AppInfo.windowTitle, id: "main") {
             MainView()
         }
         .commands {
