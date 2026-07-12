@@ -29,21 +29,31 @@ struct ResizableDivider: View {
         // Ziehen aber gut greifbar.
         let thickness: CGFloat = 1     // sichtbare Linienstärke (dünn)
         let hitSize: CGFloat = 11      // unsichtbare Trefferfläche (großzügig)
-        // Light-Mode: etwas heller/dezenter als zuvor (war fast-schwarz bei 0.5).
-        // Dark-Mode: neutral-dunkler Grauton statt des hellen Cyan-Akzents.
+        // WICHTIG: Die breite Trefferfläche MUSS opak gefüllt sein. Mit
+        // `Color.clear` schien im Dark-Mode der weiße Fenster-Hintergrund durch
+        // und der Trenner wurde zum grellen, breiten weißen Balken (Bug
+        // 2026-07-12). Der Flächenton entspricht der Sidebar-/Listenfläche,
+        // sodass die 11-pt-Fläche optisch mit dem Nachbar-Panel verschmilzt und
+        // NUR die dünne Linie als Trenner sichtbar bleibt.
+        let barColor: Color = theme == .workbench ? Color.lightSurface : Color.spaceSurface
+        // Dünne, dezente Linie: Light heller als zuvor, Dark neutral-grau statt
+        // hellem Cyan-Akzent.
         let lineColor: Color = theme == .workbench
-            ? Color.lightTextSecondary.opacity(0.35)
-            : Color.spaceTextSecondary.opacity(0.20)
-        return ZStack {
-            // Transparente, großzügige Trefferfläche (füllt den hitSize-Rahmen).
-            Color.clear
-            // Dünne Linie mittig im Handle.
+            ? Color.lightTextSecondary.opacity(0.30)
+            : Color.spaceTextSecondary.opacity(0.22)
+        // Linie an der Kante zum Hauptbereich (vertikal: rechts, horizontal:
+        // unten) statt mittig — so sitzt der schmale Strich an der echten
+        // Panel-Grenze, während die übrige Fläche unsichtbar verschmilzt.
+        let lineAlignment: Alignment = axis == .vertical ? .trailing : .bottom
+        return ZStack(alignment: lineAlignment) {
+            // Opake Trefferfläche (füllt den hitSize-Rahmen, verdeckt den
+            // Fenster-Hintergrund).
+            barColor
+            // Dünne Linie an der Kante.
             Rectangle()
                 .fill(lineColor)
                 .frame(width: axis == .vertical ? thickness : nil,
                        height: axis == .horizontal ? thickness : nil)
-                .frame(maxWidth: axis == .horizontal ? .infinity : nil,
-                       maxHeight: axis == .vertical ? .infinity : nil)
         }
         .frame(width: axis == .vertical ? hitSize : nil, height: axis == .horizontal ? hitSize : nil)
         .frame(maxWidth: axis == .horizontal ? .infinity : nil,
