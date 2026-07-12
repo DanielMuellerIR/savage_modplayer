@@ -30,12 +30,12 @@ struct ResizableDivider: View {
         let thickness: CGFloat = 1     // sichtbare Linienstärke (dünn)
         // Unsichtbare Trefferfläche. Vertikal bewusst schmal (11 pt) gehalten,
         // damit das opake Band auf der Hauptbereich-Seite kaum auffällt.
-        // Horizontal großzügiger (20 pt): Der Trenner steckt zwischen zwei
+        // Horizontal großzügiger (24 pt): Der Trenner steckt zwischen zwei
         // ScrollViews (Playlist oben, Verlauf unten) — ein knapp daneben
         // gesetzter senkrechter Zug scrollt sonst die Liste statt zu ziehen.
         // Vertikal kostet mehr Breite Optik, horizontal NICHT (Band verschmilzt
         // oben wie unten mit der Sidebar-Fläche).
-        let hitSize: CGFloat = axis == .vertical ? 11 : 20
+        let hitSize: CGFloat = axis == .vertical ? 11 : 24
         // WICHTIG: Die breite Trefferfläche MUSS opak gefüllt sein. Mit
         // `Color.clear` schien im Dark-Mode der weiße Fenster-Hintergrund durch
         // und der Trenner wurde zum grellen, breiten weißen Balken (Bug
@@ -76,7 +76,15 @@ struct ResizableDivider: View {
                 // beim Ziehen seine Position ändert — die `translation` koppelt
                 // dadurch zurück und der Trenner zittert mit hoher Frequenz hin
                 // und her (Bug 2026-07-12). Global gemessen ist der Bezug fix.
-                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                //
+                // minimumDistance 0 nur horizontal: Der waagerechte Trenner
+                // grenzt an ScrollViews — greift die Geste erst nach 1 pt
+                // Bewegung, hat die Scroll-Geste den Zug schon geklaut. Bei 0
+                // beansprucht der Handle die Geste bereits beim Drücken und
+                // gewinnt. Vertikal bleibt 1 (dort perfekt, keine ScrollView-
+                // Konkurrenz — nicht anfassen).
+                DragGesture(minimumDistance: axis == .vertical ? 1 : 0,
+                            coordinateSpace: .global)
                     .onChanged { value in
                         let base = startValue ?? width
                         if startValue == nil { startValue = width }
