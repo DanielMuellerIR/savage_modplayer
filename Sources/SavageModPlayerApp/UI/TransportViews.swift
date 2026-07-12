@@ -28,7 +28,14 @@ struct ResizableDivider: View {
         // schmalen Handle mit der Maus kaum. So bleibt die Optik ruhig, das
         // Ziehen aber gut greifbar.
         let thickness: CGFloat = 1     // sichtbare Linienstärke (dünn)
-        let hitSize: CGFloat = 11      // unsichtbare Trefferfläche (großzügig)
+        // Unsichtbare Trefferfläche. Vertikal bewusst schmal (11 pt) gehalten,
+        // damit das opake Band auf der Hauptbereich-Seite kaum auffällt.
+        // Horizontal großzügiger (20 pt): Der Trenner steckt zwischen zwei
+        // ScrollViews (Playlist oben, Verlauf unten) — ein knapp daneben
+        // gesetzter senkrechter Zug scrollt sonst die Liste statt zu ziehen.
+        // Vertikal kostet mehr Breite Optik, horizontal NICHT (Band verschmilzt
+        // oben wie unten mit der Sidebar-Fläche).
+        let hitSize: CGFloat = axis == .vertical ? 11 : 20
         // WICHTIG: Die breite Trefferfläche MUSS opak gefüllt sein. Mit
         // `Color.clear` schien im Dark-Mode der weiße Fenster-Hintergrund durch
         // und der Trenner wurde zum grellen, breiten weißen Balken (Bug
@@ -59,7 +66,11 @@ struct ResizableDivider: View {
         .frame(maxWidth: axis == .horizontal ? .infinity : nil,
                maxHeight: axis == .vertical ? .infinity : nil)
         .contentShape(Rectangle())
-        .gesture(
+        // highPriority statt gesture: Der horizontale Trenner grenzt an
+        // ScrollViews; deren Scroll-Geste würde einen senkrechten Zug sonst
+        // abfangen. highPriorityGesture lässt das Ziehen des Handles gewinnen,
+        // sobald der Cursor in seiner Trefferfläche liegt.
+        .highPriorityGesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         let base = startValue ?? width
