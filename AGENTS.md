@@ -523,7 +523,59 @@ grün, Regressionstests dazu.
 Vorerst NICHT anfassen (Daniel). Das sehr breite Oszi ist platzintensiv, aber
 Leerraum wäre nicht besser. Erst verkleinern/umbauen, wenn ein sinnvoller Inhalt
 für den freiwerdenden Platz existiert (Kandidat, falls mal dringend Platz
-gebraucht wird). Als Idee offen halten.
+gebraucht wird). Als Idee offen halten. — Hängt teils mit Punkt 10 zusammen.
+
+### 10. Responsiver Kompakt-/Sparmodus (größen-getriggert) — GROSS, eigener Meilenstein
+Ziel (Daniel, „per aspera ad astra"): Fenster verkleinern → schwere
+Visualisierungen verschwinden → CPU-Last fällt spürbar (Aktivitätsmonitor zeigt
+sofort einen Sprung nach unten). Use-Case: „nur Musik hören, wenig Auslastung" —
+passend zu uralten Formaten, die auf ultra-schwachen Maschinen liefen. Vorbild:
+Mucke_Baby blendet seinen Visualizer bei kleinem Fenster automatisch aus.
+
+Entscheidungen (Daniel 2026-07-12):
+- Genau ZWEI Modi: Full ↔ Compact (kein Mittel-Tier).
+- Auslöser REIN automatisch über die Fenstergröße (kein manueller Schalter).
+- Im Compact bleiben alle LEICHTEN, nicht-animierten Elemente, die passen:
+  Titel (+Format-Badge), Kanal-Mute/Solo, Loop/Repeat, Positions-Slider + Zeit,
+  CH/BPM/SPD/PAT-Infozeile, LED-Filter/HI-FI-Toggles. Die Titel-Laufschrift darf
+  bleiben, MUSS aber sparsam laufen (nur bei Überlänge animieren, niedrige
+  Frequenz) — sonst statisch.
+- Im Compact RAUS (aus der View-Hierarchie, NICHT `.hidden()`): Tracker-Grid,
+  Kanal-Oszis (die Wellen), Master-Oszi, Pattern-Marker-Map.
+
+Mechanik (Muster Mucke_Baby + savage-Spezifika):
+1. Fenster-/Content-Größe am Hauptbereich messen (`GeometryReader` bzw.
+   `.onGeometryChange`), EIN Breakpoint. Mucke_Baby: genau eine Breiten-Schwelle
+   (780 pt), `if showStage { StageView() }` — echter Branch. Für savage sinnvoll
+   Höhe UND/ODER Breite (Grid+Oszis brauchen v.a. Höhe): Vorschlag
+   `isCompact = (height < ~560) || (width < ~820)`, Werte an echten Screenshots
+   kalibrieren. Hysterese/Debounce gegen Flackern an der Grenze.
+2. Schwere Subviews per echtem `if !isCompact { … }` einbinden (Grid, Kanal-Oszi-
+   Wellen, Master-Oszi, Marker-Map). NUR das Entfernen aus der Hierarchie hängt
+   die `VisualizerState`/`TransportState`-Observer ab und stoppt die 30-Hz-/
+   Zeilen-Layouts — genau die CPU-Hauptlast (siehe CPU-Abschnitt oben).
+   `.hidden()`/`.opacity(0)` bringen NICHTS.
+3. Kanal-Streifen aufteilen: M/S-Buttons (leicht) im Compact als eigenes
+   kompaktes, umbrechendes Gitter behalten; die Oszi-Wellen weglassen. Full wie
+   bisher (M/S am Oszi-Streifen).
+4. Level-2-Sparen: den 30-Hz-`vuUpdateTimer` (`ModPlayerCoordinator.swift:914`)
+   im Compact gaten — teure `channelWaveforms`/`masterSamples`-Berechnung
+   überspringen, nur `elapsedTime` (für die Zeit) weiterführen, evtl. niedrigere
+   Frequenz. VU-Pegel für die M/S-Streifen sind billig, dürfen bleiben. Dafür
+   braucht der Coordinator ein Flag „visualizersVisible", das die View setzt.
+5. Transport-Fuß responsive: bei schmaler Breite auf mehrere Zeilen umbrechen
+   (Wrap-/Flow-Layout oder konditionale `VStack`-von-`HStack`s nach Breite).
+6. ENABLER (Pflicht!): `.frame(minWidth: 1080, minHeight: 720)`
+   (`MainView.swift:257`) deutlich senken (z.B. minWidth ~380, minHeight ~320),
+   sonst lässt sich das Fenster gar nicht klein genug ziehen und der Modus ist
+   nie auslösbar.
+7. `MarqueeText` im Compact prüfen/drosseln (s.o.), damit die Laufschrift nicht
+   den CPU-Gewinn auffrisst.
+
+Abnahme: Fenster kleinziehen → Grid/Oszis/Master/Marker weg, „Now Playing"
+(Titel/Format/M-S/Loop/Slider/Zeit/Infos/Toggles) bleibt; Aktivitätsmonitor zeigt
+deutlichen CPU-Abfall Richtung Floor. Vergrößern → alles zurück, kein Flackern.
+Konzept bewusst „wie eine Website, die eine Mobile-Version nachbekommt".
 
 ## IT-Ausbau (seit 2026-07-10)
 
