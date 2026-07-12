@@ -139,8 +139,37 @@ struct MainView: View {
     // Lokaler Tastatur-Monitor (Leertaste/Pfeile/ESC). Token wird in
     // .onDisappear wieder entfernt, damit nichts leakt.
     @State var keyMonitor: Any? = nil
-    
+
+    // Responsiver Kompaktmodus (Punkt 10): bei kleinem Hauptbereich werden die
+    // schweren Visualisierungen (Grid, Kanal-/Master-Oszis, Marker-Map) aus der
+    // View-Hierarchie ENTFERNT (nicht .hidden()) — das hängt ihre 30-Hz-Observer
+    // ab und senkt die CPU-Last spürbar. Rein automatisch über die Fenstergröße.
+    @State var isCompact = false
+
+    // Hysterese gegen Flackern an der Umschaltgrenze: aus Full wird erst bei klar
+    // kleinem Bereich Compact, aus Compact erst bei klar großem wieder Full.
+    static func computeCompact(_ size: CGSize, current: Bool) -> Bool {
+        // Grid + Oszis brauchen v.a. Höhe; Breite zusätzlich fürs Nebeneinander.
+        let wIn: CGFloat = 820, hIn: CGFloat = 560   // darunter -> Compact
+        let wOut: CGFloat = 900, hOut: CGFloat = 640 // erst darüber wieder Full
+        if current {
+            return !(size.width >= wOut && size.height >= hOut)
+        } else {
+            return size.width < wIn || size.height < hIn
+        }
+    }
+
     var body: some View {
+      GeometryReader { geo in
+        // Compact-Entscheidung anhand des Hauptbereichs = Fenster minus Sidebar
+        // (+Divider), mit Hysterese (computeCompact). Ein Top-Level-GeometryReader
+        // liefert `geo.size` zuverlässig bei jeder Fenster-Größenänderung — die
+        // frühere Messung per Background-GeometryReader+PreferenceKey lieferte 0×0
+        // und feuerte nur einmal (Bug 2026-07-12).
+        let compact = Self.computeCompact(
+            CGSize(width: geo.size.width - CGFloat(sidebarWidth) - 11, height: geo.size.height),
+            current: isCompact
+        )
         ZStack {
             HStack(spacing: 0) {
                 // Sidebar for Playlist or Instruments
@@ -207,9 +236,9 @@ struct MainView: View {
                     Divider()
                         .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.2))
                     
-                    // Pattern Position Marker Map list — beobachtet transport (nicht
-                    // coordinator), damit die Positions-Marker MainView nicht neu rendern.
-                    if let mod = coordinator.activeMod {
+                    // Pattern-Marker-Map: SCHWER (breite, transport-getriebene Leiste)
+                    // — im Kompaktmodus komplett aus der Hierarchie nehmen.
+                    if !isCompact, let mod = coordinator.activeMod {
                         PatternMarkerMap(transport: coordinator.transport, mod: mod, theme: theme,
                                          onSeek: { coordinator.seek(toPosition: $0) })
                             .padding(.horizontal)
@@ -218,63 +247,79 @@ struct MainView: View {
                         Divider()
                             .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.1))
                     }
-                    
-                    // VU Visualizers & Synthesis Options Panel
-                    vuVisualizersView
+
+                    // VU Visualizers & Synthesis Options Panel — im Kompaktmodus zeigt
+                    // vuVisualizersView statt der Oszi-Wellen nur die leichte M/S-Leiste,
+                    // die Options-Zeile (LED/HI-FI/LOOP) bleibt in beiden Modi.
+                    vuVisualizersView(isCompact: isCompact)
                         .padding(.horizontal)
-                        .padding(.vertical, 12)
+                        .padding(.vertical, isCompact ? 8 : 12)
                         .background(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground.opacity(0.2))
-                    
+
                     Divider()
                         .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.1))
-                    
-                    // Scrolling Tracker Grid or Empty State Drop Zone
-                    VStack(spacing: 0) {
-                        // Defensiv gegen leere/korrupte Mods: length, patternTable und
-                        // der daraus gelesene patternIndex werden vor dem Zugriff geprueft
-                        // (sonst patternTable[-1] / patterns[ausserhalb] -> Crash).
-                        // codereview-ok: defensiv by-design — patternTable wird direkt danach indiziert; der isEmpty/length-Guard verhindert patternTable[-1]-Crash (2026-07-01)
-                        if let mod = coordinator.activeMod,
-                           mod.length > 0,
-                           !mod.patternTable.isEmpty {
-                            // Grid + Zeilenmarkierung beobachten transport (row-rate),
-                            // damit die Zeilenwechsel MainView nicht neu evaluieren.
-                            TrackerGridContainer(transport: coordinator.transport, mod: mod,
-                                                 channelIndices: mod.displayChannelIndices, theme: theme,
-                                                 onSeekRow: { row in
-                                                     // Zu (aktuelle Position, geklickte Zeile) springen;
-                                                     // Tempo wird rekonstruiert. Play/Weiter spielt ab hier.
-                                                     coordinator.seek(toPosition: coordinator.currentPosition, row: row)
-                                                 })
-                                .padding()
-                        } else {
-                            dropZonePrompt
-                                .padding()
+
+                    if !isCompact {
+                        // Scrolling Tracker Grid or Empty State Drop Zone — SCHWER,
+                        // nur im Full-Modus.
+                        VStack(spacing: 0) {
+                            // Defensiv gegen leere/korrupte Mods: length, patternTable und
+                            // der daraus gelesene patternIndex werden vor dem Zugriff geprueft
+                            // (sonst patternTable[-1] / patterns[ausserhalb] -> Crash).
+                            // codereview-ok: defensiv by-design — patternTable wird direkt danach indiziert; der isEmpty/length-Guard verhindert patternTable[-1]-Crash (2026-07-01)
+                            if let mod = coordinator.activeMod,
+                               mod.length > 0,
+                               !mod.patternTable.isEmpty {
+                                // Grid + Zeilenmarkierung beobachten transport (row-rate),
+                                // damit die Zeilenwechsel MainView nicht neu evaluieren.
+                                TrackerGridContainer(transport: coordinator.transport, mod: mod,
+                                                     channelIndices: mod.displayChannelIndices, theme: theme,
+                                                     onSeekRow: { row in
+                                                         // Zu (aktuelle Position, geklickte Zeile) springen;
+                                                         // Tempo wird rekonstruiert. Play/Weiter spielt ab hier.
+                                                         coordinator.seek(toPosition: coordinator.currentPosition, row: row)
+                                                     })
+                                    .padding()
+                            } else {
+                                dropZonePrompt
+                                    .padding()
+                            }
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(theme == .workbench ? Color.lightSurfaceAlt : Color.clear)
+
+                        Divider()
+                            .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.2))
+
+                        // Master Oscilloscope & Separation Sliders — SCHWER (30-Hz-Canvas).
+                        masterOscilloscopeView
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                            .background(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground.opacity(0.3))
+
+                        Divider()
+                            .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.3))
+                    } else if coordinator.activeMod == nil {
+                        // Kompaktmodus ohne geladenen Song: kleine Drop-Zone, damit man
+                        // trotzdem eine Datei laden kann.
+                        dropZonePrompt
+                            .padding()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        Divider()
+                            .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.3))
+                    } else {
+                        // Kompaktmodus mit Song: minimaler flexibler Platz, damit der
+                        // Transport unten sitzt und das Fenster wirklich klein wird.
+                        Spacer(minLength: 0)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(theme == .workbench ? Color.lightSurfaceAlt : Color.clear)
-                    
-                    Divider()
-                        .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.2))
-                    
-                    // Master Oscilloscope & Separation Sliders
-                    masterOscilloscopeView
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                        .background(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground.opacity(0.3))
-                    
-                    Divider()
-                        .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.3))
-                    
+
                     // Toolbar Control Panel
-                    controlPanelView
-                        .padding()
+                    controlPanelView(isCompact: isCompact)
+                        .padding(isCompact ? 8 : 16)
                         .background(theme == .workbench ? Color.lightSurface : Color.spaceSurface.opacity(0.4))
                 }
                 .background(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground)
             }
-            .frame(minWidth: 1080, minHeight: 720)
             .foregroundColor(theme == .workbench ? Color.lightTextPrimary : Color.spaceTextPrimary)
             .font(theme == .workbench ? .system(.body) : .body)
             .fileImporter(
@@ -437,6 +482,22 @@ struct MainView: View {
                 .opacity(0)
                 .accessibilityHidden(true)
         }
+        // ZStack füllt den vom GeometryReader angebotenen Raum.
+        .frame(width: geo.size.width, height: geo.size.height)
+        // Kompaktmodus-Umschaltung: bei Größenänderung isCompact + das Coordinator-
+        // Flag (steuert die Timer-Drossel 30↔5 Hz) synchron setzen.
+        .onChange(of: compact) { newValue in
+            isCompact = newValue
+            coordinator.visualizersVisible = !newValue
+        }
+        .onAppear {
+            isCompact = compact
+            coordinator.visualizersVisible = !compact
+        }
+      }
+      // ENABLER für den Kompaktmodus: Mindestgröße deutlich senken (früher 1080×720),
+      // sonst ließe sich das Fenster nicht klein genug ziehen.
+      .frame(minWidth: 380, minHeight: 320)
     }
 
 }

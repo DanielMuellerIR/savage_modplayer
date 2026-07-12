@@ -6,7 +6,19 @@ import MediaPlayer
 
 // Transport-/Kontrollleiste der MainView (Play-Steuerung, Regler, LEDs).
 extension MainView {
-    var controlPanelView: some View {
+    // Im Kompaktmodus (schmales Fenster) bricht der Transport auf zwei Zeilen um
+    // (Zeit+Slider oben, Kern-Transport+Lautstärke unten), damit nichts überläuft;
+    // im Full-Modus die gewohnte einzeilige Leiste.
+    @ViewBuilder
+    func controlPanelView(isCompact: Bool) -> some View {
+        if isCompact {
+            compactControlPanelView
+        } else {
+            fullControlPanelView
+        }
+    }
+
+    var fullControlPanelView: some View {
         HStack(spacing: 24) {
             // Left block: Play controls
             HStack(spacing: 8) {
@@ -195,6 +207,70 @@ extension MainView {
                     .shadow(color: theme == .cyber ? Color.spaceAccent.opacity(volume * 0.8) : Color.clear, radius: 4)
                     .help("Gesamtlautstärke.")
                 }
+                .help("Gesamtlautstärke.")
+            }
+        }
+    }
+
+    // Kompakte, zweizeilige Transportleiste für den Kompaktmodus (schmales Fenster).
+    var compactControlPanelView: some View {
+        VStack(spacing: 8) {
+            // Zeile 1: verstrichene Zeit + Positions-Slider + Gesamtzeit (voll breit).
+            if let mod = coordinator.activeMod {
+                HStack(spacing: 10) {
+                    ElapsedTimeText(visualizer: coordinator.visualizerState)
+                    PositionSlider(transport: coordinator.transport, mod: mod, theme: theme,
+                                   onSeek: { coordinator.seek(toPosition: $0) })
+                    TotalTimeText(visualizer: coordinator.visualizerState)
+                }
+            }
+
+            // Zeile 2: Kern-Transport (Play/Pause, Stopp, Titelwechsel) + Lautstärke.
+            // Die vier Sekunden-Seek-Buttons und Shuffle/HUD/Info/WAV entfallen hier
+            // bewusst — der Slider oben deckt das Suchen ab; „nur Musik hören".
+            HStack(spacing: 8) {
+                SpinningDiskButton(
+                    isPlaying: coordinator.isPlaying,
+                    isPaused: coordinator.isPaused,
+                    enabled: coordinator.activeMod != nil,
+                    theme: theme,
+                    onTap: { togglePlayback() }
+                )
+                Button(action: { stopPlayback() }) {
+                    transportButtonLabel(systemName: "stop.fill")
+                }
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                .cornerRadius(theme == .workbench ? 0 : 15)
+                .disabled(!coordinator.isPlaying)
+                .help("Stopp: Wiedergabe beenden — der nächste Start beginnt wieder am Songanfang.")
+
+                Button(action: { prevTrack() }) {
+                    transportButtonLabel(systemName: "backward.end.fill")
+                }
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                .cornerRadius(theme == .workbench ? 0 : 15)
+                .disabled(playlist.isEmpty)
+                .help("Vorheriger Titel der Playlist (⌘← oder Pfeil links).")
+
+                Button(action: { nextTrack() }) {
+                    transportButtonLabel(systemName: "forward.end.fill")
+                }
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                .cornerRadius(theme == .workbench ? 0 : 15)
+                .disabled(playlist.isEmpty)
+                .help("Nächster Titel der Playlist (⌘→ oder Pfeil rechts).")
+
+                Spacer(minLength: 0)
+
+                Image(systemName: volume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .scaledFont(12)
+                    .foregroundColor(theme == .workbench ? .lightTextPrimary : .spaceTextSecondary)
+                Slider(value: Binding(
+                    get: { volume },
+                    set: { volume = $0; coordinator.setVolume(Float($0)) }
+                ), in: 0...1.0)
+                .accentColor(Color.accent(theme))
+                .frame(width: 80)
                 .help("Gesamtlautstärke.")
             }
         }

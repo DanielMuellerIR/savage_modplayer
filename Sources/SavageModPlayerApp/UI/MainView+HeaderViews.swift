@@ -170,23 +170,30 @@ extension MainView {
         }
     }
     
-    var vuVisualizersView: some View {
-        VStack(spacing: 8) {
-            // Obere Zeile: adaptive Kanal-Oszilloskope über die VOLLE Breite.
-            // (Play/Pause liegt jetzt als Disk unten im Transport-Balken.)
-            // Die verfuegbare Breite wird gleichmaessig auf alle Kanaele verteilt
-            // — wenige Kanaele => breite Oszis, viele => schmaler, bis zu einer
-            // Mindestbreite; darunter (sehr viele Kanaele) wird dezent horizontal
-            // gescrollt.
+    func vuVisualizersView(isCompact: Bool) -> some View {
+        let channelIndices = coordinator.activeMod?.displayChannelIndices
+            ?? Array(0..<coordinator.channelCount)
+        return VStack(spacing: 8) {
+            // Obere Zeile: im Full-Modus die adaptiven Kanal-Oszilloskope über die
+            // VOLLE Breite (30-Hz-Canvas, SCHWER). Im Kompaktmodus stattdessen NUR
+            // die leichte, umbrechende M/S-Leiste (kein Oszi, keine 30-Hz-Wellen) —
+            // so bleibt die Kanalsteuerung erreichbar, ohne CPU zu kosten.
             // Kanal-Oszilloskope + VU: eigener 30-Hz-Beobachter (ChannelStripsView),
             // damit die Scope-Updates nicht die ganze MainView.body neu rendern.
-            ChannelStripsView(
-                visualizer: coordinator.visualizerState,
-                coordinator: coordinator,
-                channelIndices: coordinator.activeMod?.displayChannelIndices
-                    ?? Array(0..<coordinator.channelCount),
-                theme: theme
-            )
+            if isCompact {
+                CompactChannelStrip(
+                    coordinator: coordinator,
+                    channelIndices: channelIndices,
+                    theme: theme
+                )
+            } else {
+                ChannelStripsView(
+                    visualizer: coordinator.visualizerState,
+                    coordinator: coordinator,
+                    channelIndices: channelIndices,
+                    theme: theme
+                )
+            }
 
             // Untere Zeile: kompakte Optionsleiste (aus der oberen Zeile
             // ausgelagert, damit die Oszis dort die volle Breite bekommen).

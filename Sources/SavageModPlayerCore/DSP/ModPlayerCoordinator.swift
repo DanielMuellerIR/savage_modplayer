@@ -243,6 +243,26 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Subviews. War die Haupt-CPU-Last (2026-07-09). `let`: stabile Referenz.
     public let visualizerState = VisualizerState()
 
+    // Sind die schweren Visualisierungen (Kanal-Oszis + Master-Oszi) gerade
+    // sichtbar? Setzt die View im responsiven Kompaktmodus: bei kleinem Fenster
+    // werden Grid/Oszis aus der Hierarchie entfernt. Der EIGENTLICHE CPU-Hebel ist
+    // dann NICHT das Weglassen der Views (SwiftUI-Rendering ist billig), sondern
+    // das Herunterschalten der Update-FREQUENZ: der 30-Hz-Tick schiebt sonst 30×/s
+    // @Published-Werte durch SwiftUI — DAS war die Hauptlast (gemessen ~9 % von
+    // ~15 %; Audio-DSP nur ~3-4 %). Ohne sichtbare Oszis reicht ~5 Hz für Uhr/VU.
+    public var visualizersVisible = true {
+        didSet {
+            // Läuft der VU-Timer, bei einem Sichtbarkeitswechsel mit der passenden
+            // Frequenz neu aufsetzen (30 Hz sichtbar ↔ 5 Hz kompakt).
+            guard oldValue != visualizersVisible, vuUpdateTimer != nil else { return }
+            startVUUpdates()
+        }
+    }
+
+    // Update-Frequenz des VU-/Oszi-/Zeit-Ticks: 30 Hz für flüssige Oszilloskope,
+    // im Kompaktmodus nur ~5 Hz (kein Oszi sichtbar) — senkt die SwiftUI-Last stark.
+    private var vuUpdateInterval: TimeInterval { visualizersVisible ? 0.033 : 0.2 }
+
     // New parameters for user controls
     @Published public var stereoSeparation: Float = 0.8 {
         didSet {
@@ -866,21 +886,28 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
         vis.vuLevels = newLevels
 
-        // Update true channel waveforms from channelWavesPointer
-        var newWaves = (0..<count).map { _ in [Float](repeating: 0.0, count: 32) }
-        for i in 0..<count {
-            for j in 0..<32 {
-                newWaves[i][j] = self.channelWavesPointer[i * 32 + j]
+        // Level-2-Sparen (Kompaktmodus): Die teure Wellen-/Master-Oszi-Berechnung
+        // (count×32 + 128 Kopien pro Tick, je eine Allokation) NUR ausführen, wenn
+        // die Oszilloskope überhaupt sichtbar sind. Bei kleinem Fenster sind sie aus
+        // der View-Hierarchie entfernt — dann sparen wir diesen CPU-Posten komplett.
+        // VU-Pegel (oben, billig), Spielzeit und Songende laufen weiter.
+        if visualizersVisible {
+            // Update true channel waveforms from channelWavesPointer
+            var newWaves = (0..<count).map { _ in [Float](repeating: 0.0, count: 32) }
+            for i in 0..<count {
+                for j in 0..<32 {
+                    newWaves[i][j] = self.channelWavesPointer[i * 32 + j]
+                }
             }
-        }
-        vis.channelWaveforms = newWaves
+            vis.channelWaveforms = newWaves
 
-        // Update true master oscilloscope samples from masterWavesPointer
-        var newMasterOsc = [Float](repeating: 0.0, count: 128)
-        for j in 0..<128 {
-            newMasterOsc[j] = self.masterWavesPointer[j]
+            // Update true master oscilloscope samples from masterWavesPointer
+            var newMasterOsc = [Float](repeating: 0.0, count: 128)
+            for j in 0..<128 {
+                newMasterOsc[j] = self.masterWavesPointer[j]
+            }
+            vis.masterSamples = newMasterOsc
         }
-        vis.masterSamples = newMasterOsc
 
         // Read progress directly from shared state (100% lock-free, allocation-free)
         if let state = self.playbackState {
@@ -909,9 +936,12 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
     
     private func startVUUpdates() {
-        // 30 Hz statt 50 Hz: VU/Oszilloskope bleiben flüssig, aber jeder Tick
-        // stößt SwiftUI-Layout an — 30 Hz senkt die UI-CPU spürbar (2026-07-09).
-        let timer = Timer(timeInterval: 0.033, repeats: true) { [weak self] _ in
+        // Evtl. laufenden Timer ersetzen (z. B. bei Frequenzwechsel Full↔Compact).
+        vuUpdateTimer?.invalidate()
+        // 30 Hz für flüssige Oszilloskope; im Kompaktmodus 5 Hz (vuUpdateInterval).
+        // Jeder Tick schiebt @Published-Werte durch SwiftUI — die Frequenz ist der
+        // dominante UI-CPU-Faktor (nicht das Zeichnen), darum im Compact gedrosselt.
+        let timer = Timer(timeInterval: vuUpdateInterval, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in
                 self.updateVULevelsTick()

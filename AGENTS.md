@@ -393,18 +393,43 @@ XM-Kern (M0–M5) steht, committet, getestet; im echten App-GUI verifiziert (spi
 
 ## UI-/Fix-Plan 2026-07-12 (in Ausführung)
 
-**Fortschritt (v1.5.39, 2026-07-12, M5):** Punkte **1–8 ERLEDIGT**. 1–7 auf M5
-per Fenster-Screenshot in Light+Dark verifiziert (Font-Zoom −3…+5, Grid bleibt
-fix). **Punkt 8:** 61 ZIPs = 646 Module durch `savage-cli` (3 s Render) getestet;
-101 Fehlschläge → drei zu strenge IT-Parser-Validierungen tolerant gemacht
-(channelPan 0xFF → klemmen; Sample-Vibrato außerhalb Spec → klemmen; Loop bei
-Sample-Länge 0 → ignorieren). Ergebnis **646/646 spielen**, 3 Regressionstests
-(synthetische IT-Puffer, keine copyright-Fixtures) in `ITSampleParserTests.swift`,
-volle Suite grün (230 Tests). **Offen: 9 (nur Notiz — nichts zu tun), 10
-(responsiver Kompaktmodus, GROSS).** Randnotiz aus dem GUI-Test: Start MIT
-Datei-Argument (`savage-cli`-Weg NICHT betroffen, nur GUI `open --args <mod>`)
-zeigte im Testlauf kein Hauptfenster — via Autoplay-Ordner startet die GUI normal;
-ist unabhängig von den 1–7-Änderungen (nicht angefasster Code), separat prüfen.
+**Fortschritt (v1.5.40, 2026-07-12, M5):** Punkte **1–8 + 10 ERLEDIGT**, 9 ist
+nur Notiz. 1–7 per Screenshot verifiziert; 8 = IT-Parser tolerant (646/646
+Module). **Punkt 10 (Kompaktmodus) + CPU-Analyse — wichtige Erkenntnis:**
+
+Die ursprüngliche Annahme („Oszis/Grid sind CPU-schwer") war FALSCH. Gemessen auf
+M5 (Release, `top` + `sample`-Profiler):
+- **Gestoppt: 0,2 %** → das statische UI (Grid, Oszis) kostet praktisch nichts.
+- **Audio-DSP: nur ~3–4 %** (Audio-IOThread: 118 von 3873 Samples busy; der Rest
+  Leerlauf-Warten). Also NICHT der Hauptteil — die Modul-Dekodierung ist billig,
+  passend dazu, dass die Musik für schwache Rechner gemacht war. Die Original-Amiga-
+  Spiele nutzten den Paula-Chip (Hardware-Mixing, ~0 % CPU) UND hatten keine
+  Echtzeit-Visualizer; unsere Software dekodiert günstig, teuer ist die moderne UI.
+- **Der eigentliche Kostenpunkt: der 30-Hz-`vuUpdateTimer`**, der 30×/s
+  `@Published`-Werte (VU/Oszi/Zeit) durch SwiftUI schiebt → ~12 % (nicht das
+  Zeichnen, sondern das reaktive Durchschieben). Die rotierende Disk: nur ~0,5 %.
+- Deshalb half „Views entfernen" allein NICHT (die Uhr tickt weiter 30×/s). **Fix:
+  im Kompaktmodus den vuUpdateTimer auf 5 Hz drosseln** (`visualizersVisible`-Flag
+  → `vuUpdateInterval` 0,033 s ↔ 0,2 s). Ergebnis gemessen: **Full ~23 % →
+  Compact ~11 %, etwa halbe CPU** (3 Runden konsistent), Song spielt normal weiter.
+
+Kompaktmodus mechanisch: Top-Level-`GeometryReader` misst den Hauptbereich
+(Fenster − Sidebar), Hysterese (`computeCompact`); schwere Views per echtem
+`if !isCompact` raus (Grid/Kanal-Oszis/Master-Oszi/Marker-Map); M/S-Leiste als
+leichtes `CompactChannelStrip`; Transport zweizeilig; `minWidth` 1080→380.
+(Alte Messung per Background-`GeometryReader`+PreferenceKey war KAPUTT — lieferte
+0×0 und feuerte nur einmal; Top-Level-GeometryReader ist der zuverlässige Weg.)
+
+**Offene Politur:** Header-Infozeile (CH/BPM/SPD/PAT) klippt bei sehr schmaler
+Breite (<~550 px) rechts — bei üblichen Compact-Größen (600–800 px) ok.
+**Weiterer CPU-Hebel (optional, für später):** auch im FULL-Modus kostet der
+30-Hz-Oszi-Update ~12 %; ließe sich mit niedrigerer Oszi-Framerate oder
+effizienterem Visualizer-Datenpfad senken (separater Schritt). Audio-DSP
+optimieren lohnt kaum (nur ~3–4 %); die HI-FI-Interpolation = Qualität, behalten.
+
+Randnotiz: GUI-Start MIT Datei-Argument (`open --args <mod>`) zeigte im Testlauf
+kein Hauptfenster (Autoplay-Ordner-Weg ok); unabhängig von diesen Änderungen,
+separat prüfen.
 
 Stand vorher: bei **v1.5.37** (Splitter-Optik/Greifbarkeit/Cursor +
 Playlist-Favoriten). Reihenfolge unten = Bearbeitungsreihenfolge (klein→groß).
@@ -542,7 +567,7 @@ Leerraum wäre nicht besser. Erst verkleinern/umbauen, wenn ein sinnvoller Inhal
 für den freiwerdenden Platz existiert (Kandidat, falls mal dringend Platz
 gebraucht wird). Als Idee offen halten. — Hängt teils mit Punkt 10 zusammen.
 
-### 10. Responsiver Kompakt-/Sparmodus (größen-getriggert) — GROSS, eigener Meilenstein
+### 10. Responsiver Kompakt-/Sparmodus (größen-getriggert) — ✅ ERLEDIGT v1.5.40 — GROSS, eigener Meilenstein
 Ziel (Daniel, „per aspera ad astra"): Fenster verkleinern → schwere
 Visualisierungen verschwinden → CPU-Last fällt spürbar (Aktivitätsmonitor zeigt
 sofort einen Sprung nach unten). Use-Case: „nur Musik hören, wenig Auslastung" —
