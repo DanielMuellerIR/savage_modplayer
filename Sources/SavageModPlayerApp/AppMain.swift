@@ -26,6 +26,10 @@ enum AppInfo {
 
 @main
 struct SavageModPlayerApp: App {
+    // Globale UI-Zoom-Stufe (CMD +/-/0), persistiert. Wird als Faktor
+    // (savageFontScale) ins Environment gelegt; siehe FontScaling.swift.
+    @AppStorage("savage.uiZoom") private var uiZoom = 0
+
     init() {
         // Temp-Kopien frueherer App-Laeufe einmalig beim Start aufraeumen.
         // (Innerhalb einer Sitzung bleiben die pro-Drop-Verzeichnisse bestehen,
@@ -51,6 +55,9 @@ struct SavageModPlayerApp: App {
         // geöffneter Datei ein neues, leeres Fenster gespawnt.
         Window(AppInfo.windowTitle, id: "main") {
             MainView()
+                // UI-Schriftfaktor an den Szenen-Root haengen — alle
+                // `.scaledFont(...)`-Aufrufe im Baum lesen ihn von hier.
+                .environment(\.uiFontScale, savageFontScale(uiZoom))
         }
         .commands {
             #if os(macOS)
@@ -94,6 +101,18 @@ struct SavageModPlayerApp: App {
                     NotificationCenter.default.post(name: NSNotification.Name("menuPrevTrack"), object: nil)
                 }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
+            }
+
+            // Darstellung: globale UI-Schriftgroesse. CMD+ / CMD- / CMD-0.
+            // (Zusaetzlich CMD+= als zweiter Zoom-in-Weg — versteckt in MainView
+            // verdrahtet, weil ⌘+ auf manchen Layouts erst mit Shift kommt.)
+            CommandMenu("Darstellung") {
+                Button("Schrift größer") { uiZoom = min(uiZoom + 1, 5) }
+                    .keyboardShortcut("+", modifiers: .command)
+                Button("Schrift kleiner") { uiZoom = max(uiZoom - 1, -3) }
+                    .keyboardShortcut("-", modifiers: .command)
+                Button("Originalgröße") { uiZoom = 0 }
+                    .keyboardShortcut("0", modifiers: .command)
             }
             #endif
         }

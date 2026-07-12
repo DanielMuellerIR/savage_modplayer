@@ -173,9 +173,9 @@ struct PatternMarkerMap: View {
                     Button(action: { onSeek(idx) }) {
                         VStack(spacing: 2) {
                             Text(String(format: "%02d", idx))
-                                .font(.system(size: 8, weight: .bold))
+                                .scaledFont(8, weight: .bold)
                             Text("P\(patNum)")
-                                .font(.system(size: 7))
+                                .scaledFont(7)
                         }
                         .frame(width: 24, height: 26)
                         .background(
@@ -187,6 +187,7 @@ struct PatternMarkerMap: View {
                         .cornerRadius(3)
                     }
                     .buttonStyle(PlainButtonStyle())
+                    .help("Zu Song-Position \(String(format: "%02d", idx)) springen (Pattern \(patNum)).")
                 }
             }
             .padding(.vertical, 2)
@@ -220,14 +221,14 @@ struct SpinningDiskButton: View {
                     .frame(width: 40, height: 40)
                     .shadow(color: theme == .workbench ? Color.clear : Color.spaceAccent.opacity(0.3), radius: 5)
                 Image(systemName: "opticaldisc.fill")
-                    .font(.system(size: 30))
+                    .scaledFont(30)
                     .foregroundColor(Color.accent(theme))
                     .rotationEffect(.degrees(rotation))
                 Circle()
                     .fill(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground)
                     .frame(width: 6, height: 6)
                 Image(systemName: isPlaying && !isPaused ? "pause.fill" : "play.fill")
-                    .font(.system(size: 11, weight: .bold))
+                    .scaledFont(11, weight: .bold)
                     .foregroundColor(.white.opacity(0.9))
                     .shadow(color: .black.opacity(0.6), radius: 1)
             }

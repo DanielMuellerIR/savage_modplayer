@@ -140,8 +140,10 @@ struct ChannelFootersRow: View {
                         .lineLimit(1)
                     tag("M", on: coordinator.isMuted(channelIndex: channelIndex), color: .red)
                         .onTapGesture { coordinator.toggleMute(channelIndex: channelIndex) }
+                        .help("Kanal \(channelIndex + 1) stummschalten (Mute).")
                     tag("S", on: coordinator.isSoloed(channelIndex: channelIndex), color: .green)
                         .onTapGesture { coordinator.toggleSolo(channelIndex: channelIndex) }
+                        .help("Kanal \(channelIndex + 1) solo — nur diesen Kanal hören.")
                 }
                 .frame(width: stripWidth, alignment: .leading)
             }

@@ -128,6 +128,14 @@ struct MainView: View {
     // Active Preview hover card
     @State var hoveredInstrumentIndex: Int? = nil
 
+    // UI-Zoom-Stufe (CMD +/-/0), selber @AppStorage-Key wie in AppMain — hier nur
+    // fuer den versteckten CMD+=-Zusatz (Layouts, auf denen ⌘+ Shift braucht).
+    @AppStorage("savage.uiZoom") var uiZoom = 0
+    // Aktueller UI-Schriftfaktor aus dem Environment (fuer die wenigen Stellen, die
+    // einen fertigen `Font`-Wert brauchen statt des `.scaledFont`-Modifiers — z.B.
+    // der an MarqueeText uebergebene Titel-Font).
+    @Environment(\.uiFontScale) var uiFontScale
+
     // Lokaler Tastatur-Monitor (Leertaste/Pfeile/ESC). Token wird in
     // .onDisappear wieder entfernt, damit nichts leakt.
     @State var keyMonitor: Any? = nil
@@ -137,19 +145,21 @@ struct MainView: View {
             HStack(spacing: 0) {
                 // Sidebar for Playlist or Instruments
                 VStack(spacing: 0) {
-                    // Sidebar Custom Tab Picker
-                    HStack(spacing: 0) {
+                    // Sidebar-Umschalter als kompaktes Segmented-Control (Wrapper
+                    // um die beiden Segmente, Vorbild Light/Dark-Switcher). Kein
+                    // Unterstrich und KEIN Divider mehr darunter — das Suchfeld
+                    // „Titel filtern…" reicht als optischer Trenner; das spart Hoehe.
+                    HStack(spacing: 4) {
                         TabButton(title: "PLAYLIST", tag: 0, selection: $selectedSidebarTab, theme: theme)
                         TabButton(title: "INSTRUMENTE", tag: 1, selection: $selectedSidebarTab, theme: theme)
                     }
+                    .padding(3)
+                    .background(theme == .workbench ? Color.lightSurface : Color.spaceBackground.opacity(0.6))
+                    .cornerRadius(theme == .workbench ? 0 : 6)
                     .padding(.horizontal)
-                    .padding(.top, 12)
-                    .padding(.bottom, 8)
-                    .background(theme == .workbench ? Color.lightSurface : Color.clear)
-                    
-                    Divider()
-                        .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.2))
-                    
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
+
                     if selectedSidebarTab == 0 {
                         playlistSidebar
                     } else {
@@ -188,7 +198,7 @@ struct MainView: View {
                                 .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
                             Spacer()
                         }
-                        .font(.system(size: 11))
+                        .scaledFont(11)
                         .padding(.horizontal)
                         .padding(.vertical, 6)
                         .background(Color.orange.opacity(theme == .workbench ? 0.12 : 0.08))
@@ -419,6 +429,14 @@ struct MainView: View {
                 dragDropOverlayView
             }
         }
+        // CMD+= als zweiter Zoom-in-Weg (Layout-unabhaengig), unsichtbar verdrahtet
+        // — CMD+ liegt auf vielen Tastaturlayouts erst hinter Shift.
+        .background {
+            Button("") { uiZoom = min(uiZoom + 1, 5) }
+                .keyboardShortcut("=", modifiers: .command)
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
     }
-    
+
 }

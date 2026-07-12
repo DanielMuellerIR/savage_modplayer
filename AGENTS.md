@@ -391,13 +391,19 @@ XM-Kern (M0–M5) steht, committet, getestet; im echten App-GUI verifiziert (spi
 
 **Hinweis Standard-Playlist-Ordner:** Durch das App-Starten aus dem Repo wurde der Auto-Load-/Standard-Ordner auf `audio/` gezogen; Daniel hatte einen anderen gesetzt. Nächste Session ggf. zurückstellen anbieten (Wert steckt in `@AppStorage`).
 
-## UI-/Fix-Plan 2026-07-12 (GEPLANT — Ausführung nächste Session)
+## UI-/Fix-Plan 2026-07-12 (in Ausführung)
 
-Stand nach dieser Session: bei **v1.5.37** (Splitter-Optik/Greifbarkeit/Cursor +
-Playlist-Favoriten sind schon umgesetzt und committet). Die folgenden Punkte hat
-Daniel **nur planen** lassen; Umsetzung nächste Session. Reihenfolge unten =
-sinnvolle Bearbeitungsreihenfolge (klein→groß, Unabhängiges zuerst). Vor Beginn
-diesen Block lesen; nach jedem erledigten Punkt hier abhaken/streichen.
+**Fortschritt (v1.5.38, 2026-07-12, M5):** Punkte **1–7 ERLEDIGT** und auf M5
+per Fenster-Screenshot in Light+Dark verifiziert (Font-Zoom −3…+5 getestet, Grid
+bleibt fix). **Offen: 8 (61-ZIP-Engine-Test, GROSS), 9 (nur Notiz), 10
+(responsiver Kompaktmodus, GROSS).** Randnotiz aus dem Test: Start MIT
+Datei-Argument (`savage-cli`-Weg NICHT betroffen, nur GUI `open --args <mod>`)
+zeigte im Testlauf kein Hauptfenster — via Autoplay-Ordner startet die GUI normal;
+ist unabhängig von den 1–7-Änderungen (nicht angefasster Code), separat prüfen.
+
+Stand vorher: bei **v1.5.37** (Splitter-Optik/Greifbarkeit/Cursor +
+Playlist-Favoriten). Reihenfolge unten = Bearbeitungsreihenfolge (klein→groß).
+Vor Beginn diesen Block lesen; nach jedem erledigten Punkt hier abhaken/streichen.
 
 Beantwortete Rückfragen (2026-07-12):
 - **Font-Skalierung:** NUR UI-Text skalieren, das **Tracker-Pattern-Grid bleibt
@@ -407,7 +413,7 @@ Beantwortete Rückfragen (2026-07-12):
   Dateien mit Begründung melden (nicht erzwingen).
 - **Master-Oszi-Zeile:** vorerst NICHT anfassen, nur als Notiz (Punkt 9).
 
-### 1. Format-Badge auch im Light Mode (klein) — Punkt „Badges fehlen"
+### 1. Format-Badge auch im Light Mode (klein) — ✅ ERLEDIGT v1.5.38 — Punkt „Badges fehlen"
 Die Modul-Typ-Badge („IMPULSE TRACKER" etc.) wird aktuell nur im Dark-Mode
 gerendert: `MainView+HeaderViews.swift:33` steht `if theme == .cyber { … }`.
 → Badge auch im `.workbench` (Light) zeigen, mit light-tauglichen Farben
@@ -416,7 +422,7 @@ gerendert: `MainView+HeaderViews.swift:33` steht `if theme == .cyber { … }`.
 im Light = 0). `formatBadgeText` (Zeile 10) bleibt unverändert.
 Abnahme: Badge in beiden Themes sichtbar/lesbar.
 
-### 2. Verlauf („ZULETZT GESPIELT") Light-Mode lesbar + eine Stufe größer — Punkt B
+### 2. Verlauf („ZULETZT GESPIELT") Light-Mode lesbar + eine Stufe größer — ✅ ERLEDIGT v1.5.38 — Punkt B
 In `MainView+PlaylistViews.swift`, Abschnitt „ZULETZT GESPIELT":
 - Der Titel-Text „ZULETZT GESPIELT" nutzt `.foregroundColor(.spaceTextSecondary)`
   (~Zeile 240) und die Einträge `.foregroundColor(.spaceTextSecondary.opacity(0.8))`
@@ -427,7 +433,7 @@ In `MainView+PlaylistViews.swift`, Abschnitt „ZULETZT GESPIELT":
   von 9 auf 10.
 Abnahme: Verlauf im Light-Mode klar lesbar, Einträge sichtbar größer.
 
-### 3. Favoriten-Stern-Farbe themen-abhängig — Punkt G
+### 3. Favoriten-Stern-Farbe themen-abhängig — ✅ ERLEDIGT v1.5.38 — Punkt G
 Die neuen Favoriten-Sterne (umgesetzt in dieser Session) im Light-Mode NICHT gelb,
 sondern mit dem dunklen Blau `lightAccent` (#0055B5) füllen; Dark-Mode bleibt gelb.
 Betrifft in `MainView+PlaylistViews.swift`: (a) Zeilen-Stern (`fav ? .yellow : …`)
@@ -435,7 +441,7 @@ und (b) Kopf-Filter-Stern (`favoritesOnly ? .yellow : …`). → statt `.yellow`
 jeweils `theme == .workbench ? Color.lightAccent : .yellow`.
 Abnahme: markierte Sterne im Light dunkelblau, im Dark gelb.
 
-### 4. Sidebar-Tabs (PLAYLIST/INSTRUMENTE) als Segmented-Control — Punkt F
+### 4. Sidebar-Tabs (PLAYLIST/INSTRUMENTE) als Segmented-Control — ✅ ERLEDIGT v1.5.38 — Punkt F
 Aktuell: `TabButton` (`SmallControls.swift:9`) mit Unterstrich-`Rectangle` (height 2)
 unter dem aktiven Tab; darunter zusätzlich ein `Divider()` (`MainView.swift:140-141`).
 Der Tab-Block frisst viel vertikalen Platz und sieht mäßig aus.
@@ -447,7 +453,7 @@ Schrift, inaktiv = Flächen-Hintergrund; Wrapper mit `padding(3)` + `background`
 filtern…" reicht als optischer Trenner.
 Abnahme: Tabs kompakt im Switcher-Look, keine Linien mehr, weniger Höhe.
 
-### 5. Transport: vier Seek-Buttons neben Stopp; 15/30 am Slider raus — Punkt E
+### 5. Transport: vier Seek-Buttons neben Stopp; 15/30 am Slider raus — ✅ ERLEDIGT v1.5.38 — Punkt E
 In `MainView+ControlPanel.swift`:
 - Linker Block (`:38-52`): die zwei Buttons `gobackward.10`/`goforward.10` durch
   VIER ersetzen — `gobackward.30` (−30s), `gobackward.10` (−10s), `goforward.10`
@@ -460,7 +466,7 @@ In `MainView+ControlPanel.swift`:
 Abnahme: nur noch EIN Satz Seek-Buttons (−30/−10/+10/+30) neben Stopp; am Slider
 keine Sprung-Buttons mehr.
 
-### 6. Globale Schriftgrößen-Skalierung CMD+ / CMD− / CMD+0 — Punkt C (GRÖSSTER)
+### 6. Globale Schriftgrößen-Skalierung CMD+ / CMD− / CMD+0 — ✅ ERLEDIGT v1.5.38 — Punkt C (GRÖSSTER)
 Vorbild Mucke_Baby (`/Users/danielmuller/git/Mucke_Baby/Sources/MacRadioApp.swift`).
 Kein globaler Auto-Trick möglich (SwiftUI-macOS ignoriert `dynamicTypeSize`) —
 jede UI-`.system(size: N)`-Stelle muss den Faktor selbst einrechnen. Nur UI, NICHT
@@ -490,7 +496,7 @@ Mechanik zum Nachbauen:
 Abnahme: CMD+/−/0 skaliert die gesamte UI-Schrift sichtbar, Grid unverändert,
 Stufe überlebt Neustart; Layout bricht bei ±Extremen nicht.
 
-### 7. Tooltips für alle Buttons (außer Play/Pause & Stopp) — Punkt H
+### 7. Tooltips für alle Buttons (außer Play/Pause & Stopp) — ✅ ERLEDIGT v1.5.38 — Punkt H
 Audit aller `Button`/klickbaren Controls in den View-Dateien; wo `.help("…")`
 fehlt, ergänzen (kurz, präzise, Deutsch, generisches Maskulinum). Ausdrücklich
 AUSGENOMMEN: Play/Pause und Stopp (selbsterklärend). Explizit genannt: der
