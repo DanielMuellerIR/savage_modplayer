@@ -41,15 +41,15 @@ struct ResizableDivider: View {
         let lineColor: Color = theme == .workbench
             ? Color.lightTextSecondary.opacity(0.30)
             : Color.spaceTextSecondary.opacity(0.22)
-        // Linie an der Kante zum Hauptbereich (vertikal: rechts, horizontal:
-        // unten) statt mittig — so sitzt der schmale Strich an der echten
-        // Panel-Grenze, während die übrige Fläche unsichtbar verschmilzt.
-        let lineAlignment: Alignment = axis == .vertical ? .trailing : .bottom
-        return ZStack(alignment: lineAlignment) {
+        // Linie MITTIG im Handle (nicht an der Kante): Der Nutzer zielt auf den
+        // sichtbaren Strich; sitzt die Trefferfläche nur auf EINER Seite davon,
+        // verfehlt jeder Klick knapp daneben. Zentriert bleiben links UND rechts
+        // je ~5 pt greifbar (Bug „fühlt sich wie 1 px an", 2026-07-12).
+        return ZStack {
             // Opake Trefferfläche (füllt den hitSize-Rahmen, verdeckt den
-            // Fenster-Hintergrund).
+            // Fenster-Hintergrund, verschmilzt mit der Sidebar).
             barColor
-            // Dünne Linie an der Kante.
+            // Dünne Linie mittig.
             Rectangle()
                 .fill(lineColor)
                 .frame(width: axis == .vertical ? thickness : nil,
