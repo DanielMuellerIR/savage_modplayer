@@ -870,3 +870,23 @@ Wichtige Leitplanken:
 - **Appex-Registrierung nach Rebuild**: `build_app.sh` löscht/erzeugt das .app neu — danach kennt PluginKit den Appex u. U. nicht mehr. Für lokale Tests: `pluginkit -a "<app>/Contents/PlugIns/SavageModPlayerQuickLook.appex"`; Kontrolle mit `pluginkit -m -p com.apple.quicklook.preview`. Bei Installation nach `/Applications` passiert das automatisch.
 - **`qlmanage -p -o dir` (headless) nutzt moderne Preview-Extensions NICHT** — nur den Legacy-Pfad. Ein leeres Ergebnis dort heißt nicht, dass die Extension kaputt ist; Prozess-Spawn-Check (siehe oben) ist der verlässliche Headless-Beweis.
 - **QL-Audio-Preview braucht `QLPreviewReply(fileURL:)` (verifiziert 2026-07-02)**: Eine Daten-Reply (`dataOfContentType: .wav`) zeigt für Audio nur die generische Info-Karte (Titel erscheint, aber kein Player). Erst die Datei-URL-Variante (laut `QLPreviewReply.h` explizit inkl. `UTTypeAudio`) liefert das native Player-UI. Deshalb schreibt der Provider die gerenderte WAV in den Temp-Bereich des Extension-Containers und liefert die URL.
+
+## Verzeichnisstruktur
+
+<!-- directory-structure: generated -->
+- [AGENTS.md](AGENTS.md) — Projektprofil, Arbeitsregeln und dieses Datei-Verzeichnis.
+- [README.de.md](README.de.md) — Projekt-Einstieg und Nutzerdokumentation.
+- [README.md](README.md) — Projekt-Einstieg und Nutzerdokumentation.
+- [RELEASE_NOTES.de.md](RELEASE_NOTES.de.md) — Projektdokumentation.
+- [RELEASE_NOTES.md](RELEASE_NOTES.md) — Projektdokumentation.
+- `Savage Mod Player.app/` — Projektbestandteil; Details stehen im Code bzw. in der verlinkten Dokumentation.
+- `Sources/` — Projektbestandteil; Details stehen im Code bzw. in der verlinkten Dokumentation.
+- `Tests/` — Projektbestandteil; Details stehen im Code bzw. in der verlinkten Dokumentation.
+- `archive/` — Projektbestandteil; Details stehen im Code bzw. in der verlinkten Dokumentation.
+- `audio/` — Projektbestandteil; Details stehen im Code bzw. in der verlinkten Dokumentation.
+- `docs/` — Projektbestandteil; Details stehen im Code bzw. in der verlinkten Dokumentation.
+- `quicklook/` — Projektbestandteil; Details stehen im Code bzw. in der verlinkten Dokumentation.
+- `src/` — Projektbestandteil; Details stehen im Code bzw. in der verlinkten Dokumentation.
+- `tasks/` — Projektbestandteil; Details stehen im Code bzw. in der verlinkten Dokumentation.
+- `tools/` — Projektbestandteil; Details stehen im Code bzw. in der verlinkten Dokumentation.
+<!-- /directory-structure -->
