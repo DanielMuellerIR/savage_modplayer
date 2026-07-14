@@ -161,13 +161,33 @@ struct MainView: View {
 
     var body: some View {
       GeometryReader { geo in
+        // Die persistierte Sidebar-Breite darf bei einem kleinen Fenster nicht den
+        // Hauptbereich aus dem sichtbaren Fenster schieben. Deshalb bleibt rechts
+        // immer ein sinnvoll bedienbarer Bereich von mindestens 520 pt übrig; bei
+        // erneutem Vergrößern gilt wieder die vom Nutzer gespeicherte Breite.
+        let dividerWidth: CGFloat = 1
+        let minimumSidebarWidth: CGFloat = 220
+        let minimumMainPanelWidth: CGFloat = 520
+        let maximumSidebarWidth = max(
+            minimumSidebarWidth,
+            min(640, geo.size.width - minimumMainPanelWidth - dividerWidth)
+        )
+        let effectiveSidebarWidth = min(
+            max(CGFloat(sidebarWidth), minimumSidebarWidth),
+            maximumSidebarWidth
+        )
+        let effectiveSidebarBinding = Binding<Double>(
+            get: { Double(effectiveSidebarWidth) },
+            set: { sidebarWidth = $0 }
+        )
+
         // Compact-Entscheidung anhand des Hauptbereichs = Fenster minus Sidebar
-        // (+Divider), mit Hysterese (computeCompact). Ein Top-Level-GeometryReader
+        // (+Trenner), mit Hysterese (computeCompact). Ein Top-Level-GeometryReader
         // liefert `geo.size` zuverlässig bei jeder Fenster-Größenänderung — die
         // frühere Messung per Background-GeometryReader+PreferenceKey lieferte 0×0
         // und feuerte nur einmal (Bug 2026-07-12).
         let compact = Self.computeCompact(
-            CGSize(width: geo.size.width - CGFloat(sidebarWidth) - 11, height: geo.size.height),
+            CGSize(width: geo.size.width - effectiveSidebarWidth - dividerWidth, height: geo.size.height),
             current: isCompact
         )
         ZStack {
@@ -195,7 +215,7 @@ struct MainView: View {
                         instrumentsSidebar
                     }
                 }
-                .frame(width: CGFloat(sidebarWidth))
+                .frame(width: effectiveSidebarWidth)
                 .background(
                     theme == .workbench ? Color.lightSurface : Color.spaceSurface
                 )
@@ -204,16 +224,22 @@ struct MainView: View {
                 // erlaubt, die Sidebar breit genug zu ziehen, um lange Dateinamen
                 // vollständig zu lesen. Breite wird persistiert.
                 ResizableDivider(
-                    width: $sidebarWidth,
-                    range: 200...640,
+                    width: effectiveSidebarBinding,
+                    range: Double(minimumSidebarWidth)...Double(maximumSidebarWidth),
                     theme: theme
                 )
 
                 // Main Panel
                 VStack(spacing: 0) {
                     // Header (Track Title and Metadata)
-                    headerView
-                        .padding()
+                    Group {
+                        if isCompact {
+                            compactHeaderView
+                        } else {
+                            headerView
+                        }
+                    }
+                        .padding(isCompact ? 12 : 16)
                         .background(theme == .workbench ? Color.lightSurface : Color.spaceSurface.opacity(0.4))
 
                     // Nicht-fatale Formatwarnungen bleiben auch bei laufender
@@ -248,16 +274,18 @@ struct MainView: View {
                             .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.1))
                     }
 
-                    // VU Visualizers & Synthesis Options Panel — im Kompaktmodus zeigt
-                    // vuVisualizersView statt der Oszi-Wellen nur die leichte M/S-Leiste,
-                    // die Options-Zeile (LED/HI-FI/LOOP) bleibt in beiden Modi.
-                    vuVisualizersView(isCompact: isCompact)
-                        .padding(.horizontal)
-                        .padding(.vertical, isCompact ? 8 : 12)
-                        .background(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground.opacity(0.2))
+                    if !isCompact {
+                        // Kanal-Oszilloskope und Optionen gehoeren nur zum vollen
+                        // Tracker-Arbeitsplatz. Im Kompaktmodus sitzt die leichte
+                        // M/S-/Optionsleiste in der zentralen Player-Karte.
+                        vuVisualizersView(isCompact: false)
+                            .padding(.horizontal)
+                            .padding(.vertical, 12)
+                            .background(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground.opacity(0.2))
 
-                    Divider()
-                        .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.1))
+                        Divider()
+                            .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.1))
+                    }
 
                     if !isCompact {
                         // Scrolling Tracker Grid or Empty State Drop Zone — SCHWER,
@@ -299,18 +327,14 @@ struct MainView: View {
 
                         Divider()
                             .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.3))
-                    } else if coordinator.activeMod == nil {
-                        // Kompaktmodus ohne geladenen Song: kleine Drop-Zone, damit man
-                        // trotzdem eine Datei laden kann.
-                        dropZonePrompt
-                            .padding()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        // Eigenstaendiger, leichter Player statt einer klaffenden
+                        // Leerflaeche. Pattern, Marker und Oszilloskope bleiben
+                        // weiterhin vollstaendig aus der View-Hierarchie entfernt.
+                        compactDashboardView
+
                         Divider()
                             .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.3))
-                    } else {
-                        // Kompaktmodus mit Song: minimaler flexibler Platz, damit der
-                        // Transport unten sitzt und das Fenster wirklich klein wird.
-                        Spacer(minLength: 0)
                     }
 
                     // Toolbar Control Panel
@@ -495,9 +519,11 @@ struct MainView: View {
             coordinator.visualizersVisible = !compact
         }
       }
-      // ENABLER für den Kompaktmodus: Mindestgröße deutlich senken (früher 1080×720),
-      // sonst ließe sich das Fenster nicht klein genug ziehen.
-      .frame(minWidth: 380, minHeight: 320)
+      // Unterhalb dieser Groesse lassen sich Sidebar, kompakter Header und
+      // Transport nicht mehr verlaesslich darstellen. Die frueheren 380x320 pt
+      // erlaubten zwar extremes Schrumpfen, schoben dabei aber die Sidebar aus dem
+      // Fenster und schnitten Bedienelemente ab.
+      .frame(minWidth: 760, minHeight: 520)
     }
 
 }

@@ -28,34 +28,30 @@ struct ResizableDivider: View {
         // schmalen Handle mit der Maus kaum. So bleibt die Optik ruhig, das
         // Ziehen aber gut greifbar.
         let thickness: CGFloat = 1     // sichtbare Linienstärke (dünn)
-        // Unsichtbare Trefferfläche. Vertikal bewusst schmal (11 pt) gehalten,
-        // damit das opake Band auf der Hauptbereich-Seite kaum auffällt.
+        // Unsichtbare Trefferfläche. Vertikal 11 pt breit, obwohl der Trenner im
+        // Layout selbst nur 1 pt belegt. Dadurch endet die Sidebar-Farbe EXAKT an
+        // der Linie; die breite Ziehfläche liegt transparent über beiden Seiten.
         // Horizontal großzügiger (24 pt): Der Trenner steckt zwischen zwei
         // ScrollViews (Playlist oben, Verlauf unten) — ein knapp daneben
         // gesetzter senkrechter Zug scrollt sonst die Liste statt zu ziehen.
-        // Vertikal kostet mehr Breite Optik, horizontal NICHT (Band verschmilzt
-        // oben wie unten mit der Sidebar-Fläche).
+        // Horizontal bleibt das 24-pt-Band Teil des Layouts: Dort verschmilzt es
+        // oben wie unten mit derselben Sidebar-Fläche und schafft bewusst Abstand.
         let hitSize: CGFloat = axis == .vertical ? 11 : 24
-        // WICHTIG: Die breite Trefferfläche MUSS opak gefüllt sein. Mit
-        // `Color.clear` schien im Dark-Mode der weiße Fenster-Hintergrund durch
-        // und der Trenner wurde zum grellen, breiten weißen Balken (Bug
-        // 2026-07-12). Der Flächenton entspricht der Sidebar-/Listenfläche,
-        // sodass die 11-pt-Fläche optisch mit dem Nachbar-Panel verschmilzt und
-        // NUR die dünne Linie als Trenner sichtbar bleibt.
+        // Nur der horizontale Trenner braucht ein opakes Band. Beim vertikalen
+        // Trenner würde dieser Flächenton rechts über die Linie hinausreichen —
+        // genau der sichtbare Überstand aus Light- und Dark-Mode.
         let barColor: Color = theme == .workbench ? Color.lightSurface : Color.spaceSurface
         // Dünne, dezente Linie: Light heller als zuvor, Dark neutral-grau statt
         // hellem Cyan-Akzent.
         let lineColor: Color = theme == .workbench
             ? Color.lightTextSecondary.opacity(0.30)
             : Color.spaceTextSecondary.opacity(0.22)
-        // Linie MITTIG im Handle (nicht an der Kante): Der Nutzer zielt auf den
-        // sichtbaren Strich; sitzt die Trefferfläche nur auf EINER Seite davon,
-        // verfehlt jeder Klick knapp daneben. Zentriert bleiben links UND rechts
-        // je ~5 pt greifbar (Bug „fühlt sich wie 1 px an", 2026-07-12).
+        // Linie MITTIG in der transparenten Trefferfläche: links und rechts
+        // bleiben je etwa 5 pt greifbar, ohne eine Farbe über die Linie zu malen.
         return ZStack {
-            // Opake Trefferfläche (füllt den hitSize-Rahmen, verdeckt den
-            // Fenster-Hintergrund, verschmilzt mit der Sidebar).
-            barColor
+            if axis == .horizontal {
+                barColor
+            }
             // Dünne Linie mittig.
             Rectangle()
                 .fill(lineColor)
@@ -114,6 +110,10 @@ struct ResizableDivider: View {
             .help(axis == .vertical
                   ? "Ziehen, um die Playlist-Breite anzupassen (lange Dateinamen sichtbar machen)"
                   : "Ziehen, um die Höhe der Liste anzupassen")
+            // Der vertikale Trenner meldet dem HStack nur die sichtbare 1-pt-
+            // Breite. Die zuvor aufgebaute 11-pt-Interaktionsfläche bleibt als
+            // transparenter Überhang erhalten und damit bequem ziehbar.
+            .frame(width: axis == .vertical ? thickness : nil)
     }
 }
 
