@@ -52,7 +52,7 @@ extension MainView {
                         .foregroundColor(.spaceAccentGlow)
                     Text("WTFPL — Quellcode: github.com/DanielMuellerIR/savage_modplayer")
                 }
-                .font(.system(size: 11))
+                .scaledFont(11)
                 .foregroundColor(.white)
                 .padding()
                 .background(Color.spaceSurface.opacity(0.4))
@@ -83,7 +83,7 @@ extension MainView {
             
             VStack(spacing: 20) {
                 Text("TASTATUR-KURZBEFEHLE")
-                    .font(.system(size: 14, weight: .bold))
+                    .scaledFont(14, weight: .bold)
                     .foregroundColor(Color.accent(theme))
                 
                 VStack(alignment: .leading, spacing: 12) {
@@ -118,7 +118,7 @@ extension MainView {
                         Text("Menüs schließen")
                     }
                 }
-                .font(.system(size: 11))
+                .scaledFont(11)
                 .padding()
                 
                 Button("SCHLIESSEN") {
@@ -153,10 +153,10 @@ extension MainView {
             
             VStack(spacing: 16) {
                 Image(systemName: "arrow.down.doc.fill")
-                    .font(.system(size: 48))
+                    .scaledFont(48)
                     .foregroundColor(.spaceAccent)
                 Text("MOD DATEIEN HIER ABLEGEN")
-                    .font(.system(size: 16, weight: .bold))
+                    .scaledFont(16, weight: .bold)
                     .foregroundColor(.white)
             }
         }

@@ -200,15 +200,19 @@ public enum ITParser {
             let pan = rawPan & 0x7F
             let disabled = rawPan & 0x80 != 0
             let surround = pan == 100
-            guard surround || pan <= 64 else {
-                throw ParserError.invalidHeaderValue("channelPan[\(channel)]", rawPan)
-            }
+            // IT-Kanal-Pan: 0..64 = Position, 100 = Surround; das Disable-Bit (0x80)
+            // kommt oben drauf. Viele Tracker legen deaktivierte/ungenutzte Kanäle als
+            // 0xFF ab — der Pan-Anteil ist dann 127 (außerhalb 0..64). OpenMPT verwirft
+            // solche Module NICHT, sondern klemmt den Pan; wir ebenso: ungültige Pan-
+            // Werte auf Mitte setzen statt das ganze Modul abzulehnen (der Kanal ist in
+            // aller Regel ohnehin deaktiviert und damit stumm).
+            let clampedPan = pan <= 64 ? pan : 32
             let volume = try reader.byte(0x80 + channel)
             guard volume <= 64 else {
                 throw ParserError.invalidHeaderValue("channelVolume[\(channel)]", volume)
             }
 
-            channelPannings.append(surround ? 0.5 : Float(pan) / 64.0)
+            channelPannings.append(surround ? 0.5 : Float(clampedPan) / 64.0)
             channelVolumes.append(volume)
             channelSurrounds.append(surround)
             channelDisabled.append(disabled)
@@ -846,10 +850,14 @@ public enum ITParser {
             guard c5Speed <= 9_999_999 else {
                 throw ParserError.invalidHeaderValue("sample[\(sampleIndex)].c5Speed", c5Speed)
             }
-            guard vibratoSpeed <= 64, vibratoDepth <= 127,
-                  ITSampleVibratoWaveform(rawValue: vibratoType) != nil else {
-                throw ParserError.invalidHeaderValue("sample[\(sampleIndex)].vibrato", vibratoType)
-            }
+            // Sample-Vibrato-Parameter tolerant klemmen statt das Modul zu verwerfen:
+            // manche Module (z. B. mehrere Unreal-Tournament-ITs) tragen in ungenutzten
+            // Sample-Feldern Werte außerhalb der IT-Spec (Speed 0..64, Depth 0..64,
+            // Typ 0..3). OpenMPT klemmt diese; die Parameter wirken ohnehin nur, wenn
+            // die Tiefe > 0 ist.
+            let vibSpeed = min(vibratoSpeed, 64)
+            let vibDepth = min(vibratoDepth, 64)
+            let vibWaveform = ITSampleVibratoWaveform(rawValue: vibratoType) ?? .sine
             guard convertFlags & ~0x07 == 0 else {
                 throw ParserError.unsupportedSampleEncoding(
                     sample: sampleIndex,
@@ -857,8 +865,12 @@ public enum ITParser {
                 )
             }
 
-            let loopEnabled = flags & 0x10 != 0
-            let sustainEnabled = flags & 0x20 != 0
+            // Ein leeres Sample (Länge 0) kann nicht loopen. Manche Module (z. B.
+            // smb3-map2.it, NCBelow.IT) lassen bei ungenutzten/leeren Samples das
+            // Loop-Flag samt Müll-Grenzen stehen — solche Loops effektiv ignorieren
+            // statt das ganze Modul zu verwerfen.
+            let loopEnabled = (flags & 0x10 != 0) && length > 0
+            let sustainEnabled = (flags & 0x20 != 0) && length > 0
             if loopEnabled {
                 try validateLoop(
                     sample: sampleIndex,
@@ -957,10 +969,10 @@ public enum ITParser {
                 )
                 : nil
             let vibrato = ITSampleVibrato(
-                speed: vibratoSpeed,
-                depth: vibratoDepth,
+                speed: vibSpeed,
+                depth: vibDepth,
                 rate: vibratoRate,
-                waveform: ITSampleVibratoWaveform(rawValue: vibratoType)!
+                waveform: vibWaveform
             )
             let name = try reader.string(offset + 0x14, length: 26)
 
@@ -981,7 +993,7 @@ public enum ITParser {
                     c5Speed: c5Speed,
                     globalVolume: globalVolume,
                     defaultPanning: defaultPanning,
-                    vibrato: vibratoDepth > 0 ? vibrato : nil
+                    vibrato: vibDepth > 0 ? vibrato : nil
                 )
             ))
         }

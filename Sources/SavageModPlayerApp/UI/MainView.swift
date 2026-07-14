@@ -81,7 +81,17 @@ struct MainView: View {
     
     // Search & Filter
     @State var playlistSearchQuery: String = ""
-    
+    // Favoriten-Filter: zeigt nur mit Stern markierte Titel (Umschalt-Knopf im
+    // Playlist-Kopf).
+    @State var favoritesOnly = false
+    // Gemerkte Favoriten. Schlüssel ist bewusst der BEREINIGTE Dateiname
+    // (cleanFilename), NICHT der Pfad: Drag&Drop-Titel werden in pro-Sitzung
+    // wechselnde Temp-Ordner kopiert — ein pfadbasierter Schlüssel überlebte den
+    // Neustart nicht. Der bereinigte Name (ohne Temp-UUID-Präfix) ist über
+    // Sitzungen hinweg stabil. Persistiert in UserDefaults (siehe
+    // loadFavorites/toggleFavorite).
+    @State var favorites: Set<String> = []
+
     // Recent Songs History
     @State var recentSongs: [URL] = []
     
@@ -118,35 +128,94 @@ struct MainView: View {
     // Active Preview hover card
     @State var hoveredInstrumentIndex: Int? = nil
 
+    // UI-Zoom-Stufe (CMD +/-/0), selber @AppStorage-Key wie in AppMain — hier nur
+    // fuer den versteckten CMD+=-Zusatz (Layouts, auf denen ⌘+ Shift braucht).
+    @AppStorage("savage.uiZoom") var uiZoom = 0
+    // Aktueller UI-Schriftfaktor aus dem Environment (fuer die wenigen Stellen, die
+    // einen fertigen `Font`-Wert brauchen statt des `.scaledFont`-Modifiers — z.B.
+    // der an MarqueeText uebergebene Titel-Font).
+    @Environment(\.uiFontScale) var uiFontScale
+
     // Lokaler Tastatur-Monitor (Leertaste/Pfeile/ESC). Token wird in
     // .onDisappear wieder entfernt, damit nichts leakt.
     @State var keyMonitor: Any? = nil
-    
+
+    // Responsiver Kompaktmodus (Punkt 10): bei kleinem Hauptbereich werden die
+    // schweren Visualisierungen (Grid, Kanal-/Master-Oszis, Marker-Map) aus der
+    // View-Hierarchie ENTFERNT (nicht .hidden()) — das hängt ihre 30-Hz-Observer
+    // ab und senkt die CPU-Last spürbar. Rein automatisch über die Fenstergröße.
+    @State var isCompact = false
+
+    // Hysterese gegen Flackern an der Umschaltgrenze: aus Full wird erst bei klar
+    // kleinem Bereich Compact, aus Compact erst bei klar großem wieder Full.
+    static func computeCompact(_ size: CGSize, current: Bool) -> Bool {
+        // Grid + Oszis brauchen v.a. Höhe; Breite zusätzlich fürs Nebeneinander.
+        let wIn: CGFloat = 820, hIn: CGFloat = 560   // darunter -> Compact
+        let wOut: CGFloat = 900, hOut: CGFloat = 640 // erst darüber wieder Full
+        if current {
+            return !(size.width >= wOut && size.height >= hOut)
+        } else {
+            return size.width < wIn || size.height < hIn
+        }
+    }
+
     var body: some View {
+      GeometryReader { geo in
+        // Die persistierte Sidebar-Breite darf bei einem kleinen Fenster nicht den
+        // Hauptbereich aus dem sichtbaren Fenster schieben. Deshalb bleibt rechts
+        // immer ein sinnvoll bedienbarer Bereich von mindestens 520 pt übrig; bei
+        // erneutem Vergrößern gilt wieder die vom Nutzer gespeicherte Breite.
+        let dividerWidth: CGFloat = 1
+        let minimumSidebarWidth: CGFloat = 220
+        let minimumMainPanelWidth: CGFloat = 520
+        let maximumSidebarWidth = max(
+            minimumSidebarWidth,
+            min(640, geo.size.width - minimumMainPanelWidth - dividerWidth)
+        )
+        let effectiveSidebarWidth = min(
+            max(CGFloat(sidebarWidth), minimumSidebarWidth),
+            maximumSidebarWidth
+        )
+        let effectiveSidebarBinding = Binding<Double>(
+            get: { Double(effectiveSidebarWidth) },
+            set: { sidebarWidth = $0 }
+        )
+
+        // Compact-Entscheidung anhand des Hauptbereichs = Fenster minus Sidebar
+        // (+Trenner), mit Hysterese (computeCompact). Ein Top-Level-GeometryReader
+        // liefert `geo.size` zuverlässig bei jeder Fenster-Größenänderung — die
+        // frühere Messung per Background-GeometryReader+PreferenceKey lieferte 0×0
+        // und feuerte nur einmal (Bug 2026-07-12).
+        let compact = Self.computeCompact(
+            CGSize(width: geo.size.width - effectiveSidebarWidth - dividerWidth, height: geo.size.height),
+            current: isCompact
+        )
         ZStack {
             HStack(spacing: 0) {
                 // Sidebar for Playlist or Instruments
                 VStack(spacing: 0) {
-                    // Sidebar Custom Tab Picker
-                    HStack(spacing: 0) {
+                    // Sidebar-Umschalter als kompaktes Segmented-Control (Wrapper
+                    // um die beiden Segmente, Vorbild Light/Dark-Switcher). Kein
+                    // Unterstrich und KEIN Divider mehr darunter — das Suchfeld
+                    // „Titel filtern…" reicht als optischer Trenner; das spart Hoehe.
+                    HStack(spacing: 4) {
                         TabButton(title: "PLAYLIST", tag: 0, selection: $selectedSidebarTab, theme: theme)
                         TabButton(title: "INSTRUMENTE", tag: 1, selection: $selectedSidebarTab, theme: theme)
                     }
+                    .padding(3)
+                    .background(theme == .workbench ? Color.lightSurface : Color.spaceBackground.opacity(0.6))
+                    .cornerRadius(theme == .workbench ? 0 : 6)
                     .padding(.horizontal)
-                    .padding(.top, 12)
-                    .padding(.bottom, 8)
-                    .background(theme == .workbench ? Color.lightSurface : Color.clear)
-                    
-                    Divider()
-                        .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.2))
-                    
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
+
                     if selectedSidebarTab == 0 {
                         playlistSidebar
                     } else {
                         instrumentsSidebar
                     }
                 }
-                .frame(width: CGFloat(sidebarWidth))
+                .frame(width: effectiveSidebarWidth)
                 .background(
                     theme == .workbench ? Color.lightSurface : Color.spaceSurface
                 )
@@ -155,16 +224,22 @@ struct MainView: View {
                 // erlaubt, die Sidebar breit genug zu ziehen, um lange Dateinamen
                 // vollständig zu lesen. Breite wird persistiert.
                 ResizableDivider(
-                    width: $sidebarWidth,
-                    range: 200...640,
+                    width: effectiveSidebarBinding,
+                    range: Double(minimumSidebarWidth)...Double(maximumSidebarWidth),
                     theme: theme
                 )
 
                 // Main Panel
                 VStack(spacing: 0) {
                     // Header (Track Title and Metadata)
-                    headerView
-                        .padding()
+                    Group {
+                        if isCompact {
+                            compactHeaderView
+                        } else {
+                            headerView
+                        }
+                    }
+                        .padding(isCompact ? 12 : 16)
                         .background(theme == .workbench ? Color.lightSurface : Color.spaceSurface.opacity(0.4))
 
                     // Nicht-fatale Formatwarnungen bleiben auch bei laufender
@@ -178,7 +253,7 @@ struct MainView: View {
                                 .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
                             Spacer()
                         }
-                        .font(.system(size: 11))
+                        .scaledFont(11)
                         .padding(.horizontal)
                         .padding(.vertical, 6)
                         .background(Color.orange.opacity(theme == .workbench ? 0.12 : 0.08))
@@ -187,9 +262,9 @@ struct MainView: View {
                     Divider()
                         .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.2))
                     
-                    // Pattern Position Marker Map list — beobachtet transport (nicht
-                    // coordinator), damit die Positions-Marker MainView nicht neu rendern.
-                    if let mod = coordinator.activeMod {
+                    // Pattern-Marker-Map: SCHWER (breite, transport-getriebene Leiste)
+                    // — im Kompaktmodus komplett aus der Hierarchie nehmen.
+                    if !isCompact, let mod = coordinator.activeMod {
                         PatternMarkerMap(transport: coordinator.transport, mod: mod, theme: theme,
                                          onSeek: { coordinator.seek(toPosition: $0) })
                             .padding(.horizontal)
@@ -198,63 +273,77 @@ struct MainView: View {
                         Divider()
                             .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.1))
                     }
-                    
-                    // VU Visualizers & Synthesis Options Panel
-                    vuVisualizersView
-                        .padding(.horizontal)
-                        .padding(.vertical, 12)
-                        .background(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground.opacity(0.2))
-                    
-                    Divider()
-                        .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.1))
-                    
-                    // Scrolling Tracker Grid or Empty State Drop Zone
-                    VStack(spacing: 0) {
-                        // Defensiv gegen leere/korrupte Mods: length, patternTable und
-                        // der daraus gelesene patternIndex werden vor dem Zugriff geprueft
-                        // (sonst patternTable[-1] / patterns[ausserhalb] -> Crash).
-                        // codereview-ok: defensiv by-design — patternTable wird direkt danach indiziert; der isEmpty/length-Guard verhindert patternTable[-1]-Crash (2026-07-01)
-                        if let mod = coordinator.activeMod,
-                           mod.length > 0,
-                           !mod.patternTable.isEmpty {
-                            // Grid + Zeilenmarkierung beobachten transport (row-rate),
-                            // damit die Zeilenwechsel MainView nicht neu evaluieren.
-                            TrackerGridContainer(transport: coordinator.transport, mod: mod,
-                                                 channelIndices: mod.displayChannelIndices, theme: theme,
-                                                 onSeekRow: { row in
-                                                     // Zu (aktuelle Position, geklickte Zeile) springen;
-                                                     // Tempo wird rekonstruiert. Play/Weiter spielt ab hier.
-                                                     coordinator.seek(toPosition: coordinator.currentPosition, row: row)
-                                                 })
-                                .padding()
-                        } else {
-                            dropZonePrompt
-                                .padding()
-                        }
+
+                    if !isCompact {
+                        // Kanal-Oszilloskope und Optionen gehoeren nur zum vollen
+                        // Tracker-Arbeitsplatz. Im Kompaktmodus sitzt die leichte
+                        // M/S-/Optionsleiste in der zentralen Player-Karte.
+                        vuVisualizersView(isCompact: false)
+                            .padding(.horizontal)
+                            .padding(.vertical, 12)
+                            .background(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground.opacity(0.2))
+
+                        Divider()
+                            .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.1))
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(theme == .workbench ? Color.lightSurfaceAlt : Color.clear)
-                    
-                    Divider()
-                        .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.2))
-                    
-                    // Master Oscilloscope & Separation Sliders
-                    masterOscilloscopeView
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                        .background(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground.opacity(0.3))
-                    
-                    Divider()
-                        .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.3))
-                    
+
+                    if !isCompact {
+                        // Scrolling Tracker Grid or Empty State Drop Zone — SCHWER,
+                        // nur im Full-Modus.
+                        VStack(spacing: 0) {
+                            // Defensiv gegen leere/korrupte Mods: length, patternTable und
+                            // der daraus gelesene patternIndex werden vor dem Zugriff geprueft
+                            // (sonst patternTable[-1] / patterns[ausserhalb] -> Crash).
+                            // codereview-ok: defensiv by-design — patternTable wird direkt danach indiziert; der isEmpty/length-Guard verhindert patternTable[-1]-Crash (2026-07-01)
+                            if let mod = coordinator.activeMod,
+                               mod.length > 0,
+                               !mod.patternTable.isEmpty {
+                                // Grid + Zeilenmarkierung beobachten transport (row-rate),
+                                // damit die Zeilenwechsel MainView nicht neu evaluieren.
+                                TrackerGridContainer(transport: coordinator.transport, mod: mod,
+                                                     channelIndices: mod.displayChannelIndices, theme: theme,
+                                                     onSeekRow: { row in
+                                                         // Zu (aktuelle Position, geklickte Zeile) springen;
+                                                         // Tempo wird rekonstruiert. Play/Weiter spielt ab hier.
+                                                         coordinator.seek(toPosition: coordinator.currentPosition, row: row)
+                                                     })
+                                    .padding()
+                            } else {
+                                dropZonePrompt
+                                    .padding()
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(theme == .workbench ? Color.lightSurfaceAlt : Color.clear)
+
+                        Divider()
+                            .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.2))
+
+                        // Master Oscilloscope & Separation Sliders — SCHWER (30-Hz-Canvas).
+                        masterOscilloscopeView
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                            .background(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground.opacity(0.3))
+
+                        Divider()
+                            .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.3))
+                    } else {
+                        // Eigenstaendiger, leichter Player statt einer klaffenden
+                        // Leerflaeche. Pattern, Marker und Oszilloskope bleiben
+                        // weiterhin vollstaendig aus der View-Hierarchie entfernt.
+                        compactDashboardView
+
+                        Divider()
+                            .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.3))
+                    }
+
                     // Toolbar Control Panel
-                    controlPanelView
-                        .padding()
+                    controlPanelView(isCompact: isCompact)
+                        .padding(isCompact ? 8 : 16)
                         .background(theme == .workbench ? Color.lightSurface : Color.spaceSurface.opacity(0.4))
                 }
                 .background(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground)
             }
-            .frame(minWidth: 1080, minHeight: 720)
             .foregroundColor(theme == .workbench ? Color.lightTextPrimary : Color.spaceTextPrimary)
             .font(theme == .workbench ? .system(.body) : .body)
             .fileImporter(
@@ -310,6 +399,7 @@ struct MainView: View {
             }
             .onAppear {
                 isDiskAnimating = coordinator.isPlaying
+                loadFavorites()
                 setupNotifications()
                 installKeyMonitor()
                 setupMediaRemoteCommands()
@@ -408,6 +498,32 @@ struct MainView: View {
                 dragDropOverlayView
             }
         }
+        // CMD+= als zweiter Zoom-in-Weg (Layout-unabhaengig), unsichtbar verdrahtet
+        // — CMD+ liegt auf vielen Tastaturlayouts erst hinter Shift.
+        .background {
+            Button("") { uiZoom = min(uiZoom + 1, 5) }
+                .keyboardShortcut("=", modifiers: .command)
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
+        // ZStack füllt den vom GeometryReader angebotenen Raum.
+        .frame(width: geo.size.width, height: geo.size.height)
+        // Kompaktmodus-Umschaltung: bei Größenänderung isCompact + das Coordinator-
+        // Flag (steuert die Timer-Drossel 30↔5 Hz) synchron setzen.
+        .onChange(of: compact) { newValue in
+            isCompact = newValue
+            coordinator.visualizersVisible = !newValue
+        }
+        .onAppear {
+            isCompact = compact
+            coordinator.visualizersVisible = !compact
+        }
+      }
+      // Unterhalb dieser Groesse lassen sich Sidebar, kompakter Header und
+      // Transport nicht mehr verlaesslich darstellen. Die frueheren 380x320 pt
+      // erlaubten zwar extremes Schrumpfen, schoben dabei aber die Sidebar aus dem
+      // Fenster und schnitten Bedienelemente ab.
+      .frame(minWidth: 760, minHeight: 520)
     }
-    
+
 }

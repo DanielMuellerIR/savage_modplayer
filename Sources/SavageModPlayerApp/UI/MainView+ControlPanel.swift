@@ -6,7 +6,19 @@ import MediaPlayer
 
 // Transport-/Kontrollleiste der MainView (Play-Steuerung, Regler, LEDs).
 extension MainView {
-    var controlPanelView: some View {
+    // Im Kompaktmodus (schmales Fenster) bricht der Transport auf zwei Zeilen um
+    // (Zeit+Slider oben, Kern-Transport+Lautstärke unten), damit nichts überläuft;
+    // im Full-Modus die gewohnte einzeilige Leiste.
+    @ViewBuilder
+    func controlPanelView(isCompact: Bool) -> some View {
+        if isCompact {
+            compactControlPanelView
+        } else {
+            fullControlPanelView
+        }
+    }
+
+    var fullControlPanelView: some View {
         HStack(spacing: 24) {
             // Left block: Play controls
             HStack(spacing: 8) {
@@ -32,9 +44,17 @@ extension MainView {
                 .disabled(!coordinator.isPlaying)
                 .help("Stopp: Wiedergabe beenden — der nächste Start beginnt wieder am Songanfang.")
 
-                // −10s / +10s: schneller Sprung innerhalb des Songs (springt
-                // zeilengenau über die aktuelle Zeilendauer). Praktisch, um ohne
-                // langes Durchhören an eine Stelle zu gelangen.
+                // −30s / −10s / +10s / +30s: schneller Sprung innerhalb des Songs
+                // (springt zeilengenau über die aktuelle Zeilendauer). Der EINE Satz
+                // Seek-Buttons neben Stopp; am Slider gibt es keine Sprung-Buttons mehr.
+                Button(action: { coordinator.seek(bySeconds: -30) }) {
+                    transportButtonLabel(systemName: "gobackward.30")
+                }
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                .cornerRadius(theme == .workbench ? 0 : 15)
+                .disabled(!coordinator.isPlaying)
+                .help("30 Sekunden zurückspringen.")
+
                 Button(action: { coordinator.seek(bySeconds: -10) }) {
                     transportButtonLabel(systemName: "gobackward.10")
                 }
@@ -50,6 +70,14 @@ extension MainView {
                 .cornerRadius(theme == .workbench ? 0 : 15)
                 .disabled(!coordinator.isPlaying)
                 .help("10 Sekunden vorspringen.")
+
+                Button(action: { coordinator.seek(bySeconds: 30) }) {
+                    transportButtonLabel(systemName: "goforward.30")
+                }
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                .cornerRadius(theme == .workbench ? 0 : 15)
+                .disabled(!coordinator.isPlaying)
+                .help("30 Sekunden vorspringen.")
 
                 Divider()
                     .frame(height: 20)
@@ -91,7 +119,7 @@ extension MainView {
                                 .fill(shuffleEnabled ? Color.lightAccent : Color.lightSurfaceAlt)
                         }
                         Image(systemName: "shuffle")
-                            .font(.system(size: 11, weight: .bold))
+                            .scaledFont(11, weight: .bold)
                             .foregroundColor(shuffleEnabled ? (theme == .cyber ? .black : .white) : (theme == .workbench ? .lightTextSecondary : .spaceTextSecondary))
                     }
                     .frame(width: 30, height: 30)
@@ -111,16 +139,6 @@ extension MainView {
                     // MainView.body neu zu rendern).
                     ElapsedTimeText(visualizer: coordinator.visualizerState)
 
-                    // Zeitsprung zurueck — bequeme Alternative zum Slider.
-                    Button(action: { coordinator.seek(bySeconds: -15) }) {
-                        Image(systemName: "gobackward.15")
-                            .font(.system(size: 14))
-                            .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .disabled(!coordinator.isPlaying)
-                    .help("15 Sekunden zurückspringen (zeilengenau; bei Tempo-Wechseln näherungsweise).")
-
                     // Der Slider springt pro Song-Position und funktioniert auch
                     // im gestoppten Zustand: Play startet dann ab der gewaehlten
                     // Stelle.
@@ -135,23 +153,13 @@ extension MainView {
                     PositionSlider(transport: coordinator.transport, mod: mod, theme: theme,
                                    onSeek: { coordinator.seek(toPosition: $0) })
 
-                    // Zeitsprung vor.
-                    Button(action: { coordinator.seek(bySeconds: 30) }) {
-                        Image(systemName: "goforward.30")
-                            .font(.system(size: 14))
-                            .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .disabled(!coordinator.isPlaying)
-                    .help("30 Sekunden vorspringen (zeilengenau; bei Tempo-Wechseln näherungsweise).")
-
                     TotalTimeText(visualizer: coordinator.visualizerState)
                 }
                 .frame(maxWidth: .infinity)
             } else {
                 Spacer()
                 Text("Kein Song geladen")
-                    .font(.system(size: 11, weight: .semibold))
+                    .scaledFont(11, weight: .semibold)
                     .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.4) : .spaceTextSecondary)
                 Spacer()
             }
@@ -164,14 +172,16 @@ extension MainView {
                         .foregroundColor(.spaceTextSecondary)
                 }
                 .buttonStyle(PlainButtonStyle())
-                
+                .help("Tastenkürzel anzeigen (Leertaste, Pfeile, ESC …).")
+
                 // Info Guru modal button
                 Button(action: { showAboutModal = true }) {
                     Image(systemName: "info.circle")
                         .foregroundColor(.spaceTextSecondary)
                 }
                 .buttonStyle(PlainButtonStyle())
-                
+                .help("Über Savage Mod Player (Guru-Meditation-Screen).")
+
                 if coordinator.activeMod != nil {
                     // Exporter wav button
                     Button(action: { runWavExport() }) {
@@ -179,14 +189,15 @@ extension MainView {
                             .foregroundColor(isExporting ? .green : .spaceTextSecondary)
                     }
                     .buttonStyle(PlainButtonStyle())
+                    .help("Aktuellen Song als WAV-Datei exportieren.")
                 }
-                
+
                 // Volume slider with glow
                 HStack(spacing: 6) {
                     Image(systemName: volume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .font(.system(size: 12))
+                        .scaledFont(12)
                         .foregroundColor(theme == .workbench ? .lightTextPrimary : .spaceTextSecondary)
-                    
+
                     Slider(value: Binding(
                         get: { volume },
                         set: { volume = $0; coordinator.setVolume(Float($0)) }
@@ -194,7 +205,73 @@ extension MainView {
                     .accentColor(Color.accent(theme))
                     .frame(width: 90)
                     .shadow(color: theme == .cyber ? Color.spaceAccent.opacity(volume * 0.8) : Color.clear, radius: 4)
+                    .help("Gesamtlautstärke.")
                 }
+                .help("Gesamtlautstärke.")
+            }
+        }
+    }
+
+    // Kompakte, zweizeilige Transportleiste für den Kompaktmodus (schmales Fenster).
+    var compactControlPanelView: some View {
+        VStack(spacing: 8) {
+            // Zeile 1: verstrichene Zeit + Positions-Slider + Gesamtzeit (voll breit).
+            if let mod = coordinator.activeMod {
+                HStack(spacing: 10) {
+                    ElapsedTimeText(visualizer: coordinator.visualizerState)
+                    PositionSlider(transport: coordinator.transport, mod: mod, theme: theme,
+                                   onSeek: { coordinator.seek(toPosition: $0) })
+                    TotalTimeText(visualizer: coordinator.visualizerState)
+                }
+            }
+
+            // Zeile 2: Kern-Transport (Play/Pause, Stopp, Titelwechsel) + Lautstärke.
+            // Die vier Sekunden-Seek-Buttons und Shuffle/HUD/Info/WAV entfallen hier
+            // bewusst — der Slider oben deckt das Suchen ab; „nur Musik hören".
+            HStack(spacing: 8) {
+                SpinningDiskButton(
+                    isPlaying: coordinator.isPlaying,
+                    isPaused: coordinator.isPaused,
+                    enabled: coordinator.activeMod != nil,
+                    theme: theme,
+                    onTap: { togglePlayback() }
+                )
+                Button(action: { stopPlayback() }) {
+                    transportButtonLabel(systemName: "stop.fill")
+                }
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                .cornerRadius(theme == .workbench ? 0 : 15)
+                .disabled(!coordinator.isPlaying)
+                .help("Stopp: Wiedergabe beenden — der nächste Start beginnt wieder am Songanfang.")
+
+                Button(action: { prevTrack() }) {
+                    transportButtonLabel(systemName: "backward.end.fill")
+                }
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                .cornerRadius(theme == .workbench ? 0 : 15)
+                .disabled(playlist.isEmpty)
+                .help("Vorheriger Titel der Playlist (⌘← oder Pfeil links).")
+
+                Button(action: { nextTrack() }) {
+                    transportButtonLabel(systemName: "forward.end.fill")
+                }
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                .cornerRadius(theme == .workbench ? 0 : 15)
+                .disabled(playlist.isEmpty)
+                .help("Nächster Titel der Playlist (⌘→ oder Pfeil rechts).")
+
+                Spacer(minLength: 0)
+
+                Image(systemName: volume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .scaledFont(12)
+                    .foregroundColor(theme == .workbench ? .lightTextPrimary : .spaceTextSecondary)
+                Slider(value: Binding(
+                    get: { volume },
+                    set: { volume = $0; coordinator.setVolume(Float($0)) }
+                ), in: 0...1.0)
+                .accentColor(Color.accent(theme))
+                .frame(width: 80)
+                .help("Gesamtlautstärke.")
             }
         }
     }

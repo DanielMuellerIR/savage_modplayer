@@ -4,6 +4,9 @@ set -euo pipefail
 echo "=== Building Savage Mod Player App in Release Mode ==="
 swift build -c release
 APP_VERSION="$(cat VERSION)"
+# Build-/Release-Datum (ISO 8601) — wird in die Info.plist geschrieben und im
+# Fenstertitel angezeigt ("Datum dieser Version").
+BUILD_DATE="$(date +%Y-%m-%d)"
 
 echo "=== Creating macOS App Bundle structure ==="
 APP_DIR="Savage Mod Player.app"
@@ -147,6 +150,9 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
     <string>$APP_VERSION</string>
     <key>CFBundleVersion</key>
     <string>$APP_VERSION</string>
+    <!-- Eigener Key: Datum dieses Builds; im Fenstertitel angezeigt. -->
+    <key>BuildDate</key>
+    <string>$BUILD_DATE</string>
     <!-- Erscheint unten im nativen "Über"-Panel -->
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 Daniel Müller</string>

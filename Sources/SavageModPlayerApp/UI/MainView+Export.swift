@@ -79,11 +79,11 @@ extension MainView {
             
             VStack(spacing: 16) {
                 Text("OFFLINE-WAV-EXPORT")
-                    .font(.system(size: 12, weight: .bold))
+                    .scaledFont(12, weight: .bold)
                     .foregroundColor(Color.accent(theme))
                 
                 Text("Exportiert den gesamten Track offline in eine WAV Datei.")
-                    .font(.system(size: 10))
+                    .scaledFont(10)
                     .multilineTextAlignment(.center)
                     .foregroundColor(.spaceTextSecondary)
                 
@@ -94,19 +94,19 @@ extension MainView {
                     Text("10 Minuten").tag(600.0)
                 }
                 .pickerStyle(DefaultPickerStyle())
-                .font(.system(size: 10))
+                .scaledFont(10)
                 
                 HStack(spacing: 12) {
                     Button("ABBRECHEN") {
                         showExportDialog = false
                     }
-                    .font(.system(size: 10))
+                    .scaledFont(10)
                     
                     Button("STARTEN") {
                         showExportDialog = false
                         runWavExport()
                     }
-                    .font(.system(size: 10))
+                    .scaledFont(10)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(Color.green)

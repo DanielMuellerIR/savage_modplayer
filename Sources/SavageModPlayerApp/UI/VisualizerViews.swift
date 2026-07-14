@@ -140,8 +140,10 @@ struct ChannelFootersRow: View {
                         .lineLimit(1)
                     tag("M", on: coordinator.isMuted(channelIndex: channelIndex), color: .red)
                         .onTapGesture { coordinator.toggleMute(channelIndex: channelIndex) }
+                        .help("Kanal \(channelIndex + 1) stummschalten (Mute).")
                     tag("S", on: coordinator.isSoloed(channelIndex: channelIndex), color: .green)
                         .onTapGesture { coordinator.toggleSolo(channelIndex: channelIndex) }
+                        .help("Kanal \(channelIndex + 1) solo — nur diesen Kanal hören.")
                 }
                 .frame(width: stripWidth, alignment: .leading)
             }
@@ -149,13 +151,48 @@ struct ChannelFootersRow: View {
     }
 
     private func tag(_ label: String, on: Bool, color: Color) -> some View {
-        Text(label)
-            .font(.system(size: 8, weight: .bold))
-            .padding(.horizontal, 3)
-            .background(on ? color : Color.clear)
-            .foregroundColor(on ? .white : color)
-            .cornerRadius(2)
-            .contentShape(Rectangle())
+        msTag(label, on: on, color: color)
+    }
+}
+
+// Kleiner M/S-Tag (Mute rot, Solo grün) — geteilt von ChannelFootersRow (Full)
+// und CompactChannelStrip (Kompaktmodus).
+func msTag(_ label: String, on: Bool, color: Color) -> some View {
+    Text(label)
+        .font(.system(size: 8, weight: .bold))
+        .padding(.horizontal, 3)
+        .background(on ? color : Color.clear)
+        .foregroundColor(on ? .white : color)
+        .cornerRadius(2)
+        .contentShape(Rectangle())
+}
+
+// Leichte Kanal-Mute/Solo-Leiste für den Kompaktmodus: umbrechendes Gitter aus
+// „n M S"-Zellen, OHNE Oszilloskope/VU (die 30-Hz-Wellen entfallen dort komplett).
+// Beobachtet nur den Coordinator (Mute/Solo ändern sich selten), nicht den
+// hochfrequenten visualizerState.
+struct CompactChannelStrip: View {
+    @ObservedObject var coordinator: ModPlayerCoordinator
+    let channelIndices: [Int]
+    let theme: PlayerTheme
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 52), spacing: 8)], alignment: .leading, spacing: 4) {
+            ForEach(channelIndices, id: \.self) { channelIndex in
+                HStack(spacing: 3) {
+                    Text("\(channelIndex + 1)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.7) : .spaceTextSecondary)
+                        .frame(minWidth: 16, alignment: .trailing)
+                    msTag("M", on: coordinator.isMuted(channelIndex: channelIndex), color: .red)
+                        .onTapGesture { coordinator.toggleMute(channelIndex: channelIndex) }
+                        .help("Kanal \(channelIndex + 1) stummschalten (Mute).")
+                    msTag("S", on: coordinator.isSoloed(channelIndex: channelIndex), color: .green)
+                        .onTapGesture { coordinator.toggleSolo(channelIndex: channelIndex) }
+                        .help("Kanal \(channelIndex + 1) solo — nur diesen Kanal hören.")
+                }
+            }
+        }
     }
 }
 

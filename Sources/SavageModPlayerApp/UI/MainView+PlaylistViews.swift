@@ -8,11 +8,43 @@ import MediaPlayer
 // Playlist- und Instrumenten-Sidebar.
 extension MainView {
     var filteredPlaylist: [URL] {
-        if playlistSearchQuery.isEmpty {
-            return playlist
-        } else {
-            return playlist.filter { cleanFilename($0).localizedCaseInsensitiveContains(playlistSearchQuery) }
+        var result = playlist
+        // Favoriten-Filter (Stern) und Textsuche greifen beide NUR die Anzeige
+        // ab; die volle `playlist` bleibt für Auswahl/Auto-Next unangetastet.
+        if favoritesOnly {
+            result = result.filter { isFavorite($0) }
         }
+        if !playlistSearchQuery.isEmpty {
+            result = result.filter { cleanFilename($0).localizedCaseInsensitiveContains(playlistSearchQuery) }
+        }
+        return result
+    }
+
+    // MARK: - Favoriten
+
+    // UserDefaults-Schlüssel der gemerkten Favoriten (bereinigte Dateinamen).
+    static let favoritesDefaultsKey = "savage.favoriteTracks"
+
+    // Ist dieser Titel als Favorit markiert? Vergleich über den bereinigten
+    // Dateinamen (stabil über Temp-Kopien/Neustarts hinweg).
+    func isFavorite(_ url: URL) -> Bool {
+        favorites.contains(cleanFilename(url))
+    }
+
+    // Favoriten aus UserDefaults laden (beim App-Start, siehe .onAppear).
+    func loadFavorites() {
+        favorites = Set(UserDefaults.standard.stringArray(forKey: MainView.favoritesDefaultsKey) ?? [])
+    }
+
+    // Favorit an-/abschalten und sofort persistieren.
+    func toggleFavorite(_ url: URL) {
+        let key = cleanFilename(url)
+        if favorites.contains(key) {
+            favorites.remove(key)
+        } else {
+            favorites.insert(key)
+        }
+        UserDefaults.standard.set(Array(favorites).sorted(), forKey: MainView.favoritesDefaultsKey)
     }
 
     // Eine sichtbare Zeile der Playlist-Sidebar: entweder ein auf-/zuklappbarer
@@ -32,7 +64,9 @@ extension MainView {
     // Sichtbare Zeilen aus Baum + Aufklapp-Zustand berechnen. Bei aktiver Suche
     // stattdessen eine flache Trefferliste — Hierarchie waere dabei nur im Weg.
     var playlistRows: [PlaylistRow] {
-        if !playlistSearchQuery.isEmpty {
+        // Bei aktiver Suche ODER aktivem Favoriten-Filter eine flache
+        // Trefferliste zeigen — die Ordner-Hierarchie wäre dabei nur im Weg.
+        if !playlistSearchQuery.isEmpty || favoritesOnly {
             return filteredPlaylist.map { PlaylistRow(id: $0.absoluteString, depth: 0, kind: .file($0)) }
         }
         guard let tree = playlistTree else {
@@ -71,14 +105,14 @@ extension MainView {
             }) {
                 HStack(spacing: 8) {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
+                        .scaledFont(9, weight: .bold)
                         .foregroundColor(.spaceTextSecondary)
                         .frame(width: 10)
                     Image(systemName: expanded ? "folder.fill" : "folder")
-                        .font(.system(size: 11))
+                        .scaledFont(11)
                         .foregroundColor(Color.accent(theme))
                     Text(name)
-                        .font(.system(size: 11, weight: .semibold))
+                        .scaledFont(11, weight: .semibold)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -90,38 +124,60 @@ extension MainView {
                 .foregroundColor(theme == .workbench ? .lightTextPrimary : .spaceTextSecondary)
             }
             .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+            .help(expanded ? "Ordner zuklappen" : "Ordner aufklappen")
 
         case .file(let fileURL):
             let playlistIndex = playlist.firstIndex(of: fileURL) ?? -1
             let isPlayingSong = playlistIndex == currentPlaylistIndex
+            let fav = isFavorite(fileURL)
 
-            Button(action: { selectPlaylistSong(at: playlistIndex) }) {
-                HStack(spacing: 8) {
-                    Image(systemName: isPlayingSong ? "speaker.wave.2.fill" : "music.note")
-                        .font(.system(size: 11))
-                        .foregroundColor(isPlayingSong ? (Color.accent(theme)) : .spaceTextSecondary)
+            // Zeile = Abspiel-Button (Icon + Titel) + separater Stern-Button
+            // (Favorit an/aus), beide auf gemeinsamem Zeilen-Hintergrund. Zwei
+            // Geschwister-Buttons statt eines verschachtelten, damit Klick auf
+            // den Stern NICHT den Titel startet.
+            HStack(spacing: 0) {
+                Button(action: { selectPlaylistSong(at: playlistIndex) }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: isPlayingSong ? "speaker.wave.2.fill" : "music.note")
+                            .scaledFont(11)
+                            .foregroundColor(isPlayingSong ? (Color.accent(theme)) : .spaceTextSecondary)
 
-                    Text(cleanFilename(fileURL))
-                        .font(.system(size: 11, weight: isPlayingSong ? .bold : .medium))
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(cleanFilename(fileURL))
+                            .scaledFont(11, weight: isPlayingSong ? .bold : .medium)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.leading, 12 + indent)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .foregroundColor(isPlayingSong ? (theme == .workbench ? .lightAccent : .white) : (theme == .workbench ? .lightTextPrimary : .spaceTextSecondary))
                 }
-                .padding(.leading, 12 + indent)
-                .padding(.trailing, 12)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
-                .contentShape(Rectangle())
-                .background(
-                    RoundedRectangle(cornerRadius: theme == .workbench ? 0 : 6)
-                        .fill(
-                            isPlayingSong
-                            ? (theme == .workbench ? Color.lightAccent.opacity(0.2) : Color.spaceAccent.opacity(0.15))
-                            : Color.clear
-                        )
-                )
-                .foregroundColor(isPlayingSong ? (theme == .workbench ? .lightAccent : .white) : (theme == .workbench ? .lightTextPrimary : .spaceTextSecondary))
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+
+                // Stern: markiert = Akzent (Light dunkelblau, Dark gelb), sonst
+                // dezent. Immer sichtbar, damit man jeden Titel direkt markieren kann.
+                Button(action: { toggleFavorite(fileURL) }) {
+                    Image(systemName: fav ? "star.fill" : "star")
+                        .scaledFont(11)
+                        .foregroundColor(fav
+                                         ? (theme == .workbench ? Color.lightAccent : .yellow)
+                                         : (theme == .workbench ? .lightTextSecondary.opacity(0.5) : .spaceTextSecondary.opacity(0.5)))
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 38)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help(fav ? "Favorit entfernen" : "Als Favorit markieren")
             }
-            .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+            .background(
+                RoundedRectangle(cornerRadius: theme == .workbench ? 0 : 6)
+                    .fill(
+                        isPlayingSong
+                        ? (theme == .workbench ? Color.lightAccent.opacity(0.2) : Color.spaceAccent.opacity(0.15))
+                        : Color.clear
+                    )
+            )
         }
     }
 
@@ -133,7 +189,7 @@ extension MainView {
                     .foregroundColor(.spaceTextSecondary)
                 TextField("Titel filtern...", text: $playlistSearchQuery)
                     .textFieldStyle(PlainTextFieldStyle())
-                    .font(.system(size: 11))
+                    .scaledFont(11)
                     // Kein Autofokus: macOS macht das erste Textfeld sonst zum
                     // First Responder und der Cursor blinkt dauerhaft in der
                     // Sidebar. Fokus bekommt das Feld erst per Klick.
@@ -155,14 +211,14 @@ extension MainView {
                 Spacer()
                 VStack(spacing: 12) {
                     Image(systemName: "tray.and.arrow.down")
-                        .font(.system(size: 36))
+                        .scaledFont(36)
                         .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.3) : .spaceAccent.opacity(0.4))
                     
                     Text("Playlist leer")
-                        .font(.system(size: 13, weight: .bold))
+                        .scaledFont(13, weight: .bold)
                     
                     Text("Dateien oder Ordner per Drag & Drop reinziehen.")
-                        .font(.system(size: 10))
+                        .scaledFont(10)
                         .multilineTextAlignment(.center)
                         .foregroundColor(.spaceTextSecondary)
                         .padding(.horizontal, 12)
@@ -170,21 +226,32 @@ extension MainView {
                     Button("Demo abspielen") {
                         triggerDemoPlay()
                     }
-                    .font(.system(size: 10, weight: .bold))
+                    .scaledFont(10, weight: .bold)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(Color.accent(theme))
                     .foregroundColor(.white)
                     .cornerRadius(theme == .workbench ? 0 : 6)
+                    .help("Ein mitgeliefertes Demo-Modul abspielen.")
                 }
                 .frame(maxWidth: .infinity)
                 Spacer()
             } else {
                 HStack {
                     Text("TITEL (\(filteredPlaylist.count))")
-                        .font(.system(size: 11, weight: .bold))
+                        .scaledFont(11, weight: .bold)
                         .foregroundColor(theme == .workbench ? .lightAccent : .spaceAccentGlow)
                     Spacer()
+                    // Umschalter „nur Favoriten": aktiv = Akzent (Light dunkelblau,
+                    // Dark gelb).
+                    Button(action: { favoritesOnly.toggle() }) {
+                        Image(systemName: favoritesOnly ? "star.fill" : "star")
+                            .scaledFont(11)
+                            .foregroundColor(favoritesOnly ? (theme == .workbench ? Color.lightAccent : .yellow) : (theme == .workbench ? .lightAccent : .spaceTextSecondary))
+                    }
+                    .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                    .help(favoritesOnly ? "Alle Titel zeigen" : "Nur Favoriten zeigen")
+                    .padding(.trailing, 4)
                     Button("Leeren") {
                         coordinator.stop()
                         playlist.removeAll()
@@ -193,9 +260,10 @@ extension MainView {
                         folderPathByURL.removeAll()
                         currentPlaylistIndex = -1
                     }
-                    .font(.system(size: 10, weight: .bold))
+                    .scaledFont(10, weight: .bold)
                     .foregroundColor(theme == .workbench ? .lightAccent : .spaceTextSecondary)
                     .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                    .help("Playlist leeren und Wiedergabe stoppen.")
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 8)
@@ -236,8 +304,9 @@ extension MainView {
                                      theme: theme, axis: .horizontal, inverted: true)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("ZULETZT GESPIELT")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundColor(.spaceTextSecondary)
+                            .scaledFont(10, weight: .bold)
+                            // Light: dunkle Textfarbe, sonst auf hellem Grund unlesbar.
+                            .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
                             .padding(.horizontal, 8)
 
                         // Scrollbar, zeigt alle Einträge (früher fix nur 4). Höhe
@@ -265,10 +334,11 @@ extension MainView {
                                         }
                                     }) {
                                         Text(cleanFilename(url))
-                                            .font(.system(size: 10))
+                                            .scaledFont(12)
                                             .lineLimit(1)
                                             .frame(maxWidth: .infinity, alignment: .leading)
-                                            .foregroundColor(.spaceTextSecondary.opacity(0.8))
+                                            // Light: dunkle Textfarbe, sonst unlesbar auf hellem Grund.
+                                            .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.85) : .spaceTextSecondary.opacity(0.8))
                                             .padding(.horizontal, 8)
                                             .padding(.vertical, 2)
                                             .contentShape(Rectangle())
@@ -297,13 +367,13 @@ extension MainView {
                                     HStack(spacing: 8) {
                                         Text(String(format: "%02d", i))
                                             .foregroundColor(theme == .workbench ? .lightAccent : .codeInstrument)
-                                            .font(.system(size: 11, weight: .bold))
+                                            .scaledFont(11, weight: .bold)
                                             .frame(width: 18)
                                         
                                         VStack(alignment: .leading, spacing: 2) {
                                             HStack {
                                                 Text(inst.name.isEmpty ? "Instrument \(i)" : inst.name)
-                                                    .font(.system(size: 11, weight: .bold))
+                                                    .scaledFont(11, weight: .bold)
                                                     .lineLimit(1)
                                                 Spacer()
                                                 
@@ -311,10 +381,11 @@ extension MainView {
                                                     // Save individual instrument to WAV
                                                     Button(action: { runInstrumentSampleExport(index: i) }) {
                                                         Image(systemName: "square.and.arrow.down")
-                                                            .font(.system(size: 9))
+                                                            .scaledFont(9)
                                                             .foregroundColor(.spaceTextSecondary)
                                                     }
                                                     .buttonStyle(PlainButtonStyle())
+                                                    .help("Dieses Instrument-Sample als WAV exportieren.")
                                                 }
                                             }
                                             
@@ -333,7 +404,7 @@ extension MainView {
                                             .cornerRadius(1)
                                             
                                             Text(String(format: "Len: %d B | Fine: %d | Vol: %d", previewSample.pcm.count, previewSample.finetune, previewSample.volume))
-                                                .font(.system(size: 8.5))
+                                                .scaledFont(8.5)
                                                 .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.6) : .spaceTextSecondary)
                                         }
                                     }
@@ -348,6 +419,7 @@ extension MainView {
                                     .contentShape(Rectangle())
                                 }
                                 .buttonStyle(PlainButtonStyle())
+                                .help("Instrument anspielen (Vorschau).")
                                 // Light-Mode: nur duenner Rahmen ohne Fuellung,
                                 // Hover hebt die Zeile weiss hervor. Der dunkle
                                 // Fuellton passte nicht ins helle Theme.
@@ -372,7 +444,7 @@ extension MainView {
             } else {
                 Spacer()
                 Text("Kein Song geladen")
-                    .font(.system(size: 12))
+                    .scaledFont(12)
                     .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.4) : .spaceTextSecondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                 Spacer()

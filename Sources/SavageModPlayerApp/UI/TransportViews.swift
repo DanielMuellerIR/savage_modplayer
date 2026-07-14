@@ -22,14 +22,65 @@ struct ResizableDivider: View {
     @State private var startValue: Double? = nil
 
     var body: some View {
-        Rectangle()
-            .fill(theme == .workbench ? Color.lightTextPrimary.opacity(0.5) : Color.spaceAccent.opacity(0.3))
-            .frame(width: axis == .vertical ? 5 : nil, height: axis == .horizontal ? 5 : nil)
-            .frame(maxWidth: axis == .horizontal ? .infinity : nil,
-                   maxHeight: axis == .vertical ? .infinity : nil)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 1)
+        // Die SICHTBARE Linie ist bewusst dünn (1 pt) und dezent gehalten, damit der
+        // Trenner nicht ins Auge sticht. Die eigentliche KLICK-/ZIEHFLÄCHE ist über
+        // `contentShape` aber deutlich breiter (`hitSize`) — sonst trifft man den
+        // schmalen Handle mit der Maus kaum. So bleibt die Optik ruhig, das
+        // Ziehen aber gut greifbar.
+        let thickness: CGFloat = 1     // sichtbare Linienstärke (dünn)
+        // Unsichtbare Trefferfläche. Vertikal 11 pt breit, obwohl der Trenner im
+        // Layout selbst nur 1 pt belegt. Dadurch endet die Sidebar-Farbe EXAKT an
+        // der Linie; die breite Ziehfläche liegt transparent über beiden Seiten.
+        // Horizontal großzügiger (24 pt): Der Trenner steckt zwischen zwei
+        // ScrollViews (Playlist oben, Verlauf unten) — ein knapp daneben
+        // gesetzter senkrechter Zug scrollt sonst die Liste statt zu ziehen.
+        // Horizontal bleibt das 24-pt-Band Teil des Layouts: Dort verschmilzt es
+        // oben wie unten mit derselben Sidebar-Fläche und schafft bewusst Abstand.
+        let hitSize: CGFloat = axis == .vertical ? 11 : 24
+        // Nur der horizontale Trenner braucht ein opakes Band. Beim vertikalen
+        // Trenner würde dieser Flächenton rechts über die Linie hinausreichen —
+        // genau der sichtbare Überstand aus Light- und Dark-Mode.
+        let barColor: Color = theme == .workbench ? Color.lightSurface : Color.spaceSurface
+        // Dünne, dezente Linie: Light heller als zuvor, Dark neutral-grau statt
+        // hellem Cyan-Akzent.
+        let lineColor: Color = theme == .workbench
+            ? Color.lightTextSecondary.opacity(0.30)
+            : Color.spaceTextSecondary.opacity(0.22)
+        // Linie MITTIG in der transparenten Trefferfläche: links und rechts
+        // bleiben je etwa 5 pt greifbar, ohne eine Farbe über die Linie zu malen.
+        return ZStack {
+            if axis == .horizontal {
+                barColor
+            }
+            // Dünne Linie mittig.
+            Rectangle()
+                .fill(lineColor)
+                .frame(width: axis == .vertical ? thickness : nil,
+                       height: axis == .horizontal ? thickness : nil)
+        }
+        .frame(width: axis == .vertical ? hitSize : nil, height: axis == .horizontal ? hitSize : nil)
+        .frame(maxWidth: axis == .horizontal ? .infinity : nil,
+               maxHeight: axis == .vertical ? .infinity : nil)
+        .contentShape(Rectangle())
+        // highPriority statt gesture: Der horizontale Trenner grenzt an
+        // ScrollViews; deren Scroll-Geste würde einen senkrechten Zug sonst
+        // abfangen. highPriorityGesture lässt das Ziehen des Handles gewinnen,
+        // sobald der Cursor in seiner Trefferfläche liegt.
+        .highPriorityGesture(
+                // WICHTIG: `.global` als Koordinatenraum. Im (Default-)lokalen
+                // Raum wandert die Referenz mit dem Handle mit, während dieser
+                // beim Ziehen seine Position ändert — die `translation` koppelt
+                // dadurch zurück und der Trenner zittert mit hoher Frequenz hin
+                // und her (Bug 2026-07-12). Global gemessen ist der Bezug fix.
+                //
+                // minimumDistance 0 nur horizontal: Der waagerechte Trenner
+                // grenzt an ScrollViews — greift die Geste erst nach 1 pt
+                // Bewegung, hat die Scroll-Geste den Zug schon geklaut. Bei 0
+                // beansprucht der Handle die Geste bereits beim Drücken und
+                // gewinnt. Vertikal bleibt 1 (dort perfekt, keine ScrollView-
+                // Konkurrenz — nicht anfassen).
+                DragGesture(minimumDistance: axis == .vertical ? 1 : 0,
+                            coordinateSpace: .global)
                     .onChanged { value in
                         let base = startValue ?? width
                         if startValue == nil { startValue = width }
@@ -40,16 +91,29 @@ struct ResizableDivider: View {
                     }
                     .onEnded { _ in startValue = nil }
             )
-            .onHover { inside in
+            // Resize-Cursor. `onContinuousHover` (statt `onHover` + push/pop):
+            // Der horizontale Handle grenzt an ScrollViews, die bei jeder
+            // Mausbewegung ihren eigenen Cursor-Rect neu setzen und den einmalig
+            // gepushten Resize-Cursor sofort wieder überschreiben. Deshalb den
+            // Cursor bei JEDER Bewegung über dem Handle neu setzen (`.set()`),
+            // dann bleibt er stehen. Beim Verlassen zurück auf den Pfeil.
+            .onContinuousHover { phase in
                 #if canImport(AppKit)
-                if inside {
-                    (axis == .vertical ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
-                } else { NSCursor.pop() }
+                switch phase {
+                case .active:
+                    (axis == .vertical ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).set()
+                case .ended:
+                    NSCursor.arrow.set()
+                }
                 #endif
             }
             .help(axis == .vertical
                   ? "Ziehen, um die Playlist-Breite anzupassen (lange Dateinamen sichtbar machen)"
                   : "Ziehen, um die Höhe der Liste anzupassen")
+            // Der vertikale Trenner meldet dem HStack nur die sichtbare 1-pt-
+            // Breite. Die zuvor aufgebaute 11-pt-Interaktionsfläche bleibt als
+            // transparenter Überhang erhalten und damit bequem ziehbar.
+            .frame(width: axis == .vertical ? thickness : nil)
     }
 }
 
@@ -109,9 +173,9 @@ struct PatternMarkerMap: View {
                     Button(action: { onSeek(idx) }) {
                         VStack(spacing: 2) {
                             Text(String(format: "%02d", idx))
-                                .font(.system(size: 8, weight: .bold))
+                                .scaledFont(8, weight: .bold)
                             Text("P\(patNum)")
-                                .font(.system(size: 7))
+                                .scaledFont(7)
                         }
                         .frame(width: 24, height: 26)
                         .background(
@@ -123,6 +187,7 @@ struct PatternMarkerMap: View {
                         .cornerRadius(3)
                     }
                     .buttonStyle(PlainButtonStyle())
+                    .help("Zu Song-Position \(String(format: "%02d", idx)) springen (Pattern \(patNum)).")
                 }
             }
             .padding(.vertical, 2)
@@ -156,14 +221,14 @@ struct SpinningDiskButton: View {
                     .frame(width: 40, height: 40)
                     .shadow(color: theme == .workbench ? Color.clear : Color.spaceAccent.opacity(0.3), radius: 5)
                 Image(systemName: "opticaldisc.fill")
-                    .font(.system(size: 30))
+                    .scaledFont(30)
                     .foregroundColor(Color.accent(theme))
                     .rotationEffect(.degrees(rotation))
                 Circle()
                     .fill(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground)
                     .frame(width: 6, height: 6)
                 Image(systemName: isPlaying && !isPaused ? "pause.fill" : "play.fill")
-                    .font(.system(size: 11, weight: .bold))
+                    .scaledFont(11, weight: .bold)
                     .foregroundColor(.white.opacity(0.9))
                     .shadow(color: .black.opacity(0.6), radius: 1)
             }

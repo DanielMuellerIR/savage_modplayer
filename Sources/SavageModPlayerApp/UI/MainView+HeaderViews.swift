@@ -22,25 +22,30 @@ extension MainView {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
+                    // Titel-Font skaliert mit dem globalen UI-Zoom (CMD +/-/0).
+                    // .title2 wird dafuer auf seine explizite Groesse (~17 pt)
+                    // gebracht, weil ein semantischer Font nicht multiplizierbar ist.
                     let titleFont: Font = theme == .workbench
-                        ? .system(size: 20, weight: .bold) : .title2
+                        ? .system(size: 20 * uiFontScale, weight: .bold)
+                        : .system(size: 17 * uiFontScale)
                     let titleColor: Color = theme == .workbench ? .lightAccent : .white
 
                     // Format-Badge LINKS vor dem Titel (feste Groesse). Bewusst vor
                     // dem Titel, damit der (bei Ueberlaenge scrollende) Titel den
                     // restlichen Platz fuellen kann, ohne das Badge zu verdraengen —
                     // und ohne bei kurzen Titeln eine grosse Luecke zum Badge zu lassen.
-                    if theme == .cyber {
-                        Text(formatBadgeText)
-                            .font(.system(size: 8, weight: .black))
-                            .lineLimit(1)
-                            .fixedSize()
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 2)
-                            .background(Color.spaceAccent)
-                            .foregroundColor(.black)
-                            .cornerRadius(3)
-                    }
+                    // In BEIDEN Themes sichtbar; Farben themen-abhaengig (Dark:
+                    // Space-Akzent auf Schwarz, Light: dunkelblauer lightAccent auf
+                    // Weiss, eckig wie die uebrigen Light-Controls).
+                    Text(formatBadgeText)
+                        .scaledFont(8, weight: .black)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(theme == .workbench ? Color.lightAccent : Color.spaceAccent)
+                        .foregroundColor(theme == .workbench ? .white : .black)
+                        .cornerRadius(theme == .workbench ? 0 : 3)
 
                     // Titel als Laufschrift: scrollt, wenn er breiter als der Platz
                     // ist, sonst steht er einfach links.
@@ -71,12 +76,14 @@ extension MainView {
                         }) {
                             Image(systemName: "minus.square")
                         }.buttonStyle(PlainButtonStyle())
+                        .help("BPM verringern.")
 
                         Button(action: {
                             if coordinator.bpm < 300 { coordinator.bpm += 1 }
                         }) {
                             Image(systemName: "plus.square")
                         }.buttonStyle(PlainButtonStyle())
+                        .help("BPM erhöhen.")
                     }
                     .fixedSize()
                     .help("BPM (Beats per Minute): Wiedergabe-Tempo. Amiga-Standard ist 125. Mit −/+ veraenderbar; ein Song kann sein Tempo per Effekt auch selbst umstellen. Bei Songwechsel wird der Header-Wert des neuen Moduls gesetzt.")
@@ -90,12 +97,14 @@ extension MainView {
                         }) {
                             Image(systemName: "minus.square")
                         }.buttonStyle(PlainButtonStyle())
+                        .help("Speed verringern.")
 
                         Button(action: {
                             if coordinator.speed < 31 { coordinator.speed += 1 }
                         }) {
                             Image(systemName: "plus.square")
                         }.buttonStyle(PlainButtonStyle())
+                        .help("Speed erhöhen.")
                     }
                     .fixedSize()
                     .help("Speed: Ticks pro Pattern-Zeile (Amiga-Standard 6). Kleiner = die Zeilen laufen schneller durch, groesser = langsamer. Zusammen mit BPM bestimmt das die effektive Geschwindigkeit.")
@@ -108,7 +117,7 @@ extension MainView {
                         .help("Pattern-Position: aktuelles Pattern und Gesamtzahl in der Abspielliste des Songs. Ein Pattern ist ein Notenblock (meist 64 Zeilen); der Song spielt sie in dieser Reihenfolge ab.")
                     }
                 }
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(11, weight: .semibold)
                 .foregroundColor(theme == .workbench ? .lightTextPrimary.opacity(0.8) : .spaceTextSecondary)
             }
             // Der Titelblock ist das EINE flexible Element in der Kopfzeile und
@@ -125,7 +134,7 @@ extension MainView {
                 ForEach(PlayerTheme.allCases) { t in
                     Button(action: { theme = t }) {
                         Text(t == .workbench ? "LIGHT" : "DARK")
-                            .font(.system(size: 10, weight: .bold))
+                            .scaledFont(10, weight: .bold)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)
                             .background(
@@ -153,30 +162,38 @@ extension MainView {
                 .padding(.vertical, 6)
                 .background(Color.accent(theme))
                 .foregroundColor(.white)
-                .font(.system(size: 11, weight: .bold))
+                .scaledFont(11, weight: .bold)
             }
             .buttonStyle(PremiumHoverButtonStyle(theme: theme))
             .cornerRadius(theme == .workbench ? 0 : 6)
+            .help("Modul-Datei(en) oder einen Ordner zum Abspielen auswählen.")
         }
     }
     
-    var vuVisualizersView: some View {
-        VStack(spacing: 8) {
-            // Obere Zeile: adaptive Kanal-Oszilloskope über die VOLLE Breite.
-            // (Play/Pause liegt jetzt als Disk unten im Transport-Balken.)
-            // Die verfuegbare Breite wird gleichmaessig auf alle Kanaele verteilt
-            // — wenige Kanaele => breite Oszis, viele => schmaler, bis zu einer
-            // Mindestbreite; darunter (sehr viele Kanaele) wird dezent horizontal
-            // gescrollt.
+    func vuVisualizersView(isCompact: Bool) -> some View {
+        let channelIndices = coordinator.activeMod?.displayChannelIndices
+            ?? Array(0..<coordinator.channelCount)
+        return VStack(spacing: 8) {
+            // Obere Zeile: im Full-Modus die adaptiven Kanal-Oszilloskope über die
+            // VOLLE Breite (30-Hz-Canvas, SCHWER). Im Kompaktmodus stattdessen NUR
+            // die leichte, umbrechende M/S-Leiste (kein Oszi, keine 30-Hz-Wellen) —
+            // so bleibt die Kanalsteuerung erreichbar, ohne CPU zu kosten.
             // Kanal-Oszilloskope + VU: eigener 30-Hz-Beobachter (ChannelStripsView),
             // damit die Scope-Updates nicht die ganze MainView.body neu rendern.
-            ChannelStripsView(
-                visualizer: coordinator.visualizerState,
-                coordinator: coordinator,
-                channelIndices: coordinator.activeMod?.displayChannelIndices
-                    ?? Array(0..<coordinator.channelCount),
-                theme: theme
-            )
+            if isCompact {
+                CompactChannelStrip(
+                    coordinator: coordinator,
+                    channelIndices: channelIndices,
+                    theme: theme
+                )
+            } else {
+                ChannelStripsView(
+                    visualizer: coordinator.visualizerState,
+                    coordinator: coordinator,
+                    channelIndices: channelIndices,
+                    theme: theme
+                )
+            }
 
             // Untere Zeile: kompakte Optionsleiste (aus der oberen Zeile
             // ausgelagert, damit die Oszis dort die volle Breite bekommen).
@@ -209,7 +226,7 @@ extension MainView {
 
                 Spacer()
             }
-            .font(.system(size: 9, weight: .semibold))
+            .scaledFont(9, weight: .semibold)
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
@@ -231,7 +248,7 @@ extension MainView {
                     }
                     
                     Image(systemName: dragOver ? "arrow.down.doc.fill" : "opticaldisc.fill")
-                        .font(.system(size: 48))
+                        .scaledFont(48)
                         .foregroundColor(Color.accent(theme))
                         .rotationEffect(.degrees(dragOver ? 180 : (isDiskAnimating ? 360 : 0)))
                         .scaleEffect(dragOver ? 1.2 : 1.0)
@@ -257,7 +274,7 @@ extension MainView {
                             Image(systemName: "plus.rectangle.on.folder")
                             Text("DATEIEN AUSWÄHLEN")
                         }
-                        .font(.system(size: 11, weight: .bold))
+                        .scaledFont(11, weight: .bold)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                         .background(Color.accent(theme))
@@ -265,13 +282,14 @@ extension MainView {
                         .cornerRadius(theme == .workbench ? 0 : 8)
                     }
                     .buttonStyle(PremiumHoverButtonStyle(theme: theme))
-                    
+                    .help("Modul-Datei(en) oder einen Ordner zum Abspielen auswählen.")
+
                     Button(action: { triggerDemoPlay() }) {
                         HStack(spacing: 8) {
                             Image(systemName: "play.circle")
                             Text("DEMO ABSPIELEN")
                         }
-                        .font(.system(size: 11, weight: .bold))
+                        .scaledFont(11, weight: .bold)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                         .background(Color.green)
@@ -279,6 +297,7 @@ extension MainView {
                         .cornerRadius(theme == .workbench ? 0 : 8)
                     }
                     .buttonStyle(PlainButtonStyle())
+                    .help("Ein mitgeliefertes Demo-Modul abspielen.")
                 }
             }
             .padding(.vertical, 40)
@@ -315,7 +334,7 @@ extension MainView {
                     Text(errorMsg)
                         .foregroundColor(.red)
                 }
-                .font(.system(size: 11))
+                .scaledFont(11)
                 .padding(.top, 4)
             }
             Spacer()
@@ -327,7 +346,7 @@ extension MainView {
     var masterOscilloscopeView: some View {
         HStack(spacing: 16) {
             Text("MASTER OSCILLOSCOPE")
-                .font(.system(size: 10, weight: .bold))
+                .scaledFont(10, weight: .bold)
                 .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
                 .frame(width: 140, alignment: .leading)
             
@@ -337,7 +356,7 @@ extension MainView {
             // Stereo Separation bleed adjustment slider
             HStack(spacing: 8) {
                 Image(systemName: "arrow.left.and.right")
-                    .font(.system(size: 11))
+                    .scaledFont(11)
                     .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
 
                 Slider(value: $coordinator.stereoSeparation, in: 0.0...1.0)
@@ -349,7 +368,7 @@ extension MainView {
                     .help("Stereo-Separation: 100 % = hartes Amiga-Panning (Kanäle ganz links/rechts), 0 % = Mono. Dazwischen wird Übersprechen beigemischt, das Kopfhörer-Ermüdung vermeidet. Am deutlichsten mit Kopfhörern hörbar; über Laptop-Lautsprecher kaum.")
 
                 Text(String(format: "%d%%", Int(coordinator.stereoSeparation * 100)))
-                    .font(.system(size: 9))
+                    .scaledFont(9)
                     .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
                     .frame(width: 32, alignment: .trailing)
             }
@@ -379,7 +398,7 @@ extension MainView {
             Button("PAL (3.546MHz)") {
                 coordinator.palClock = true
             }
-            .font(.system(size: 9, weight: .bold))
+            .scaledFont(9, weight: .bold)
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
             .background(coordinator.palClock ? Color.accent(theme) : Color.clear)
@@ -391,7 +410,7 @@ extension MainView {
             Button("NTSC (3.580MHz)") {
                 coordinator.palClock = false
             }
-            .font(.system(size: 9, weight: .bold))
+            .scaledFont(9, weight: .bold)
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
             .background(!coordinator.palClock ? Color.accent(theme) : Color.clear)
@@ -424,7 +443,7 @@ extension MainView {
                     .fill(Color.lightAccent)
             }
             Image(systemName: systemName)
-                .font(.system(size: 11))
+                .scaledFont(11)
                 .foregroundColor(.white)
         }
         .frame(width: 30, height: 30)
