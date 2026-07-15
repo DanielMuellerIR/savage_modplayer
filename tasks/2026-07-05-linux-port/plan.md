@@ -196,10 +196,44 @@ alloziert; Songende über `endReachedFrame` als kurze Lieferung.
   4096) — die „eine Engine"-Invariante ist damit testgedeckt, nicht nur behauptet.
   Zweiter Test: Songende kommt als kurze Lieferung an, sonst hinge der Sink.
 
+**Dropout-Nachweis auf echter Hardware erbracht (2026-07-16).** Methode aus dem
+SID-Port übernommen: statisches Binary (`swift build -c release
+--static-swift-stdlib`, ~68 MB) im Container bauen, nativ auf dem Testhost gegen
+eine temporäre PipeWire-Null-Senke spielen und per `parec` mitschneiden. Lautlos,
+also ohne Störung des Desktops; die Senke wird danach wieder entladen.
+
+```bash
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+MOD=$(pactl load-module module-null-sink sink_name=savage44 rate=44100 format=s16le channels=2)
+parec -d savage44.monitor --file-format=wav --rate=44100 --channels=2 capture.wav &
+PULSE_SINK=savage44 ./savage-cli-static test.mod --play
+pactl unload-module $MOD          # aufräumen nicht vergessen
+```
+
+Ergebnis über 12 s eines realen 4-Kanal-MOD:
+
+| Messung | Wert |
+|---|---|
+| Spitzenpegel | 15960/32767 (−6,2 dBFS) |
+| Nicht-Null-Samples | 100 % |
+| längste Null-Strecke | 1 Frame (0,02 ms) — im Offline-Render sind es 10 |
+| RMS Kette / Offline | Faktor 1,0000 (0,00 dB) |
+| Korrelation zum Offline-Render | **0,9994** bei 6 Frames Versatz |
+
+**Keine Aussetzer**: die längste Stille in der Kette ist kürzer als die im
+Offline-Render selbst. Die Kette ist pegelrichtig (RMS-Faktor exakt 1,0) und
+spielt dasselbe Signal.
+
+Falle für den nächsten Durchlauf: Der Mitschnitt ist gegen den Offline-Render
+**nur mit Versatz in beide Richtungen** vergleichbar. Der Song beginnt leise, eine
+Startsuche per Schwellwert überspringt die ersten Frames, und ein einseitiger
+Suchbereich liefert dann ~0,77 statt 0,9994 — das sieht nach einem kaputten
+Audiopfad aus, ist aber bloß eine schlechte Ausrichtung. Restliche
+Sample-Differenzen (Mittel ~54 LSB) stammen aus dem Subsample-Timing der Kette,
+nicht aus dem Replayer; sample-genaue Gleichheit deckt `ModulePCMSourceTests` ab.
+
 **Noch offen aus Phase 2:** Tastatursteuerung (Pause, nächster Titel, Quit) und
-Playlist-Wiedergabe über `--list`. Ebenfalls offen: eine Aufnahme über die echte
-PipeWire-Kette per `parec` als Dropout-Nachweis unter Last — das null-Device sagt
-nichts über Aussetzer auf echter Hardware.
+Playlist-Wiedergabe über `--list`.
 
 ### Phase 3 (optional) — Desktop-Integration
 

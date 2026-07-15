@@ -23,10 +23,6 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
    (`savage-cli --play`, ALSA); es fehlen Tastatursteuerung (Pause, nächster
    Titel, Quit) und Playlist-Wiedergabe über `--list`. Details:
    [Linux-Plan](2026-07-05-linux-port/plan.md).
-4. **Dropout-Nachweis auf echter Hardware.** Die ALSA-Laufzeit ist bisher nur
-   gegen das null-Device belegt; das sagt nichts über Aussetzer unter Last.
-   `parec`-Mitschnitt über die echte PipeWire-Kette gegen den Offline-Render
-   prüfen. Hörbar auf Daniels Desktop — vorher ansagen.
 
 ## Optionaler Feinschliff
 
@@ -56,5 +52,7 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
 
 Compact-Header/Layout, UI-Plan 1–10, IT M0–M10, Capability-Härtung sowie
 Linux-Port Phase 0 und 1 (Core + CLI bauen, testen und spielen unter Linux) sind
-abgeschlossen. Historische Start-/Branch-Anweisungen im IT-Task sind superseded
+abgeschlossen. Auch der Dropout-Nachweis auf echter Audiohardware ist erbracht
+(2026-07-16, `parec` über eine PipeWire-Null-Senke: keine Aussetzer, RMS-Faktor
+1,0000, Korrelation 0,9994 zum Offline-Render — Details im Linux-Plan). Historische Start-/Branch-Anweisungen im IT-Task sind superseded
 und kein Auftrag für eine neue Session.
