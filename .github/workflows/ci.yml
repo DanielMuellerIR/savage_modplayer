@@ -45,3 +45,23 @@ jobs:
             echo "::error::savage-mod-player.html ist veraltet. 'python3 build.py' ausfuehren und committen."
             exit 1
           fi
+
+  linux-build-test:
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Linux dependencies
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libasound2-dev libarchive-tools
+
+      - name: Swift Version
+        run: swift --version
+
+      - name: Swift build (release)
+        run: swift build -c release
+
+      - name: Swift tests (release)
+        run: swift test -c release

@@ -12,11 +12,13 @@ import Foundation
 // - Qxy (Retrigger) ignoriert den Volume-Modifier x.
 // - Txy mit x < 2 (Tempo-Slide) und "Fast Volume Slides" (ST3.00) fehlen.
 public class S3MParser {
-    public enum ParserError: Error, LocalizedError {
+    public enum ParserError: Error, LocalizedError, Equatable {
         case fileTooSmall
         case invalidSignature
         case emptySong
         case noChannels
+        case unsupportedDimensions(String)
+        case resourceLimit(String)
 
         public var errorDescription: String? {
             switch self {
@@ -28,9 +30,21 @@ public class S3MParser {
                 return "Leeres S3M-Modul: keine abspielbaren Songpositionen."
             case .noChannels:
                 return "S3M-Modul ohne aktive PCM-Kanäle."
+            case .unsupportedDimensions(let detail):
+                return "Nicht unterstützte S3M-Abmessungen: \(detail)."
+            case .resourceLimit(let detail):
+                return "S3M-Modul überschreitet das sichere Ressourcenlimit: \(detail)."
             }
         }
     }
+
+    // Scream Tracker 3 hält diese Tabellen bewusst klein. Die Limits werden
+    // geprüft, bevor Pointertabellen, Pattern-Grids oder PCM-Puffer entstehen.
+    private static let maxOrders = 256
+    private static let maxInstruments = 99
+    private static let maxPatterns = 100
+    private static let maxPatternCells = maxPatterns * 64 * 32
+    private static let maxPCMFrames = 32 * 1_024 * 1_024
 
     // Schneller Vorab-Check für den Format-Dispatch (ModuleLoader).
     public static func canParse(data: Data) -> Bool {
@@ -63,7 +77,22 @@ public class S3MParser {
         let masterVolume = byte(0x33)   // Bit 7 = Stereo
         let defaultPanFlag = byte(0x35) // 0xFC = Pan-Sektion vorhanden
 
-        guard 0x60 + ordNum + insNum * 2 + patNum * 2 <= data.count else {
+        guard ordNum <= maxOrders else {
+            throw ParserError.unsupportedDimensions("\(ordNum) Orders (Maximum \(maxOrders))")
+        }
+        guard insNum <= maxInstruments else {
+            throw ParserError.unsupportedDimensions("\(insNum) Instrumente (Maximum \(maxInstruments))")
+        }
+        guard patNum <= maxPatterns else {
+            throw ParserError.unsupportedDimensions("\(patNum) Patterns (Maximum \(maxPatterns))")
+        }
+        let (instrumentPointerBytes, instrumentPointerOverflow) = insNum.multipliedReportingOverflow(by: 2)
+        let (patternPointerBytes, patternPointerOverflow) = patNum.multipliedReportingOverflow(by: 2)
+        let (afterOrders, orderOverflow) = 0x60.addingReportingOverflow(ordNum)
+        let (afterInstruments, instrumentOverflow) = afterOrders.addingReportingOverflow(instrumentPointerBytes)
+        let (tableEnd, tableOverflow) = afterInstruments.addingReportingOverflow(patternPointerBytes)
+        guard !instrumentPointerOverflow, !patternPointerOverflow, !orderOverflow,
+              !instrumentOverflow, !tableOverflow, tableEnd <= data.count else {
             throw ParserError.fileTooSmall
         }
 
@@ -134,6 +163,7 @@ public class S3MParser {
 
         // ---- Instrumente ----
         var instruments: [Instrument?] = [nil]
+        var totalPCMFrames = 0
         for i in 0..<insNum {
             let off = word(instParaOffset + i * 2) * 16
             let type = byte(off)
@@ -173,6 +203,12 @@ public class S3MParser {
                 length = 0
             }
 
+            let (newTotalPCMFrames, pcmOverflow) = totalPCMFrames.addingReportingOverflow(length)
+            guard !pcmOverflow, newTotalPCMFrames <= maxPCMFrames else {
+                throw ParserError.resourceLimit("mehr als \(maxPCMFrames) dekodierte PCM-Frames")
+            }
+            totalPCMFrames = newTotalPCMFrames
+
             var bytes = [Int8]()
             bytes.reserveCapacity(length)
             for s in 0..<length {
@@ -210,7 +246,12 @@ public class S3MParser {
 
         // ---- Patterns (gepackt) ----
         let emptyNote = Note(instrument: 0, period: 0, effectId: 0, effectData: 0)
+        let (patternCells, patternCellOverflow) = patNum.multipliedReportingOverflow(by: 64 * channelCount)
+        guard !patternCellOverflow, patternCells <= maxPatternCells else {
+            throw ParserError.resourceLimit("zu viele Pattern-Zellen")
+        }
         var patterns = [Pattern]()
+        patterns.reserveCapacity(patNum)
         for p in 0..<patNum {
             let para = word(patParaOffset + p * 2)
             var grid = (0..<64).map { _ in [Note](repeating: emptyNote, count: channelCount) }

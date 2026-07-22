@@ -32,6 +32,7 @@ public final class ModulePCMSource: @unchecked Sendable {
     private let block: ModuleRenderBlock
     private let left: UnsafeMutablePointer<Float>
     private let right: UnsafeMutablePointer<Float>
+    private let maxFrames: UInt64?
 
     // VU-/Wave-Puffer will der Renderblock immer bedienen. Das CLI zeigt nichts
     // davon an, also bekommt er Wegwerf-Puffer — die Alternative waere ein
@@ -50,9 +51,15 @@ public final class ModulePCMSource: @unchecked Sendable {
     /// Sampleraten-Vorgabe des Moduls.
     public let format: PCMFormat
 
-    public init(mod: Mod, format: PCMFormat) {
+    public init(
+        mod: Mod,
+        format: PCMFormat,
+        maxFrames: UInt64? = nil,
+        useInterpolation: Bool = true
+    ) {
         self.mod = mod
         self.format = format
+        self.maxFrames = maxFrames
         let channels = RenderEngine.makeRenderChannels(for: mod)
         let logicalCount = mod.format == .it
             ? max(1, min(RenderEngine.maxChannels, mod.channelCount))
@@ -61,7 +68,7 @@ public final class ModulePCMSource: @unchecked Sendable {
 
         let state = RenderEngine.makeRenderState(for: mod, sampleRate: format.sampleRate)
         state.stereoSeparation = 0.8
-        state.useInterpolation = true
+        state.useInterpolation = useInterpolation
         state.palClock = true
         self.state = state
 
@@ -109,6 +116,19 @@ public final class ModulePCMSource: @unchecked Sendable {
         return { [self] buffer, frames in
             var written = 0
             while written < frames {
+                // Optionales hartes Budget (CLI --seconds). Es wird VOR dem
+                // Render-Aufruf angewandt, damit auch geloopte Songs nie mehr
+                // Arbeit oder Ausgabe als angefordert erzeugen.
+                let budgetRemaining: UInt64
+                if let maxFrames {
+                    budgetRemaining = maxFrames > renderedFrames
+                        ? maxFrames - renderedFrames
+                        : 0
+                    if budgetRemaining == 0 { return written }
+                } else {
+                    budgetRemaining = UInt64.max
+                }
+
                 // Songende: endReachedFrame zaehlt absolut ab Start. Was davon in
                 // diesem Aufruf noch uebrig ist, ist die gueltige Restlaenge; alles
                 // danach faellt weg und der Sink beendet sich (Rueckgabe < frames).
@@ -119,10 +139,15 @@ public final class ModulePCMSource: @unchecked Sendable {
                     if remaining == 0 { return written }
                 }
 
-                let want = min(frames - written, Self.chunkCapacity)
+                let want = min(
+                    frames - written,
+                    Self.chunkCapacity,
+                    Int(min(UInt64(frames - written), budgetRemaining))
+                )
                 block(UInt32(want), left, right)
 
                 var valid = want
+                valid = min(valid, Int(min(UInt64(want), budgetRemaining)))
                 if state.endReachedFrame != .max {
                     let remaining = Int(min(
                         UInt64(want),
@@ -150,4 +175,8 @@ public final class ModulePCMSource: @unchecked Sendable {
             return written
         }
     }
+
+    /// Nach Ende des Sinks kann das CLI damit die tatsächlich gestreamte Dauer
+    /// melden, ohne Samples oder PCM-Daten zwischenzuspeichern.
+    public var deliveredFrames: UInt64 { renderedFrames }
 }

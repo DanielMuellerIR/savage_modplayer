@@ -41,6 +41,7 @@ swiftc -O -parse-as-library \
     -module-name "$QL_NAME" \
     -target "$ARCH-apple-macos13.0" \
     -application-extension \
+    Sources/SavageModPlayerCore/PreviewCacheIdentity.swift \
     Sources/SavageModPlayerCore/Parser/*.swift \
     Sources/SavageModPlayerCore/DSP/*.swift \
     quicklook/PreviewProvider.swift \

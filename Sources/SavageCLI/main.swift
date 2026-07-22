@@ -33,28 +33,90 @@ struct Options {
     var play = false               // Echtzeit-Wiedergabe ueber die Audio-Ausgabe der Plattform
 }
 
-func parseArgs(_ argv: [String]) -> Options {
+let cliMinSampleRate = 8_000.0
+
+enum CLIError: Error, LocalizedError {
+    case missingValue(String)
+    case invalidValue(option: String, value: String, expected: String)
+    case unknownOption(String)
+    case duplicateInput(String)
+    case incompatibleOptions(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingValue(let option):
+            return "Wert für \(option) fehlt."
+        case .invalidValue(let option, let value, let expected):
+            return "Ungültiger Wert für \(option): '\(value)' (erwartet: \(expected))."
+        case .unknownOption(let option):
+            return "Unbekannte Option: \(option)."
+        case .duplicateInput(let value):
+            return "Mehr als eine Eingabedatei angegeben: \(value)."
+        case .incompatibleOptions(let detail):
+            return "Unvereinbare Optionen: \(detail)."
+        }
+    }
+}
+
+func parseArgs(_ argv: [String]) throws -> Options {
     var o = Options()
     var i = 0
+    func value(after option: String) throws -> String {
+        guard i + 1 < argv.count else { throw CLIError.missingValue(option) }
+        return argv[i + 1]
+    }
     while i < argv.count {
         let a = argv[i]
         switch a {
-        case "--out", "-o":      i += 1; o.output = i < argv.count ? argv[i] : nil
-        case "--seconds", "-s":  i += 1; o.seconds = Double(i < argv.count ? argv[i] : "0") ?? 0
-        case "--rate", "-r":     i += 1; o.rate = Double(i < argv.count ? argv[i] : "44100") ?? 44100
+        case "--out", "-o":
+            o.output = try value(after: a); i += 1
+        case "--seconds", "-s":
+            let raw = try value(after: a)
+            guard let seconds = Double(raw), seconds.isFinite,
+                  seconds >= 0, seconds <= ModuleRenderer.maxDurationSeconds else {
+                throw CLIError.invalidValue(
+                    option: a, value: raw,
+                    expected: "0...\(Int(ModuleRenderer.maxDurationSeconds)) endliche Sekunden"
+                )
+            }
+            o.seconds = seconds; i += 1
+        case "--rate", "-r":
+            let raw = try value(after: a)
+            guard let rate = Double(raw), rate.isFinite,
+                  rate >= cliMinSampleRate,
+                  rate <= ModuleRenderer.maxSampleRate else {
+                throw CLIError.invalidValue(
+                    option: a, value: raw,
+                    expected: "\(Int(cliMinSampleRate))...\(Int(ModuleRenderer.maxSampleRate)) Hz"
+                )
+            }
+            o.rate = rate; i += 1
         case "--normalize":      o.normalize = true
         case "--no-interp":      o.interpolation = false
         case "--info":           o.infoOnly = true
-        case "--pattern":        i += 1; o.dumpPattern = Int(i < argv.count ? argv[i] : "")
+        case "--pattern":
+            let raw = try value(after: a)
+            guard let pattern = Int(raw), pattern >= 0 else {
+                throw CLIError.invalidValue(option: a, value: raw, expected: "nichtnegative Ganzzahl")
+            }
+            o.dumpPattern = pattern; i += 1
         case "--quiet", "-q":    o.quiet = true
         case "--stdout":         o.toStdout = true
         case "--play":           o.play = true
-        case "--list":           i += 1; o.listDir = i < argv.count ? argv[i] : nil
+        case "--list":           o.listDir = try value(after: a); i += 1
         case "--help", "-h":     printUsageAndExit()
         default:
-            if o.input == nil { o.input = a }
+            if a.hasPrefix("-") { throw CLIError.unknownOption(a) }
+            guard o.input == nil else { throw CLIError.duplicateInput(a) }
+            o.input = a
         }
         i += 1
+    }
+    if o.toStdout, o.normalize {
+        throw CLIError.incompatibleOptions("--stdout kann nicht peak-normalisieren, weil der Stream sofort ausgegeben wird")
+    }
+    if o.toStdout, o.output != nil {
+        throw CLIError.incompatibleOptions("--stdout und --out")
     }
     return o
 }
@@ -65,8 +127,8 @@ func printUsageAndExit() -> Never {
 
     savage-cli <datei> [optionen]
       -o, --out <pfad>     WAV-Ausgabepfad (Standard: <datei>.wav)
-      -s, --seconds N      Renderdauer in Sekunden (0 = ganzer Song)
-      -r, --rate R         Samplerate (Standard 44100)
+      -s, --seconds N      Renderdauer 0...600 s (0 = ganzer Song, max. 600 s)
+      -r, --rate R         Samplerate 8000...192000 Hz (Standard 44100)
           --normalize      Peak-Normalisierung (wie Quick Look; sonst roh)
           --no-interp      lineare Interpolation aus
           --info           nur Modul-Struktur ausgeben (IT intern analysierbar)
@@ -314,7 +376,13 @@ func dumpPattern(_ mod: Mod, orderIndex: Int) {
 
 // ---- Hauptprogramm ----------------------------------------------------------
 
-let opts = parseArgs(Array(CommandLine.arguments.dropFirst()))
+let opts: Options
+do {
+    opts = try parseArgs(Array(CommandLine.arguments.dropFirst()))
+} catch {
+    FileHandle.standardError.write(Data("Argumentfehler: \(error.localizedDescription)\n".utf8))
+    exit(2)
+}
 
 // --list: Ordner scannen und spielbare Module ausgeben (ein Pfad je Zeile, damit
 // die Ausgabe pipe-/skriptfreundlich bleibt). Braucht keine Eingabedatei.
@@ -373,7 +441,24 @@ if opts.infoOnly || opts.dumpPattern != nil {
 // (AVAudioEngine auf macOS, ALSA auf Linux). Blockiert bis Songende oder Ctrl-C.
 if opts.play {
     let format = PCMSinkFactory.preferredFormat(channels: 2)
-    let source = ModulePCMSource(mod: mod, format: format)
+    let frameLimit: UInt64?
+    do {
+        frameLimit = opts.seconds > 0
+            ? try ModuleRenderer.validatedFrameLimit(
+                sampleRate: format.sampleRate,
+                maxDurationSeconds: opts.seconds
+            )
+            : nil
+    } catch {
+        FileHandle.standardError.write(Data("Wiedergabe-Fehler: \(error.localizedDescription)\n".utf8))
+        exit(1)
+    }
+    let source = ModulePCMSource(
+        mod: mod,
+        format: format,
+        maxFrames: frameLimit,
+        useInterpolation: opts.interpolation
+    )
     let sink = PCMSinkFactory.makeDefault(format: format)
     log(
         "Spiele '\(mod.name.isEmpty ? inputURL.lastPathComponent : mod.name)' "
@@ -404,6 +489,59 @@ let maxDuration = opts.seconds > 0 ? opts.seconds : 600.0
 log("Rendere '\(mod.name.isEmpty ? inputURL.lastPathComponent : mod.name)' (\(mod.format), \(mod.channelCount) ch) …", quiet: opts.quiet)
 
 let started = Date()
+
+// Pipe-Ausgabe zieht blockweise direkt aus derselben Render-Engine wie die
+// Live-Wiedergabe. Kein kompletter Song und keine WAV liegen dabei im Speicher.
+if opts.toStdout {
+    let format = PCMFormat(sampleRate: opts.rate, channels: 2)
+    let frameLimit: UInt64
+    do {
+        frameLimit = try ModuleRenderer.validatedFrameLimit(
+            sampleRate: opts.rate,
+            maxDurationSeconds: maxDuration
+        )
+    } catch {
+        FileHandle.standardError.write(Data("Render-Fehler: \(error.localizedDescription)\n".utf8))
+        exit(1)
+    }
+    let source = ModulePCMSource(
+        mod: mod,
+        format: format,
+        maxFrames: frameLimit,
+        useInterpolation: opts.interpolation
+    )
+    let sink = StdoutPCMSink(format: format)
+    do {
+        try sink.start(render: source.renderBlock())
+    } catch {
+        FileHandle.standardError.write(Data("Render-Fehler: \(error.localizedDescription)\n".utf8))
+        exit(1)
+    }
+    let reason = sink.waitUntilFinished()
+    switch reason {
+    case .sourceFinished, .outputClosed:
+        let elapsed = Date().timeIntervalSince(started)
+        let renderedSeconds = Double(source.deliveredFrames) / opts.rate
+        log(
+            String(
+                format: "Fertig: %.1f s Audio nach stdout (in %.2f s gestreamt)",
+                renderedSeconds,
+                elapsed
+            ),
+            quiet: opts.quiet
+        )
+        exit(0)
+    case .stopped:
+        exit(0)
+    case .failed(let detail):
+        FileHandle.standardError.write(Data("Render-Fehler: \(detail)\n".utf8))
+        exit(1)
+    case .notStarted:
+        FileHandle.standardError.write(Data("Render-Fehler: Stream startete nicht.\n".utf8))
+        exit(1)
+    }
+}
+
 let wav: Data
 do {
     wav = try ModuleRenderer.renderWavData(
@@ -422,15 +560,6 @@ let elapsed = Date().timeIntervalSince(started)
 // data-Chunk-Größe steht ab Byte 40 (nach 44-Byte-Header).
 let audioBytes = max(0, wav.count - 44)
 let renderedSeconds = Double(audioBytes) / (opts.rate * 4.0) // 16-Bit-Stereo = 4 Byte/Frame
-
-// --stdout: nur die PCM-Nutzdaten ohne RIFF-Header, damit die Ausgabe direkt in
-// einen Player gepiped werden kann (aplay & Co. erwarten rohes s16le). Die
-// Statusmeldung geht wie gehabt auf stderr und verschmutzt den Stream nicht.
-if opts.toStdout {
-    FileHandle.standardOutput.write(wav.dropFirst(44))
-    log(String(format: "Fertig: %.1f s Audio nach stdout (in %.2f s gerendert)", renderedSeconds, elapsed), quiet: opts.quiet)
-    exit(0)
-}
 
 let outPath = opts.output ?? (inputPath + ".wav")
 do {

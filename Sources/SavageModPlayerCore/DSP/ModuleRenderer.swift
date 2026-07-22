@@ -5,6 +5,55 @@ import Foundation
 // Stereo). Hauptnutzer ist das Quick-Look-Plugin — Quick Look zeigt für die
 // gelieferten WAV-Daten den nativen macOS-Audio-Player mit Play/Scrubbing.
 public enum ModuleRenderer {
+    public enum RenderError: Error, LocalizedError, Equatable {
+        case invalidSampleRate(Double)
+        case invalidDuration(Double)
+        case frameLimitExceeded
+
+        public var errorDescription: String? {
+            switch self {
+            case .invalidSampleRate(let value):
+                return "Ungültige Samplerate \(value); erlaubt sind \(Int(minSampleRate))...\(Int(maxSampleRate)) Hz."
+            case .invalidDuration(let value):
+                return "Ungültige Renderdauer \(value); erlaubt sind mehr als 0 bis \(Int(maxDurationSeconds)) Sekunden."
+            case .frameLimitExceeded:
+                return "Die angeforderte Ausgabe überschreitet das maximale Frame-Budget."
+            }
+        }
+    }
+
+    // Der öffentliche Renderer wird auch von schnellen Sequenzertests mit sehr
+    // niedrigen Raten genutzt. Deshalb ist hier jede positive Rate erlaubt;
+    // das Endnutzer-CLI setzt zusätzlich die praxisnahe Untergrenze 8 kHz.
+    public static let minSampleRate = 1.0
+    public static let maxSampleRate = 192_000.0
+    public static let maxDurationSeconds = 600.0
+    public static let maxRenderedFrames: UInt64 = 115_200_000
+
+    /// Prüft öffentliche Renderparameter, bevor Double nach UInt64 gewandelt
+    /// oder ein Ausgabepuffer aufgebaut wird. Wird auch vom CLI-Streamingpfad
+    /// genutzt, damit Datei- und Pipe-Ausgabe exakt dieselben Grenzen haben.
+    public static func validatedFrameLimit(
+        sampleRate: Double,
+        maxDurationSeconds duration: Double
+    ) throws -> UInt64 {
+        guard sampleRate.isFinite,
+              sampleRate >= minSampleRate,
+              sampleRate <= maxSampleRate else {
+            throw RenderError.invalidSampleRate(sampleRate)
+        }
+        guard duration.isFinite,
+              duration > 0,
+              duration <= maxDurationSeconds else {
+            throw RenderError.invalidDuration(duration)
+        }
+        let product = sampleRate * duration
+        guard product.isFinite, product >= 1, product <= Double(maxRenderedFrames) else {
+            throw RenderError.frameLimitExceeded
+        }
+        return UInt64(product.rounded(.down))
+    }
+
     // Rendert bis zum Songende (endReached-Signal des Sequencers) oder
     // maximal maxDurationSeconds (Schutz gegen endlos geloopte Module).
     // normalize: Peak-Anhebung fürs Quick-Look (Standard). Für A/B-Vergleiche mit
@@ -57,6 +106,10 @@ public enum ModuleRenderer {
         useInterpolation: Bool,
         captureConsumer: ((RenderCaptureBlock) -> Void)?
     ) throws -> Data {
+        let totalFrames = try validatedFrameLimit(
+            sampleRate: sampleRate,
+            maxDurationSeconds: maxDurationSeconds
+        )
         let renderChannels = RenderEngine.makeRenderChannels(for: mod)
         let channelCount = mod.format == .it
             ? max(1, min(RenderEngine.maxChannels, mod.channelCount))
@@ -137,7 +190,6 @@ public enum ModuleRenderer {
             rightBuffer.deallocate()
         }
 
-        let totalFrames = UInt64(sampleRate * maxDurationSeconds)
         var renderedFrames: UInt64 = 0
         var pcmData = Data()
         pcmData.reserveCapacity(1_048_576)

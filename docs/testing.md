@@ -1,6 +1,6 @@
 # Test-, Build- und Quick-Look-Runbook
 
-Stand: 2026-07-14. Diese Datei enthält die Details, die nur vor einer betroffenen
+Stand: 2026-07-22. Diese Datei enthält die Details, die nur vor einer betroffenen
 Änderung geladen werden müssen. Die kompakte Pflichtmatrix steht in `AGENTS.md`.
 
 ## Allgemeines Gate
@@ -29,6 +29,8 @@ Stand: 2026-07-14. Diese Datei enthält die Details, die nur vor einer betroffen
 - XM-Parser und reale lokale XM-Dateien:
   `swift test --filter XMParserTests`; DSP-Semantik zusätzlich in
   `DSPChannelTimingTests`.
+- Renderparameter, Streaming-Framebudget und Quick-Look-Cacheidentität:
+  `swift test --filter 'ModuleRendererLimitTests|ModulePCMSourceTests|PreviewCacheIdentityTests'`.
 - Impulse Tracker einschließlich IT214/IT215, Instrument-/Samplemodus,
   Voice-Pool, NNA/DCT/DCA, Effekte, Filter und Capability-Matrix:
   `swift test --filter IT`.
@@ -42,6 +44,12 @@ Parseränderungen müssen synthetische Grenzfälle für Längen, Offsets und
 Korruption enthalten. Eine Toleranz ist nur zulässig, wenn das ignorierte oder
 geclampte Feld keine Bounds, Allokationsgröße oder Nutzdateninterpretation
 beeinflusst. Planunterstützte Realweltdateien müssen hörbar rendern.
+
+CLI-Zahlparameter zusätzlich mit `nan`, `inf`, negativen und oberhalb der
+dokumentierten Grenze liegenden Werten prüfen: Der Prozess muss vor Parse/Render
+mit Exit-Code 2 enden. Beim `--stdout`-Smoke nur wenige KiB aus einer langen
+Anforderung lesen; die ersten Bytes müssen sofort kommen und ein geschlossener
+Consumer muss sauber als `outputClosed` enden.
 
 ## HTML5-Player
 
@@ -93,4 +101,3 @@ Appex zuerst sandboxed mit Entitlements signieren, danach die App ohne `--deep`.
   Profilnamen gehören in private Setup-Doku.
 - `publish_github.sh`, Tags, GitHub-Releases und Notary-Uploads nur nach
   ausdrücklichem Auftrag. Vorher Dry-run und Public-Leak-Prüfung.
-

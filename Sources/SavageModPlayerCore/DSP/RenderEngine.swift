@@ -221,14 +221,12 @@ public enum RenderEngine {
                 ch.periodMin = 64
                 ch.periodMax = 32767
             } else if mod.format == .xm {
-                // Lineares XM-Frequenzmodell. Perioden reichen bis ~7680 (tiefste
-                // Note), darum weite Klemmgrenzen. Amiga-Frequenz-XMs (selten,
-                // mod.linearFrequency == false) werden vorerst über dasselbe
-                // lineare Modell approximiert — echte Amiga-Periodentabelle ist
-                // ein späterer Feinschliff (TODO).
-                ch.xmLinearMode = true
+                // XM-Formatverhalten gilt in beiden Frequenzmodi. Das Header-Flag
+                // wählt strikt zwischen FT2s linearer und Amiga-Periodentabelle.
+                ch.xmMode = true
+                ch.xmLinearMode = mod.linearFrequency
                 ch.periodMin = 1
-                ch.periodMax = 7680
+                ch.periodMax = mod.linearFrequency ? 7680 : 32768
             }
         }
     }

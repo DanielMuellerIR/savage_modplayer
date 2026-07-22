@@ -20,11 +20,13 @@ import Foundation
 // - Der rohe XM-Volume-Column-Wert wird unverändert in Note.volCmd gelegt (die
 //   Auswertung Set-Volume/Slide/Vibrato/Panning macht später der DSP).
 public class XMParser {
-    public enum ParserError: Error, LocalizedError {
+    public enum ParserError: Error, LocalizedError, Equatable {
         case fileTooSmall
         case invalidSignature
         case emptySong
         case noChannels
+        case unsupportedDimensions(String)
+        case resourceLimit(String)
 
         public var errorDescription: String? {
             switch self {
@@ -36,9 +38,26 @@ public class XMParser {
                 return "Leeres XM-Modul: keine Songpositionen in der Order-Table."
             case .noChannels:
                 return "XM-Modul ohne Kanäle."
+            case .unsupportedDimensions(let detail):
+                return "Nicht unterstützte XM-Abmessungen: \(detail)."
+            case .resourceLimit(let detail):
+                return "XM-Modul überschreitet das sichere Ressourcenlimit: \(detail)."
             }
         }
     }
+
+    // FastTracker-II-Grenzen plus ein bewusst konservatives PCM-Gesamtbudget.
+    // Die Einzelgrenzen verhindern, dass 16-Bit-Headerfelder direkt riesige
+    // Swift-Arrays auslösen; das Gesamtbudget begrenzt zusätzlich die Summe
+    // vieler formal gültiger Patterns und Samples.
+    private static let maxChannels = 32
+    private static let maxPatterns = 256
+    private static let maxInstruments = 128
+    private static let maxRowsPerPattern = 256
+    private static let maxSamplesPerInstrument = 16
+    private static let maxSamples = maxInstruments * maxSamplesPerInstrument
+    private static let maxPatternCells = maxPatterns * maxRowsPerPattern * maxChannels
+    private static let maxPCMFrames = 32 * 1_024 * 1_024
 
     // Schneller Vorab-Check für den Format-Dispatch (ModuleLoader).
     // Prüft die 17-Byte-Signatur "Extended Module: " ab Offset 0.
@@ -76,7 +95,7 @@ public class XMParser {
         // ---- Datei-Header (§1) ----
         let name = string(0x11, 20)
         let headerSize = dword(0x3C)          // Größe ab 0x3C; erstes Pattern bei 0x3C + headerSize
-        var songLength = word(0x40)
+        let songLength = word(0x40)
         // restartPos = word(0x42) — bewusst ignoriert (Song wrappt auf 0).
         let numChannels = word(0x44)
         let numPatterns = word(0x46)
@@ -88,7 +107,18 @@ public class XMParser {
 
         guard numChannels > 0 else { throw ParserError.noChannels }
         guard songLength > 0 else { throw ParserError.emptySong }
-        songLength = min(songLength, 256)       // Order-Table ist immer 256 Byte
+        guard songLength <= 256 else {
+            throw ParserError.unsupportedDimensions("\(songLength) Songpositionen (Maximum 256)")
+        }
+        guard numChannels <= maxChannels else {
+            throw ParserError.unsupportedDimensions("\(numChannels) Kanäle (Maximum \(maxChannels))")
+        }
+        guard numPatterns <= maxPatterns else {
+            throw ParserError.unsupportedDimensions("\(numPatterns) Patterns (Maximum \(maxPatterns))")
+        }
+        guard numInstruments <= maxInstruments else {
+            throw ParserError.unsupportedDimensions("\(numInstruments) Instrumente (Maximum \(maxInstruments))")
+        }
 
         // Order-Table (256 Byte ab 0x50), nur die ersten songLength Einträge gültig.
         var patternTable = (0..<songLength).map { byte(0x50 + $0) }
@@ -100,6 +130,7 @@ public class XMParser {
 
         var patterns = [Pattern]()
         patterns.reserveCapacity(numPatterns)
+        var totalPatternCells = 0
         for _ in 0..<numPatterns {
             guard pos >= 0, pos < data.count else {
                 // Datei früher zu Ende als erwartet -> Rest als leere Patterns.
@@ -111,6 +142,17 @@ public class XMParser {
             var numRows = word(pos + 5)
             let patternDataSize = word(pos + 7)
             if numRows == 0 { numRows = 64 }
+            guard numRows <= maxRowsPerPattern else {
+                throw ParserError.unsupportedDimensions(
+                    "\(numRows) Zeilen in einem Pattern (Maximum \(maxRowsPerPattern))"
+                )
+            }
+            let (cellCount, cellsOverflow) = numRows.multipliedReportingOverflow(by: numChannels)
+            let (newTotalCells, totalOverflow) = totalPatternCells.addingReportingOverflow(cellCount)
+            guard !cellsOverflow, !totalOverflow, newTotalCells <= maxPatternCells else {
+                throw ParserError.resourceLimit("zu viele Pattern-Zellen")
+            }
+            totalPatternCells = newTotalCells
 
             // Grid mit Leernoten vorbelegen; belegte Zellen werden überschrieben.
             var grid = (0..<numRows).map { _ in
@@ -121,7 +163,6 @@ public class XMParser {
                 let dataStart = pos + max(patternHeaderLen, 9)
                 let dataEnd = min(dataStart + patternDataSize, data.count)
                 var cursor = dataStart
-                let cellCount = numRows * numChannels
                 var cell = 0
                 while cell < cellCount && cursor < dataEnd {
                     let b = byte(cursor); cursor += 1
@@ -164,12 +205,25 @@ public class XMParser {
 
         // ---- Instrumente (§3–§5) ----
         var instruments: [Instrument?] = [nil] // 1-basiert: Index 0 = nil
+        var totalSamples = 0
+        var totalPCMFrames = 0
         for i in 0..<numInstruments {
             guard pos >= 0, pos < data.count else { break }
             let instrStart = pos
             let instrumentSize = dword(instrStart)
             let instName = string(instrStart + 4, 22)
             let numSamples = word(instrStart + 27)
+
+            guard numSamples <= maxSamplesPerInstrument else {
+                throw ParserError.unsupportedDimensions(
+                    "\(numSamples) Samples in Instrument \(i + 1) (Maximum \(maxSamplesPerInstrument))"
+                )
+            }
+            let (newTotalSamples, sampleOverflow) = totalSamples.addingReportingOverflow(numSamples)
+            guard !sampleOverflow, newTotalSamples <= maxSamples else {
+                throw ParserError.resourceLimit("zu viele Samples")
+            }
+            totalSamples = newTotalSamples
 
             if numSamples == 0 {
                 // Platzhalter-Instrument: kein Teil-2-Header, keine Samples.
@@ -272,12 +326,17 @@ public class XMParser {
                 let is16bit = (h.type & 0x10) != 0
                 let availBytes = max(0, data.count - sdPos)
                 let usableBytes = min(h.length, availBytes)
+                let frames = is16bit ? usableBytes / 2 : usableBytes
+                let (newTotalPCMFrames, pcmOverflow) = totalPCMFrames.addingReportingOverflow(frames)
+                guard !pcmOverflow, newTotalPCMFrames <= maxPCMFrames else {
+                    throw ParserError.resourceLimit("mehr als \(maxPCMFrames) dekodierte PCM-Frames")
+                }
+                totalPCMFrames = newTotalPCMFrames
 
                 // Delta-Dekodierung + Normalisierung (§5). Überlauf wrappt bewusst
                 // auf die Bitbreite (&+ auf Int8/Int16).
                 var pcm = [Float]()
                 if is16bit {
-                    let frames = usableBytes / 2
                     pcm.reserveCapacity(frames)
                     var old: Int16 = 0
                     for k in 0..<frames {
@@ -285,7 +344,6 @@ public class XMParser {
                         pcm.append(Float(old) / 65536.0)
                     }
                 } else {
-                    let frames = usableBytes
                     pcm.reserveCapacity(frames)
                     var old: Int8 = 0
                     for k in 0..<frames {

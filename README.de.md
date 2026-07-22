@@ -39,7 +39,7 @@ Das Quick-Look-Plugin steckt bereits im App-Bundle (`Contents/PlugIns/`) — es 
 
 1. App aus dem DMG nach **`/Applications`** ziehen.
 2. Die App **einmal starten** (dabei registriert macOS die enthaltene Quick-Look-Extension).
-3. Im Finder eine `.mod`-, `.s3m`-, `.xm`- oder `.it`-Datei markieren und die **Leertaste** drücken — die Vorschau zeigt den macOS-Audio-Player mit Play, Scrubbing und Lautstärke. Sie rendert bis zu den ersten 60 Sekunden und cached diese Vorschau für unveränderte Dateien; weitere Aufrufe sind dadurch sofort da. Nicht unterstützte Dateien zeigen den Parsergrund statt eines endlosen Ladeindikators.
+3. Im Finder eine `.mod`-, `.s3m`-, `.xm`- oder `.it`-Datei markieren und die **Leertaste** drücken — die Vorschau zeigt den macOS-Audio-Player mit Play, Scrubbing und Lautstärke. Sie rendert bis zu den ersten 60 Sekunden und cached diese Vorschau anhand kanonischer Dateiidentität und Subsekunden-Änderungszeit; weitere Aufrufe sind dadurch sofort da, ohne Kollisionen gleichnamiger Dateien. Nicht unterstützte Dateien zeigen den Parsergrund statt eines endlosen Ladeindikators.
 
 Falls keine Vorschau erscheint:
 
@@ -115,7 +115,7 @@ Die Audio-Engine simuliert das Amiga Paula-Hardwareverhalten:
 
 Für ScreamTracker 3 rechnet die Engine im ST3-Periodenmodell (C2Spd-basierte Perioden gegen die ST3-Clock 14,3 MHz) statt in Amiga-Paula-Perioden; die ProTracker-Effekte werden um S3M-Spezifika (Fine-/Extra-Fine-Slides mit Effekt-Memory, Tremor, Fine-Vibrato, Global Volume) ergänzt.
 
-Für FastTracker II fährt die Engine ein eigenes Instrument-Voice-Modell: lineare Frequenztabelle (exponentielle Frequenz aus linearen Perioden), Multi-Sample-Instrumente mit Keymaps, Lautstärke- und Panning-Hüllkurven (Sustain und Loop, pro Tick interpoliert), Key-Off mit Volume-Fadeout, Auto-Vibrato mit Sweep und Ping-Pong-Sample-Loops. Der XM-Effektsatz inklusive Volume-Column und Per-Kanal-Effekt-Memory wird auf den gemeinsamen DSP-Kern übersetzt.
+Für FastTracker II fährt die Engine ein eigenes Instrument-Voice-Modell: Der Modul-Header wählt zwischen FT2s linearer Frequenztabelle und seiner Amiga-Periodentabelle; Multi-Sample-Instrumente mit Keymaps, Lautstärke- und Panning-Hüllkurven (Sustain und Loop, pro Tick interpoliert), Key-Off mit Volume-Fadeout, Auto-Vibrato mit Sweep und Ping-Pong-Sample-Loops funktionieren in beiden Modi. Der XM-Effektsatz inklusive Volume-Column und Per-Kanal-Effekt-Memory wird auf den gemeinsamen DSP-Kern übersetzt.
 
 Für Impulse Tracker trennt die Engine 64 logische Pattern-Kanäle von einem vorallozierten Pool mit 256 Wiedergabe-Voices. Implementiert sind Sample- und Instrument-Modus, NNA/DCT/DCA, 120er Sample-Maps, IT-2.14-/2.15-Kompression, Stereo- und Sustain-Loops, Pitch-/Pan-/Filter-Hüllkurven, resonante Filter pro Voice, Sample-Vibrato, Surround, IT-Effekt-Memory sowie die Profile `Old Effects` und `Compatible Gxx`. Von OpenMPT erzeugte IT-Dateien verwenden zusätzlich strukturiertes XTPM-/STPM-Parsing, klassische/alternative/moderne Tempoformeln, gespeicherte Preamp-/Mix-Werte, Restart-Position, erweiterten Filterbereich und die jeweils zutreffenden PCM-`PlayBehaviour`-Flags.
 
@@ -172,9 +172,13 @@ savage-cli song.mod --stdout | aplay -f S16_LE -c2 -r44100   # rohes PCM in eine
 savage-cli --list audio/                     # spielbare Module eines Ordners auflisten
 ```
 
-`--stdout` schreibt rohes 16-Bit-Stereo-PCM (Little Endian) nach stdout, während
-Statusmeldungen auf stderr bleiben — der Strom lässt sich also direkt in einen
-Player pipen. `--list` gibt einen Pfad je Zeile aus und endet mit Exit-Code 1,
+`--stdout` streamt rohes 16-Bit-Stereo-PCM (Little Endian) in begrenzten Blöcken
+nach stdout, während Statusmeldungen auf stderr bleiben. Die Wiedergabe kann
+sofort beginnen, ohne den ganzen Song zu puffern. Streaming lässt sich nicht mit
+`--normalize` kombinieren, weil dessen Peak-Suche die Gesamtausgabe braucht.
+`--seconds` akzeptiert 0...600 Sekunden (0 bedeutet Songende mit 600-Sekunden-
+Kappung), `--rate` 8.000...192.000 Hz; nicht-endliche oder außerhalb liegende
+Werte enden mit Exit-Code 2. `--list` gibt einen Pfad je Zeile aus und endet mit Exit-Code 1,
 wenn nichts Spielbares gefunden wurde. `--normalize` hebt den Pegel wie Quick
 Look an; für rohe Vergleiche weglassen.
 
@@ -186,9 +190,10 @@ ausgeblendet.
 
 ```bash
 docker run --rm -v "$PWD":/src -w /src swift:6.0 \
-  bash -c "apt-get update -qq && apt-get install -y -qq libarchive-tools && swift build && swift test"
+  bash -c "apt-get update -qq && apt-get install -y -qq libasound2-dev libarchive-tools && swift build && swift test"
 ```
 
+`libasound2-dev` liefert die ALSA-Header für die Linux-Audioausgabe;
 `libarchive-tools` liefert `bsdtar`, mit dem der Playlist-Scanner `.zip`/`.7z`
 liest. Ohne das Paket werden Archive ignoriert und zwei Tests übersprungen; alles
 Übrige funktioniert.

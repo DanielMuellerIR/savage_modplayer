@@ -58,9 +58,13 @@ class PreviewProvider: QLPreviewProvider, QLPreviewingController {
 
         let values = try sourceURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         let fileSize = values.fileSize ?? 0
-        let timestamp = Int(values.contentModificationDate?.timeIntervalSinceReferenceDate ?? 0)
-        let sourceName = sourceURL.deletingPathExtension().lastPathComponent
-        let cachedURL = dir.appendingPathComponent("\(sourceName)-\(fileSize)-\(timestamp).wav")
+        let modificationDate = values.contentModificationDate ?? .distantPast
+        let cacheKey = PreviewCacheIdentity.key(
+            sourceURL: sourceURL,
+            fileSize: fileSize,
+            modificationDate: modificationDate
+        )
+        let cachedURL = dir.appendingPathComponent("\(cacheKey).wav")
         if fm.fileExists(atPath: cachedURL.path) {
             return cachedURL
         }

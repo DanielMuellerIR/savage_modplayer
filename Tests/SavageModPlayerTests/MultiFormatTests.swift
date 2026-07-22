@@ -226,6 +226,23 @@ final class MultiFormatTests: XCTestCase {
         XCTAssertFalse(empty.hasEffect)
     }
 
+    func testS3MRejectsOversizedHeaderTablesBeforeAllocating() {
+        let cases: [(offset: Int, expected: S3MParser.ParserError)] = [
+            (0x20, .unsupportedDimensions("65535 Orders (Maximum 256)")),
+            (0x22, .unsupportedDimensions("65535 Instrumente (Maximum 99)")),
+            (0x24, .unsupportedDimensions("65535 Patterns (Maximum 100)"))
+        ]
+
+        for item in cases {
+            var data = makeS3M()
+            data[item.offset] = 0xFF
+            data[item.offset + 1] = 0xFF
+            XCTAssertThrowsError(try S3MParser.parse(data: data)) { error in
+                XCTAssertEqual(error as? S3MParser.ParserError, item.expected)
+            }
+        }
+    }
+
     func testModuleLoaderDispatch() throws {
         // ModuleLoader erkennt S3M am SCRM-Header, MOD an der Signatur.
         XCTAssertEqual(try ModuleLoader.parse(data: makeS3M()).format, .s3m)

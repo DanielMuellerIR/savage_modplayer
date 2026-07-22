@@ -89,4 +89,27 @@ final class ModulePCMSourceTests: XCTestCase {
         XCTAssertTrue(lastWasShort, "Der Block meldete das Songende nie durch eine kurze Lieferung")
         XCTAssertGreaterThan(total, 0, "Vor dem Songende muss Signal gekommen sein")
     }
+
+    /// Ein langes oder gelooptes Modul darf den CLI-Stream nicht zwingen, den
+    /// ganzen Song zu puffern. Selbst bei einer Anfrage groesser als der interne
+    /// 4096er Chunk liefert die Quelle exakt bis zum Frame-Budget und danach 0.
+    func testSourceStopsExactlyAtFrameBudgetWithBoundedChunks() {
+        let limit: UInt64 = 5_000
+        let source = ModulePCMSource(
+            mod: ModParser.generateDemoMod(),
+            format: PCMFormat(sampleRate: 44_100, channels: 2),
+            maxFrames: limit
+        )
+        let block = source.renderBlock()
+        let requested = 9_000
+        var buffer = [Float](repeating: 0, count: requested * 2)
+        var first = 0
+        buffer.withUnsafeMutableBufferPointer { first = block($0, requested) }
+        XCTAssertEqual(first, Int(limit))
+
+        var second = -1
+        buffer.withUnsafeMutableBufferPointer { second = block($0, requested) }
+        XCTAssertEqual(second, 0)
+        XCTAssertEqual(source.deliveredFrames, limit)
+    }
 }

@@ -39,7 +39,7 @@ The Quick Look plugin is embedded in the app bundle (`Contents/PlugIns/`) — th
 
 1. Drag the app from the DMG into **`/Applications`**.
 2. **Launch the app once** (this is when macOS registers the bundled Quick Look extension).
-3. Select a `.mod`, `.s3m`, `.xm`, or `.it` file in Finder and press the **space bar** — the preview shows the macOS audio player with play, scrubbing, and volume. It renders up to the first 60 seconds, then caches that preview for unchanged files so later openings are immediate. Unsupported files show their parser error instead of an endless loading indicator.
+3. Select a `.mod`, `.s3m`, `.xm`, or `.it` file in Finder and press the **space bar** — the preview shows the macOS audio player with play, scrubbing, and volume. It renders up to the first 60 seconds, then caches that preview by canonical file identity and sub-second modification time so later openings are immediate without collisions between equal basenames. Unsupported files show their parser error instead of an endless loading indicator.
 
 If no preview appears:
 
@@ -115,7 +115,7 @@ The audio engine simulates the Amiga Paula hardware behavior:
 
 For ScreamTracker 3 the engine switches to the ST3 period model (C2Spd-based periods against the 14.3 MHz ST3 clock) instead of Amiga Paula periods; the ProTracker effect set is extended with S3M specifics (fine/extra-fine slides with effect memory, tremor, fine vibrato, global volume).
 
-For FastTracker II the engine runs a dedicated instrument voice model: linear frequency table (exponential frequency from linear periods), multi-sample instruments with keymaps, volume and panning envelopes (sustain and loop, interpolated per tick), key-off with volume fadeout, auto-vibrato with sweep, and ping-pong sample loops. The XM effect set including the volume column and per-channel effect memory is translated onto the shared DSP core.
+For FastTracker II the engine runs a dedicated instrument voice model: the module header selects either FT2's linear frequency table or its Amiga period table, while multi-sample instruments, keymaps, volume and panning envelopes (sustain and loop, interpolated per tick), key-off with volume fadeout, auto-vibrato with sweep, and ping-pong sample loops work in both modes. The XM effect set including the volume column and per-channel effect memory is translated onto the shared DSP core.
 
 For Impulse Tracker the engine separates 64 logical pattern channels from a preallocated pool of 256 playback voices. It implements sample and instrument mode, NNA/DCT/DCA, 120-note sample maps, IT 2.14/2.15 compression, stereo and sustain loops, pitch/pan/filter envelopes, resonant per-voice filters, sample vibrato, surround, IT effect memory, and the `Old Effects`/`Compatible Gxx` profiles. OpenMPT-created IT files additionally use structured XTPM/STPM parsing, classic/alternative/modern tempo formulas, stored preamp and mix settings, restart position, extended filter range, and the applicable PCM `PlayBehaviour` flags.
 
@@ -176,8 +176,12 @@ savage-cli song.mod --stdout | aplay -f S16_LE -c2 -r44100   # raw PCM to a play
 savage-cli --list audio/                     # list playable modules in a folder
 ```
 
-`--stdout` writes raw 16-bit stereo PCM (little endian) to stdout while status
-messages stay on stderr, so the stream can be piped directly into a player.
+`--stdout` streams raw 16-bit stereo PCM (little endian) to stdout in bounded
+chunks while status messages stay on stderr, so playback can start immediately
+without buffering the whole song. Streaming cannot be combined with
+`--normalize`, which needs a complete peak scan. `--seconds` accepts 0...600
+seconds (0 means song end with a 600-second cap); `--rate` accepts
+8,000...192,000 Hz. Non-finite and out-of-range values fail with exit code 2.
 `--list` prints one path per line and exits with 1 if nothing playable was found.
 `--normalize` raises the level like Quick Look does; leave it off for raw
 comparisons.
@@ -189,9 +193,10 @@ Quick Look extension are macOS-only and are excluded from the package there.
 
 ```bash
 docker run --rm -v "$PWD":/src -w /src swift:6.0 \
-  bash -c "apt-get update -qq && apt-get install -y -qq libarchive-tools && swift build && swift test"
+  bash -c "apt-get update -qq && apt-get install -y -qq libasound2-dev libarchive-tools && swift build && swift test"
 ```
 
+`libasound2-dev` provides the ALSA headers used by the Linux audio sink;
 `libarchive-tools` provides `bsdtar`, which the playlist scanner uses to read
 `.zip`/`.7z` archives. Without it, archives are skipped and two tests skip with
 them; everything else works.

@@ -212,6 +212,7 @@ final class DSPChannelTimingTests: XCTestCase {
     /// eine Oktave höher -> 16726 Hz. sampleSpeed = Hz / sampleRate.
     func testXMLinearFrequencyIsExponential() {
         let ch = DSPChannel(index: 1)
+        ch.xmMode = true
         ch.xmLinearMode = true
         ch.periodMin = 1
         ch.periodMax = 7680
@@ -231,6 +232,7 @@ final class DSPChannelTimingTests: XCTestCase {
     /// Periode verrechnen (nicht das S3M-Modell nutzen).
     func testXMPlayNoteUsesLinearPeriodWithRelativeNote() {
         let ch = DSPChannel(index: 1)
+        ch.xmMode = true
         ch.xmLinearMode = true
         ch.periodMin = 1
         ch.periodMax = 7680
@@ -249,6 +251,7 @@ final class DSPChannelTimingTests: XCTestCase {
     /// Ton nach FT2-Quirk sofort, MIT Hüllkurve läuft er (Fadeout) weiter.
     func testXMKeyOffWithoutVolumeEnvelopeStopsImmediately() {
         let ch = DSPChannel(index: 1)
+        ch.xmMode = true
         ch.xmLinearMode = true
         // Instrument OHNE Volume-Hüllkurve.
         let inst = Instrument(index: 1, name: "X",
@@ -271,6 +274,7 @@ final class DSPChannelTimingTests: XCTestCase {
     /// zunächst spielend), und der Fadeout senkt fadeVolume pro Tick.
     func testXMKeyOffWithVolumeEnvelopeFadesOut() {
         let ch = DSPChannel(index: 1)
+        ch.xmMode = true
         ch.xmLinearMode = true
         let env = Envelope(points: [EnvelopePoint(frame: 0, value: 64)],
                            sustainPoint: 0, loopStart: 0, loopEnd: 0,
@@ -297,6 +301,7 @@ final class DSPChannelTimingTests: XCTestCase {
     /// (Punkte (0,64)->(4,0): fällt in 4 Ticks von voll auf null).
     func testXMVolumeEnvelopeInterpolates() {
         let ch = DSPChannel(index: 1)
+        ch.xmMode = true
         ch.xmLinearMode = true
         ch.periodMin = 1
         ch.periodMax = 7680
@@ -322,10 +327,78 @@ final class DSPChannelTimingTests: XCTestCase {
 
     private func makeXMChannel() -> DSPChannel {
         let ch = DSPChannel(index: 1)
+        ch.xmMode = true
         ch.xmLinearMode = true
         ch.periodMin = 1
         ch.periodMax = 7680
         return ch
+    }
+
+    // MARK: - XM Amiga-Frequenzmodell
+
+    func testXMAmigaPeriodReferences() {
+        XCTAssertEqual(DSPChannel.xmAmigaPeriod(realNote: 48, finetune: 0), 1712, accuracy: 0.001)
+        XCTAssertEqual(DSPChannel.xmAmigaPeriod(realNote: 52, finetune: 0), 1356, accuracy: 0.001)
+        XCTAssertEqual(DSPChannel.xmAmigaPeriod(realNote: 60, finetune: 0), 856, accuracy: 0.001)
+        XCTAssertLessThan(
+            DSPChannel.xmAmigaPeriod(realNote: 48, finetune: 64),
+            DSPChannel.xmAmigaPeriod(realNote: 48, finetune: 0)
+        )
+    }
+
+    func testXMAmigaPlaybackUsesClockPeriodAndRelativeNote() {
+        let ch = DSPChannel(index: 1)
+        ch.xmMode = true
+        ch.xmLinearMode = false
+        ch.periodMin = 1
+        ch.periodMax = 32768
+        let smp = Sample(
+            pcm: [0.1, 0.2, 0.3], loopStart: 0, loopLength: 0,
+            loopType: .none, volume: 64, finetune: 0, relativeNote: 12
+        )
+        let inst = Instrument(index: 1, name: "XM Amiga", samples: [smp])
+
+        ch.playNote(
+            Note(instrument: 1, period: 0, effectId: 0, effectData: 0, key: 48),
+            instruments: [nil, inst]
+        )
+        XCTAssertEqual(ch.period, 856, accuracy: 0.001)
+        ch.performTick(tick: 0, sampleRate: sampleRate, clockRate: clockRate)
+        XCTAssertEqual(ch.sampleSpeed, clockRate / (856 * sampleRate), accuracy: 1e-6)
+    }
+
+    func testXMAmigaPortamentoUsesFT2FourfoldStep() {
+        let ch = DSPChannel(index: 1)
+        ch.xmMode = true
+        ch.xmLinearMode = false
+        ch.periodMin = 1
+        ch.periodMax = 32768
+        ch.period = 1712
+        ch.currentPeriod = 1712
+
+        ch.playNote(
+            Note(instrument: 0, period: 0, effectId: 0x01, effectData: 0x02),
+            instruments: [nil]
+        )
+        ch.performTick(tick: 1, sampleRate: sampleRate, clockRate: clockRate)
+        XCTAssertEqual(ch.currentPeriod, 1704, accuracy: 0.001)
+    }
+
+    func testXMConfigurationKeepsFormatModeSeparateFromFrequencyTable() {
+        let row = Row(notes: [Note(instrument: 0, period: 0, effectId: 0, effectData: 0)])
+        let pattern = Pattern(rows: [row])
+        for linear in [false, true] {
+            let mod = Mod(
+                name: "XM", length: 1, patternTable: [0], instruments: [nil],
+                patterns: [pattern], channelCount: 1, format: .xm,
+                channelPannings: [0.5], linearFrequency: linear
+            )
+            let channel = DSPChannel(index: 1)
+            RenderEngine.configure(channels: [channel], for: mod)
+            XCTAssertTrue(channel.xmMode)
+            XCTAssertEqual(channel.xmLinearMode, linear)
+            XCTAssertEqual(channel.periodMax, linear ? 7680 : 32768)
+        }
     }
 
     /// Volume-Column Set Volume (0x10..0x50) setzt die Lautstärke direkt.

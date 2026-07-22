@@ -245,6 +245,30 @@ final class XMParserTests: XCTestCase {
         XCTAssertEqual(mod.patterns.count, 2)
     }
 
+    func testLinearAndAmigaHeaderModesProduceDistinctAudibleReferenceRenders() throws {
+        var linearData = makeXM()
+        linearData[0x4A] = 1
+        linearData[0x4B] = 0
+        var amigaData = linearData
+        amigaData[0x4A] = 0
+
+        let linear = try ModuleRenderer.renderWavData(
+            mod: XMParser.parse(data: linearData),
+            maxDurationSeconds: 0.5,
+            normalize: false
+        )
+        let amiga = try ModuleRenderer.renderWavData(
+            mod: XMParser.parse(data: amigaData),
+            maxDurationSeconds: 0.5,
+            normalize: false
+        )
+
+        XCTAssertEqual(linear.count, amiga.count)
+        XCTAssertNotEqual(linear, amiga, "Beide XM-Frequenzmodi dürfen nicht denselben Render liefern")
+        XCTAssertTrue(linear.dropFirst(44).contains(where: { $0 != 0 }))
+        XCTAssertTrue(amiga.dropFirst(44).contains(where: { $0 != 0 }))
+    }
+
     func testPattern0Notes() throws {
         let mod = try XMParser.parse(data: makeXM())
         let rows = mod.patterns[0].rows
@@ -400,6 +424,52 @@ final class XMParserTests: XCTestCase {
     func testRejectsGarbage() {
         XCTAssertThrowsError(try XMParser.parse(data: Data([0x00, 0x01, 0x02, 0x03])))
         XCTAssertThrowsError(try XMParser.parse(data: Data(repeating: 0xEE, count: 500)))
+    }
+
+    func testRejectsOversizedHeaderDimensionsBeforeAllocatingPatterns() {
+        let cases: [(offset: Int, value: Int, expected: XMParser.ParserError)] = [
+            (0x40, 257, .unsupportedDimensions("257 Songpositionen (Maximum 256)")),
+            (0x44, 65_535, .unsupportedDimensions("65535 Kanäle (Maximum 32)")),
+            (0x46, 65_535, .unsupportedDimensions("65535 Patterns (Maximum 256)")),
+            (0x48, 65_535, .unsupportedDimensions("65535 Instrumente (Maximum 128)"))
+        ]
+
+        for item in cases {
+            var data = makeXM()
+            data[item.offset] = UInt8(item.value & 0xFF)
+            data[item.offset + 1] = UInt8((item.value >> 8) & 0xFF)
+            XCTAssertThrowsError(try XMParser.parse(data: data)) { error in
+                XCTAssertEqual(error as? XMParser.ParserError, item.expected)
+            }
+        }
+    }
+
+    func testRejectsPatternWithMoreThan256RowsBeforeGridAllocation() {
+        var data = makeXM()
+        let firstPattern = buildHeader().count
+        data[firstPattern + 5] = 0x01
+        data[firstPattern + 6] = 0x01 // 257 Zeilen
+
+        XCTAssertThrowsError(try XMParser.parse(data: data)) { error in
+            XCTAssertEqual(
+                error as? XMParser.ParserError,
+                .unsupportedDimensions("257 Zeilen in einem Pattern (Maximum 256)")
+            )
+        }
+    }
+
+    func testRejectsInstrumentWithTooManySamplesBeforeHeaderAllocation() {
+        var data = makeXM()
+        let firstInstrument = buildHeader().count + buildPattern0().count + buildPattern1Empty().count
+        data[firstInstrument + 27] = 17
+        data[firstInstrument + 28] = 0
+
+        XCTAssertThrowsError(try XMParser.parse(data: data)) { error in
+            XCTAssertEqual(
+                error as? XMParser.ParserError,
+                .unsupportedDimensions("17 Samples in Instrument 1 (Maximum 16)")
+            )
+        }
     }
 
     // Baut ein Instrument mit VERKÜRZTEM Header (instrumentSize 38, "sample-only").

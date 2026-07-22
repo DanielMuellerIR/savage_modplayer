@@ -35,6 +35,21 @@ public final class DSPChannel: Sendable {
         return Float(7680 - realNote * 64) - Float(finetune) / 2.0
     }
 
+    // XM-Amiga-Periode nach FastTracker-II-Referenzwerten. C-4 liegt bei 1712,
+    // jede Oktave halbiert die Periode; signed Finetune verschiebt innerhalb
+    // eines Halbtons exponentiell (-128...127 = knapp +/- 1 Halbton).
+    private static let xmAmigaPeriodTable: [Double] = [
+        1712, 1616, 1524, 1440, 1356, 1280, 1208, 1140, 1076, 1016, 960, 907
+    ]
+
+    public static func xmAmigaPeriod(realNote: Int, finetune: Int) -> Float {
+        guard realNote >= 0, realNote < 120 else { return 0 }
+        let octave = realNote / 12
+        let base = xmAmigaPeriodTable[realNote % 12] * pow(2.0, Double(4 - octave))
+        let fineFactor = pow(2.0, -Double(max(-128, min(127, finetune))) / (128.0 * 12.0))
+        return Float(base * fineFactor)
+    }
+
     // IT linear: 64 Periodeneinheiten pro Halbton, C-5 liegt bei 3840. Die
     // Sample-C5Speed fließt erst bei der Frequenzberechnung ein.
     public static func itLinearPeriod(key: Int) -> Float {
@@ -139,8 +154,10 @@ public final class DSPChannel: Sendable {
     // ---- Format-Konfiguration (vom Coordinator pro Modul gesetzt) ----
     // S3M-Modus: Perioden aus Key+C2Spd, Effekt-Memory, ST3-Clock.
     nonisolated(unsafe) public var s3mMode: Bool = false
-    // XM-Modus mit linearer Frequenztabelle: Periode aus Halbton (Key +
-    // relativeNote) + Finetune, Frequenz exponentiell statt clockRate/Periode.
+    // XM-Formatverhalten (Instrument-Hüllkurven, Volume-Column, Effekt-Memory)
+    // ist unabhängig von der gewählten Periodentabelle.
+    nonisolated(unsafe) public var xmMode: Bool = false
+    // Nur die XM-Frequenztabelle: true = linear, false = Amiga-Perioden.
     nonisolated(unsafe) public var xmLinearMode: Bool = false
     // IT benutzt einen eigenen logischen Kanalzustand. `itLinearMode` wählt
     // zwischen logarithmischer linearer Periode und klassischer Amiga-Periode.
@@ -224,7 +241,7 @@ public final class DSPChannel: Sendable {
     // Render-Skalierung der Instrument-Voice: Envelope-Volume * Fadeout. Der
     // historische Name bleibt API-kompatibel für die XM-Tests.
     public var xmVolumeScale: Float {
-        (xmLinearMode || (itMode && itInstrumentMode))
+        (xmMode || (itMode && itInstrumentMode))
             ? envVolumeFactor * (Float(fadeVolume) / 65536.0)
             : 1.0
     }
@@ -244,7 +261,7 @@ public final class DSPChannel: Sendable {
         let pitchPanned = itMode
             ? max(0, min(1, panning + itPitchPanOffset))
             : panning
-        guard (xmLinearMode || (itMode && itInstrumentMode)), hasPanEnvelope else {
+        guard (xmMode || (itMode && itInstrumentMode)), hasPanEnvelope else {
             return max(0, min(1, pitchPanned + itPanningSwing + panbrelloDelta))
         }
         if itMode, itInstrumentMode {
@@ -261,11 +278,11 @@ public final class DSPChannel: Sendable {
     }
     // Skaliert Vibrato-Deltas: S3M-Perioden sind 4x feiner als Amiga-Perioden.
     nonisolated(unsafe) public var periodScale: Float = 1
-    // Skaliert den Portamento-Slide-Schritt (1xx/2xx/3xx). Amiga (MOD) = 1;
-    // S3M und XM haben 4x feinere Perioden (64 Einheiten/Halbton) -> ×4.
-    // Getrennt von periodScale gehalten (Vibrato-Skalierung ist separat/ungeklärt).
-    private var portaScale: Float { (s3mMode || xmLinearMode || itMode) ? 4.0 : 1.0 }
-    // Perioden-Klemmgrenzen (Amiga: 113..856, S3M: 64..32767).
+    // Skaliert den Portamento-Slide-Schritt (1xx/2xx/3xx). Amiga-MOD = 1;
+    // S3M nutzt feinere Perioden, FT2 multipliziert Effektparameter in beiden
+    // XM-Frequenzmodi mit 4. Vibrato-Skalierung bleibt davon getrennt.
+    private var portaScale: Float { (s3mMode || xmMode || itMode) ? 4.0 : 1.0 }
+    // Formatabhängige Perioden-Klemmgrenzen (MOD, S3M, XM, IT).
     nonisolated(unsafe) public var periodMin: Float = 113
     nonisolated(unsafe) public var periodMax: Float = 856
 
@@ -363,6 +380,7 @@ public final class DSPChannel: Sendable {
         isSoloed = false
 
         s3mMode = false
+        xmMode = false
         xmLinearMode = false
         itMode = false
         itLinearMode = false
@@ -627,11 +645,19 @@ public final class DSPChannel: Sendable {
                     key: playbackKey,
                     c5Speed: activeSample?.itProperties?.c5Speed ?? activeSample?.c2spd ?? 8363
                 )
-            } else if xmLinearMode {
-                // XM: Periode aus (Key + Sample-relativeNote) + Sample-Finetune,
-                // lineares Modell.
+            } else if xmMode {
+                // XM: Periode aus (Key + Sample-relativeNote) + Sample-Finetune;
+                // das Header-Flag wählt lineare oder Amiga-Perioden.
                 let realNote = playbackKey + (activeSample?.relativeNote ?? 0)
-                self.setPeriod = DSPChannel.xmLinearPeriod(realNote: realNote, finetune: activeSample?.finetune ?? 0)
+                self.setPeriod = xmLinearMode
+                    ? DSPChannel.xmLinearPeriod(
+                        realNote: realNote,
+                        finetune: activeSample?.finetune ?? 0
+                    )
+                    : DSPChannel.xmAmigaPeriod(
+                        realNote: realNote,
+                        finetune: activeSample?.finetune ?? 0
+                    )
             } else {
                 // S3M: Period aus Halbton-Key + C2Spd des (neuen oder laufenden)
                 // Samples berechnen.
@@ -677,7 +703,7 @@ public final class DSPChannel: Sendable {
 
         // XM-Volume-Column (zweite Effektspalte) NACH dem Haupteffekt auswerten,
         // damit sie bei Lautstärke/Panning Vorrang hat (FT2-Verhalten).
-        if xmLinearMode { self.applyXMVolumeColumn(note.volCmd) }
+        if xmMode { self.applyXMVolumeColumn(note.volCmd) }
         if itMode { self.applyITVolumeColumn(note.volume) }
 
         if self.delayNote > 0 {
@@ -723,7 +749,7 @@ public final class DSPChannel: Sendable {
 
         // Bei echtem Retrigger die Instrument-Voice initialisieren. IT-Carry
         // erhält die jeweilige Envelope-Position nur beim selben Instrument.
-        if (xmLinearMode || (itMode && itInstrumentMode)), self.setSampleIndex != nil {
+        if (xmMode || (itMode && itInstrumentMode)), self.setSampleIndex != nil {
             let mayCarry = itMode && itInstrumentMode
                 && previousInstrumentIndex == self.instrument?.index
             initInstrumentVoice(preserveCarry: mayCarry)
@@ -1146,12 +1172,12 @@ public final class DSPChannel: Sendable {
                 self.arpY = effectLow
             }
         case 0x01: // SLIDE_UP
-            let p = xmLinearMode
+            let p = xmMode
                 ? xmRememberedParam(effectData, memory: &xmPortaUpMemory)
                 : effectData
             self.periodDelta = -Float(p) * portaScale
         case 0x02: // SLIDE_DOWN
-            let p = xmLinearMode
+            let p = xmMode
                 ? xmRememberedParam(effectData, memory: &xmPortaDownMemory)
                 : effectData
             self.periodDelta = Float(p) * portaScale
@@ -1176,7 +1202,7 @@ public final class DSPChannel: Sendable {
             self.setCurrentPeriod = false
             self.setSampleIndex = nil
             self.periodDelta = self.portamentoSpeed
-            let slideParam = xmLinearMode
+            let slideParam = xmMode
                 ? xmRememberedParam(effectData, memory: &xmVolumeSlideMemory)
                 : effectData
             if s3mMode {
@@ -1188,7 +1214,7 @@ public final class DSPChannel: Sendable {
             }
         case 0x06: // VIBRATO_WITH_VOLUME_SLIDE
             self.vibrato = true
-            let slideParam = xmLinearMode
+            let slideParam = xmMode
                 ? xmRememberedParam(effectData, memory: &xmVolumeSlideMemory)
                 : effectData
             if s3mMode {
@@ -1213,7 +1239,7 @@ public final class DSPChannel: Sendable {
             if s3mMode {
                 applyS3MVolumeSlide(param: effectData)
             } else {
-                let p = xmLinearMode
+                let p = xmMode
                     ? xmRememberedParam(effectData, memory: &xmVolumeSlideMemory)
                     : effectData
                 applyStandardVolumeSlide(param: p)
@@ -1816,7 +1842,7 @@ public final class DSPChannel: Sendable {
                 self.panning = max(0, min(1, pan))
                 if itMode { itPatternState?.channelPanning = self.panning }
             }
-            if xmLinearMode || (itMode && itInstrumentMode) {
+            if xmMode || (itMode && itInstrumentMode) {
                 initInstrumentVoice(preserveCarry: false)
             }
             self.sampleIndex = 0.0
@@ -1869,12 +1895,12 @@ public final class DSPChannel: Sendable {
         var shouldUpdateITFilter = true
         // XM und IT besitzen eine zweite Effektspalte. Deren Volume-Slide wirkt
         // wie die Hauptspalten-Slides erst ab Tick 1.
-        if (xmLinearMode || itMode), self.volColVolSlide != 0, tick > 0 {
+        if (xmMode || itMode), self.volColVolSlide != 0, tick > 0 {
             self.currentVolume = max(0.0, min(64.0, self.currentVolume + self.volColVolSlide))
             self.volume = self.currentVolume
         }
 
-        if xmLinearMode {
+        if xmMode {
             // Panning-Slide der XM-Volume-Column (erst ab Tick 1).
             if self.panSlide != 0 && tick > 0 {
                 self.panning = max(0.0, min(1.0, self.panning + self.panSlide / 255.0))
