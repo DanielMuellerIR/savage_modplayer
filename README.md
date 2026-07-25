@@ -220,19 +220,36 @@ python3 build.py --no-min         # without minification
 The generated single-file variant `savage-mod-player.html` is part of
 the repository so the compact player can be used directly without a local build.
 
-### DMG (for releases)
+### Install and release
+
+Three entry points, deliberately separated:
+
+```bash
+bash build_app.sh                 # build only, stays in the project directory
+./install.sh                      # build, notarize, install into /Applications
+./release.sh                      # build, notarize, package the DMG — never installs
+```
+
+`install.sh` and `release.sh` both notarize the **app itself** and staple its
+ticket before anything else happens. That matters: an app that only travels
+inside a notarized disk image loses its guarantee the moment someone drags it
+out. `release.sh` then notarizes and staples the disk image as well.
+
+The DMG contains a Retina-compatible background image (1x/2x TIFF via
+`tiffutil`). For finer control, `build_dmg.sh` can still be called directly:
 
 ```bash
 bash build_dmg.sh                 # → build/Savage Mod Player.dmg
 bash build_dmg.sh --notarize      # sign, notarize, and staple the DMG
 ```
 
-The DMG contains a Retina-compatible background image (1x/2x TIFF via
-`tiffutil`). Notarization expects a keychain profile, by default
-`SavageModPlayerNotary`. It can be created once interactively:
+Notarization needs a notarytool keychain profile. Keychain profiles are local to
+each Mac and are never synchronized, so the name is taken from `NOTARY_PROFILE`
+or from this clone's own configuration:
 
 ```bash
-xcrun notarytool store-credentials SavageModPlayerNotary
+git config --local savageModPlayer.notaryProfile <profile>
+xcrun notarytool store-credentials <profile> --apple-id <apple-id> --team-id <team-id>
 ```
 
 ### Tests

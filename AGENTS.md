@@ -71,6 +71,10 @@
 - Veröffentlichung und Release-Erstellung sind externe Wirkungen. GitHub,
   Notarisierung oder `publish_github.sh` nur nach Daniels konkretem Auftrag;
   vorher den Workflow `github-publish` laden.
+- Drei Einstiegspunkte: `build_app.sh` baut nur, `./install.sh` installiert
+  notarisiert, `./release.sh` packt das DMG (installiert nie). Beide heften
+  zuerst der App selbst ein Ticket an. Profilname aus `NOTARY_PROFILE` oder
+  `git config savageModPlayer.notaryProfile`.
 
 ## Git, Version und Parallelität
 

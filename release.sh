@@ -1,0 +1,49 @@
+#!/bin/bash
+# release.sh — Release-DMG bauen: App bauen, notarisieren, DMG packen und notarisieren.
+#
+# Die drei Einstiegspunkte des Projekts trennen bewusst:
+#   bash build_app.sh   baut die App im Projektverzeichnis, mehr nicht
+#   ./install.sh        baut, notarisiert und installiert nach /Applications
+#   ./release.sh        baut, notarisiert und packt das DMG — installiert NIE
+#
+# Wichtig ist die doppelte Notarisierung: Erst bekommt die App ihr eigenes
+# Ticket angeheftet, dann das fertige DMG. Nur so startet die App auch dann
+# sauber, wenn jemand sie aus dem Image herauszieht — ein Ticket allein am DMG
+# reicht dafür nicht.
+#
+# Voraussetzungen:
+#   - "Developer ID Application"-Zertifikat im Schlüsselbund
+#   - NOTARY_PROFILE oder `git config savageModPlayer.notaryProfile`
+#
+# Aufruf:
+#   ./release.sh                     # vollständiger Release-Lauf
+#   ./release.sh --no-finder-layout  # ohne AppleScript-Finder-Layout (headless)
+#
+# Letzte Zeile bei Erfolg: RELEASE OK: <pfad-zum-dmg> (<version>)
+set -euo pipefail
+cd "$(dirname "$0")"
+source ./notarize-lib.sh
+
+require_notary_profile
+
+APP="Savage Mod Player.app"
+VERSION="$(cat VERSION)"
+DMG="build/Savage Mod Player.dmg"
+
+echo "=== 1/3 App bauen (mit erzwungener Developer-ID-Signatur) ==="
+REQUIRE_CODESIGN=1 bash build_app.sh
+
+echo "=== 2/3 App notarisieren ==="
+notarize_app "$APP"
+
+echo "=== 3/3 DMG bauen und notarisieren ==="
+bash build_dmg.sh --notarize "$@"
+
+if [[ ! -f "$DMG" ]]; then
+    echo "FEHLER: Erwartetes DMG fehlt: $DMG" >&2
+    exit 1
+fi
+xcrun stapler validate "$DMG"
+spctl -a -t open --context context:primary-signature -v "$DMG" 2>&1 | tail -2
+
+echo "RELEASE OK: $PWD/$DMG ($VERSION)"

@@ -10,7 +10,11 @@ FINAL_DMG="${BUILD_DIR}/${DMG_NAME}.dmg"
 MOUNT_DIR="/Volumes/${VOL_NAME}"
 NOTARIZE=0
 FINDER_LAYOUT=1
-NOTARY_PROFILE="${NOTARY_PROFILE:-SavageModPlayerNotary}"
+# Profilname: Umgebung schlägt clone-lokale Git-Konfiguration. Kein fester
+# Default mehr — "SavageModPlayerNotary" existierte auf keinem Mac und ließ den
+# Lauf erst nach dem Bauen scheitern. Der echte Name gehört nicht ins öffentliche
+# Repo; Keychain-Profile sind ohnehin pro Mac lokal.
+NOTARY_PROFILE="${NOTARY_PROFILE:-$(git config --local --get savageModPlayer.notaryProfile 2>/dev/null || true)}"
 APPLE_TEAM_ID="${APPLE_TEAM_ID:-9QSWKSR4NQ}"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-Developer ID Application: Daniel Mueller ($APPLE_TEAM_ID)}"
 SIGN_DMG="${SIGN_DMG:-auto}"
@@ -23,7 +27,8 @@ Usage: bash build_dmg.sh [--notarize] [--no-finder-layout]
   --no-finder-layout  Skip Finder/AppleScript icon layout, useful on headless runs.
 
 Environment:
-  NOTARY_PROFILE      Keychain profile for notarytool (default: SavageModPlayerNotary).
+  NOTARY_PROFILE      Keychain profile for notarytool. Falls back to
+                      \`git config savageModPlayer.notaryProfile\` in this clone.
   SIGN_DMG            auto/1/0, controls Developer ID signing of the DMG.
 EOF
 }
@@ -145,6 +150,12 @@ fi
 
 if [[ "$NOTARIZE" == "1" ]]; then
     echo "=== Notarizing DMG ==="
+    if [[ -z "$NOTARY_PROFILE" ]]; then
+        echo "ABBRUCH: Kein Notary-Profil bekannt." >&2
+        echo "Entweder NOTARY_PROFILE setzen oder einmalig für diesen Clone:" >&2
+        echo "  git config --local savageModPlayer.notaryProfile <profil>" >&2
+        exit 1
+    fi
     if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
         echo "ABBRUCH: Notary-Keychain-Profil nicht gefunden oder nicht nutzbar: $NOTARY_PROFILE" >&2
         echo "Einmal interaktiv anlegen:" >&2
