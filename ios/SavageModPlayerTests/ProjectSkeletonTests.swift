@@ -8,6 +8,9 @@ final class ProjectSkeletonTests: XCTestCase {
 
     func testSharedTypesAreAvailable() {
         XCTAssertEqual(LoopMode.playlist.rawValue, "playlist")
-        XCTAssertEqual(PlayerTheme.allCases.count, 2)
+        // System, Hell, Dunkel. `.system` erzwingt nichts und liefert deshalb
+        // bewusst kein Farbschema.
+        XCTAssertEqual(PlayerTheme.allCases.count, 3)
+        XCTAssertNil(PlayerTheme.system.colorScheme)
     }
 }

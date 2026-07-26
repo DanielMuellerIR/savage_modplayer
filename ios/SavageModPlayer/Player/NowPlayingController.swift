@@ -229,7 +229,14 @@ final class NowPlayingController {
         let image = Self.drawArtwork(label: label, size: size)
         // Der Anforderungs-Block darf von iOS in beliebiger Groesse aufgerufen
         // werden. Wir liefern immer dasselbe fertige Bild; das System skaliert.
-        let artwork = MPMediaItemArtwork(boundsSize: size) { _ in image }
+        //
+        // Das `@Sendable` ist Pflicht, nicht Kosmetik: diese Klasse ist
+        // @MainActor-isoliert, und ein hier gebildeter Block erbt diese
+        // Isolation. MediaPlayer ruft ihn aber auf einer eigenen Warteschlange
+        // auf — die Swift-Laufzeit stellt den Bruch fest und beendet den Prozess
+        // mit SIGTRAP, sobald ein Titel geladen wird. Ein `@Sendable`-Block ist
+        // an keinen Actor gebunden und darf ueberall laufen.
+        let artwork = MPMediaItemArtwork(boundsSize: size) { @Sendable _ in image }
         artworkCache[label] = artwork
         return artwork
     }

@@ -31,25 +31,32 @@ enum LoopMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-// Farbwelt der Oberflaeche. Die Mac-App hat mehrere Themes; auf dem iPhone
-// bleiben zwei uebrig, damit die Auswahl nicht groesser ist als der Nutzen.
+// Erscheinungsbild der Oberflaeche: hell, dunkel oder das, was das System
+// gerade vorgibt. Bewusst kein eigener Farbwelt-Zoo wie in der Mac-App — auf
+// dem iPhone erwartet man die Systemeinstellung, und mehr Auswahl bringt hier
+// keinen Nutzen.
 enum PlayerTheme: String, CaseIterable, Identifiable, Sendable {
-    case cyber      // dunkel, gruen-tuerkis — die Hausfarbe des Players
-    case light      // hell, fuer Tageslicht
+    case system     // folgt der Systemeinstellung (Standard)
+    case light
+    case dark
 
     var id: String { rawValue }
 
     var localizedName: LocalizedStringKey {
         switch self {
-        case .cyber: return "theme.cyber"
+        case .system: return "theme.system"
         case .light: return "theme.light"
+        case .dark: return "theme.dark"
         }
     }
 
-    var colorScheme: ColorScheme {
+    // Was `.preferredColorScheme(_:)` bekommt. `nil` heisst "nicht erzwingen",
+    // also folgt die App dem System.
+    var colorScheme: ColorScheme? {
         switch self {
-        case .cyber: return .dark
+        case .system: return nil
         case .light: return .light
+        case .dark: return .dark
         }
     }
 }

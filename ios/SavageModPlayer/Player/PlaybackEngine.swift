@@ -69,6 +69,10 @@ final class PlaybackEngine: ObservableObject {
     // spiegeln wir sie hier, um unnoetige Aufrufe zu vermeiden.
     private var appliedVolume: Float = -1
 
+    // Ist die App gerade sichtbar? Wird vom Szenen-Schalter gesetzt und zusammen
+    // mit `settings.visualizersEnabled` ausgewertet.
+    private var sceneIsActive = true
+
     // MARK: - Aufbau
 
     init(settings: PlayerSettings, library: LibraryStore) {
@@ -193,6 +197,9 @@ final class PlaybackEngine: ObservableObject {
             appliedVolume = volume
             coordinator.setVolume(volume)
         }
+        // Der Visualisierungs-Schalter steht ebenfalls in den Einstellungen, also
+        // wirkt er hier sofort und nicht erst beim naechsten Szenenwechsel.
+        applyVisualizerState()
     }
 
     // MARK: - Abspielliste
@@ -457,9 +464,21 @@ final class PlaybackEngine: ObservableObject {
     // sondern die 30 Zustandsaenderungen pro Sekunde, die durch die Oberflaeche
     // laufen. Die ausfuehrliche Begruendung steht bei `visualizersVisible` in
     // ModPlayerCoordinator.swift.
+    // Der Aufrufer meldet hier nur, ob die App gerade sichtbar ist. Ob wirklich
+    // gezeichnet wird, entscheidet zusaetzlich der Schalter in den Einstellungen
+    // — und der steht bewusst auf AUS. Der uebliche Fall ist "Musik laeuft,
+    // Bildschirm ist aus"; dann soll nichts berechnet werden, was niemand sieht.
     func setVisualizersEnabled(_ enabled: Bool) {
-        guard coordinator.visualizersVisible != enabled else { return }
-        coordinator.visualizersVisible = enabled
+        sceneIsActive = enabled
+        applyVisualizerState()
+    }
+
+    // Sichtbare App UND eingeschaltete Visualisierung — nur dann laeuft der
+    // schnelle Takt des Cores.
+    private func applyVisualizerState() {
+        let active = sceneIsActive && settings.visualizersEnabled
+        guard coordinator.visualizersVisible != active else { return }
+        coordinator.visualizersVisible = active
     }
 
     // MARK: - Sitzung
@@ -638,117 +657,4 @@ final class PlaybackEngine: ObservableObject {
         }
         updateNowPlaying(force: true)
     }
-
-    // MARK: - WAV-Export
-
-    enum ExportError: LocalizedError {
-        case noActiveTrack
-
-        var errorDescription: String? {
-            switch self {
-            case .noActiveTrack:
-                return "Es ist kein Titel geladen, der exportiert werden könnte."
-            }
-        }
-    }
-
-    // Den laufenden Titel als WAV in ein temporaeres Verzeichnis rendern und die
-    // Datei-URL liefern. Die Oberflaeche reicht sie an das Teilen-Blatt weiter.
-    //
-    // Der Renderlauf ist reine Rechenarbeit und dauert bei mehreren Minuten
-    // Musik spuerbar lange. Er laeuft deshalb auf einer Hintergrund-Warteschlange
-    // und NICHT auf dem Hauptthread. Weil diese Methode ein fertiges Ergebnis
-    // zurueckgeben muss, wartet der Aufrufer allerdings blockierend darauf —
-    // fuer die Oberflaeche ist deshalb `exportCurrentTrackToWavAsync(seconds:)`
-    // die bessere Wahl: gleiche Arbeit, aber ohne stehende Bedienoberflaeche.
-    func exportCurrentTrackToWav(seconds: Double) throws -> URL {
-        let job = try makeExportJob(seconds: seconds)
-        let box = ExportResultBox()
-        let finished = DispatchSemaphore(value: 0)
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                try Self.render(job)
-            } catch {
-                box.error = error
-            }
-            finished.signal()
-        }
-        finished.wait()
-
-        if let error = box.error { throw error }
-        return job.destination
-    }
-
-    // Empfohlene Variante: identische Arbeit, aber der Hauptthread bleibt frei.
-    func exportCurrentTrackToWavAsync(seconds: Double) async throws -> URL {
-        let job = try makeExportJob(seconds: seconds)
-        try await Task.detached(priority: .userInitiated) {
-            try Self.render(job)
-        }.value
-        return job.destination
-    }
-
-    // Alles, was der Renderlauf braucht — bewusst als abgeschlossenes Paket, das
-    // gefahrlos auf einen anderen Thread wandern darf.
-    private struct ExportJob: Sendable {
-        let coordinator: ModPlayerCoordinator
-        let mod: Mod
-        let stereoSeparation: Float
-        let useInterpolation: Bool
-        let palClock: Bool
-        let destination: URL
-        let seconds: Double
-    }
-
-    private func makeExportJob(seconds: Double) throws -> ExportJob {
-        guard let mod = coordinator.activeMod, let track = currentTrack else {
-            throw ExportError.noActiveTrack
-        }
-        return ExportJob(
-            coordinator: coordinator,
-            mod: mod,
-            stereoSeparation: Float(settings.stereoSeparation),
-            useInterpolation: settings.useInterpolation,
-            palClock: settings.palClock,
-            destination: Self.exportDestination(for: track),
-            seconds: max(1, seconds)
-        )
-    }
-
-    private nonisolated static func render(_ job: ExportJob) throws {
-        try job.coordinator.exportActiveModToWav(
-            mod: job.mod,
-            stereoSeparation: job.stereoSeparation,
-            useInterpolation: job.useInterpolation,
-            palClock: job.palClock,
-            destinationURL: job.destination,
-            durationSeconds: job.seconds
-        )
-    }
-
-    private nonisolated static func exportDestination(for track: TrackRef) -> URL {
-        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("SavageModPlayerExport", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        var name = (track.displayName as NSString).deletingPathExtension
-        // Schraegstriche und Doppelpunkte wuerden einen Pfad daraus machen.
-        name = name.replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if name.isEmpty { name = "Modul" }
-
-        return directory.appendingPathComponent(name).appendingPathExtension("wav")
-    }
-}
-
-// Nimmt den Fehler des Renderlaufs von der Hintergrund-Warteschlange entgegen.
-//
-// Die Absicherung uebernimmt das Semaphor drumherum: geschrieben wird nur vor
-// dem signal(), gelesen erst nach dem wait(). Damit kann es keine zwei
-// gleichzeitigen Zugriffe geben, was der Compiler an dieser Stelle aber nicht
-// selbst nachvollziehen kann — daher die ausdrueckliche Zusicherung.
-private final class ExportResultBox: @unchecked Sendable {
-    var error: Error?
 }

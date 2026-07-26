@@ -51,14 +51,27 @@ final class PlayerSettings: ObservableObject {
 
     // MARK: - Darstellung
 
-    @AppStorage("savage.ios.theme") private var themeRaw: String = PlayerTheme.cyber.rawValue
+    @AppStorage("savage.ios.theme") private var themeRaw: String = PlayerTheme.system.rawValue
     var theme: PlayerTheme {
-        get { PlayerTheme(rawValue: themeRaw) ?? .cyber }
+        get { PlayerTheme(rawValue: themeRaw) ?? .system }
         set { themeRaw = newValue.rawValue }
     }
 
-    // Wie oft die Visualisierungen pro Sekunde neu gezeichnet werden. Auf einem
-    // Telefon ist das der groesste Akku-Hebel der Oberflaeche, deshalb einstellbar.
+    // Werden die Visualisierungen ueberhaupt gezeichnet?
+    //
+    // Voreinstellung AUS, und das ist kein Versehen: Der uebliche Fall auf einem
+    // Telefon ist "Musik laeuft, Bildschirm ist aus". Oszilloskope, VU-Meter und
+    // Kanalanzeigen kosten dabei nur Rechenzeit und Akku, ohne dass sie jemand
+    // sieht. Wer sie sehen will, schaltet sie in den Einstellungen ein.
+    //
+    // Der Schalter wirkt nicht nur auf das Zeichnen: der Core drosselt bei
+    // abgeschalteten Visualisierungen seinen Aktualisierungs-Takt von 30 Hz auf
+    // ~5 Hz und laesst die teure Wellenform-Berechnung ganz weg. Das ist der
+    // eigentliche Hebel, nicht das Weglassen der Views.
+    @AppStorage("savage.ios.visualizersEnabled") var visualizersEnabled: Bool = false
+
+    // Wie oft die Visualisierungen pro Sekunde neu gezeichnet werden, wenn sie
+    // eingeschaltet sind.
     @AppStorage("savage.ios.visualizerFPS") var visualizerFrameRate: Int = 20
 
     // Wie viele Kanal-Oszilloskope hoechstens gleichzeitig gezeichnet werden.
