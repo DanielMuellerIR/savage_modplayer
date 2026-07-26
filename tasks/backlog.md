@@ -7,6 +7,15 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
 
 ## Priorisiert
 
+0. **iOS-App fürs iPhone.** Plan und Goal-Prompt liegen in
+   [2026-07-26-ios-app/plan.md](2026-07-26-ios-app/plan.md). Entschieden sind
+   Sideload mit offener App-Store-Option, eingechecktes `.xcodeproj` mit
+   synchronized groups, Import über rekursiven Ordner-Picker plus
+   Finder-Dateifreigabe und iOS 17 als Minimum. Zwei blockierende Vorarbeiten:
+   der Nachweis, dass der Core für `iphonesimulator` baut, und ein streamender
+   ZIP-Reader im Core — `PlaylistScanner` entpackt heute über `Process` und
+   `bsdtar`, beides gibt es auf iOS nicht. `.7z` bleibt auf iOS unsupported,
+   ZIP muss funktionieren.
 1. **GUI-Smoke für Dateiargument untersuchen.** Ein früherer Lauf mit
    `open --args <mod>` zeigte kein Hauptfenster, während der Autoplay-Ordnerpfad
    funktionierte. Mit einer rechtlich unbedenklichen lokalen Datei reproduzieren,
