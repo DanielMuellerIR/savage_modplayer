@@ -1,47 +1,69 @@
-Savage Mod Player 1.5.46 adds native Linux audio playback and hardens parsers,
-rendering, command-line streaming, and Quick Look caching against malformed or
-ambiguous input.
+Savage Mod Player 1.6.0 adds a native iPhone app that plays MOD, S3M, XM, and IT
+files on the same Swift replay engine as the macOS app, keeps playing while the
+screen is locked, and can take in whole collection folders at once.
 
-## Linux and command-line playback
+## iPhone app
 
-- The platform-neutral replay engine now builds and tests on both macOS and
-  Linux from the same Swift sources.
-- `savage-cli --play` outputs through ALSA using the same render engine as the
-  macOS app, offline renderer, and Quick Look extension.
-- `--stdout` streams bounded PCM chunks immediately instead of buffering a
-  complete song and WAV file before writing the first sample.
-- Duration and sample-rate arguments reject non-finite and out-of-range values
-  with a controlled exit code. Output options that cannot be combined are
-  rejected before parsing or rendering.
-- A required Ubuntu CI job builds and tests the release core and CLI with their
-  ALSA and archive dependencies.
+- A native SwiftUI app for iPhone lives in `ios/` and links the same
+  `SavageModPlayerCore` as the macOS app, the Quick Look extension, and the
+  command line renderer. There is no second replay implementation.
+- Playback continues in the background and while the device is locked. Title,
+  format, folder, artwork, and elapsed time appear on the lock screen; play,
+  pause, next, previous, the position scrubber, and the −15 s / +30 s buttons
+  work from there and from headphone controls.
+- The audio session handles the situations a phone actually runs into: an
+  incoming call pauses and resumes, unplugging headphones pauses instead of
+  switching to the speaker, and a media services restart rebuilds the engine
+  including the low-pass node used by the LED filter.
+- The library is a real folder tree, not a flat list. Folders start collapsed,
+  the path to the playing track expands automatically, and playback and shuffle
+  run across all folders. Live search, favourites, loop modes, and session
+  restore work as they do on the desktop.
+- Visualizations are off by default. The common case on a phone is music playing
+  with the screen dark, and nothing should be computed that nobody sees. Turning
+  them on enables the master oscilloscope, VU meters, and a bounded number of
+  per-channel scopes.
+- PAL/NTSC clocking, the LED filter, hi-fi interpolation, and stereo separation
+  are all available. Appearance follows the system by default and can be forced
+  to light or dark. German and English are both supported.
 
-## Parser and playback correctness
+## Getting music onto the device
 
-- XM and S3M dimensions, pattern grids, instruments, samples, and cumulative
-  PCM sizes are validated before allocation. Small malformed files can no
-  longer request multi-gigabyte parser structures.
-- FastTracker II files now honor the header's linear or Amiga frequency-table
-  mode, including the corresponding period and slide behavior.
-- The replay core was separated from AVFoundation and Combine without creating
-  a second playback implementation; live, streamed, offline, and Quick Look
-  rendering continue to share one engine.
-- Latent Linux-only compilation and sequencing faults uncovered by the port
-  were corrected and covered by cross-platform tests.
+- **Folder import in the app**: pick one folder and everything playable inside
+  is copied into the library with its structure intact. Archives are unpacked,
+  duplicates are skipped, progress is shown, and the import can be cancelled
+  without leaving a half-written library behind. Files that live in a cloud file
+  provider are downloaded and read through a file coordinator first.
+- **Finder file sharing**: connect the iPhone, open Files in the Finder, and
+  drag whole folders onto the app. The same library shows up in the iOS Files
+  app under "On My iPhone". The app reconciles its index with the file system on
+  every launch, so files added or deleted from outside are picked up.
+- **Reset library**: a two-step confirmation clears tracks, index, and cached
+  extracts; favourites can be kept.
 
-## Quick Look and cache reliability
+## ZIP support without external tools
 
-- Preview cache keys now include canonical file identity and sub-second
-  modification time. Equal basenames in different folders and rapid in-place
-  replacements no longer reuse the wrong audio preview.
-- Quick Look still renders at most 60 seconds and shows parser failures as a
-  finite text preview.
+- A project-owned ZIP reader was added to the core. It streams each entry
+  block-by-block straight into its target file, so memory use does not grow with
+  archive size — a 120 MB archive now peaks at roughly 7 MB instead of 122 MB.
+- Only playable module files are decompressed. In a large collection archive
+  that saves most of the time and most of the space.
+- Path traversal entries, symbolic links, encrypted entries, ZIP64 archives, and
+  implausible compression ratios are rejected rather than sanitized, and every
+  entry's CRC32 is verified.
+- macOS and Linux continue to use the system `bsdtar`, which also reads 7-Zip
+  archives. 7-Zip is not supported on iOS and is reported as such.
 
 ## Verification and known limits
 
-- The release is covered by the full optimized Swift suite, dedicated
-  parser/render/cache tests, JavaScript-to-Swift MOD timing parity, macOS app and
-  Quick Look builds, and the mandatory Linux CI job.
+- The release is covered by the full Swift suite, the Linux container build and
+  test run, the macOS app and Quick Look build, byte-identical command line WAV
+  output against the previous baseline across the local module corpus, and the
+  iOS simulator build and test run.
+- Background playback, lock screen control, headphone behaviour, and memory use
+  while importing a large archive can only be confirmed on a physical device and
+  are not claimed on the strength of a simulator run.
+- The iPhone app has no WAV export; that stays a desktop feature.
 - MPTM, VST/AudioUnit plug-in playback, and external MIDI output remain outside
   the native engine. The HTML5 player remains intentionally limited to classic
   four-channel ProTracker MOD files.

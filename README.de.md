@@ -7,17 +7,18 @@
 **🌐 Sprache / Language:** [English](README.md) · [Deutsch](README.de.md)
 
 <p align="center">
-  <strong>Nativer macOS-Tracker-Player für MOD, S3M, XM und IT — mit unabhängiger Swift-Replay-Engine.</strong>
+  <strong>Nativer macOS- und iPhone-Tracker-Player für MOD, S3M, XM und IT — mit unabhängiger Swift-Replay-Engine.</strong>
 </p>
 
-Ein eigenständiger Tracker-Modul-Player mit der nativen macOS-App im Mittelpunkt:
+Ein eigenständiger Tracker-Modul-Player mit den nativen macOS- und iOS-Apps im Mittelpunkt:
 
 1. **Native macOS App (`Savage Mod Player.app`)** — SwiftUI-Desktop-Anwendung mit `AVAudioEngine`, `AVAudioSourceNode`, echten Echtzeit-Oszilloskopen und Pegel-Metern. Sie spielt ProTracker- und Multichannel-MODs (6/8/… Kanäle, u. a. `6CHN`/`8CHN`/`FLT8`), 15-Sample-Soundtracker-Module, **ScreamTracker 3 (`.s3m`)**, **FastTracker II (`.xm`)** und **Impulse Tracker (`.it`)** — und bringt ein **Quick-Look-Plugin** mit: Leertaste auf einer `.mod`/`.s3m`/`.xm`/`.it` im Finder öffnet eine abspielbare Audio-Vorschau.
-2. **HTML5-Bonusplayer (`savage-mod-player.html`)** — Eine winzige einzelne HTML-Datei (unter 60 KB), die ohne Webserver direkt per Doppelklick aus dem Dateisystem funktioniert. Sie konzentriert sich bewusst auf klassische 4-Kanal-ProTracker-MODs.
+2. **Native iPhone-App (`ios/`)** — SwiftUI-App auf derselben Replay-Engine. Sie spielt bei gesperrtem Bildschirm weiter, lässt sich über Sperrbildschirm und Kopfhörer bedienen, zeigt die Bibliothek als echten Ordnerbaum und nimmt ganze Sammlungsordner auf einen Rutsch auf — ZIP-Archive inklusive, die sie selbst auspackt. Verteilt wird sie per Sideload mit eigenem Developer-Team.
+3. **HTML5-Bonusplayer (`savage-mod-player.html`)** — Eine winzige einzelne HTML-Datei (unter 60 KB), die ohne Webserver direkt per Doppelklick aus dem Dateisystem funktioniert. Sie konzentriert sich bewusst auf klassische 4-Kanal-ProTracker-MODs.
 
-**Kein libopenmpt-Wrapper:** Die native App parst, sequenziert, synthetisiert und mischt MOD/S3M/XM/IT selbst in Swift. Sie bindet weder `libopenmpt`, `libxmp`, `libmodplug`, DUMB noch eine andere Modul-Replay-Library ein. `openmpt123` dient ausschließlich als optionale externe Referenz bei Entwicklung und Tests.
+**Kein libopenmpt-Wrapper:** Die nativen Apps parsen, sequenzieren, synthetisieren und mischen MOD/S3M/XM/IT selbst in Swift. Sie binden weder `libopenmpt`, `libxmp`, `libmodplug`, DUMB noch eine andere Modul-Replay-Library ein. `openmpt123` dient ausschließlich als optionale externe Referenz bei Entwicklung und Tests.
 
-Beide Varianten enthalten standardmäßig keine Moduldateien. Musikstücke werden per Drag & Drop oder Datei-Dialog geladen.
+Keine Variante enthält Moduldateien. Musikstücke werden per Drag & Drop, Datei-Dialog oder — auf dem iPhone — durch Import eines Ordners geladen.
 
 <p align="center">
   <img src="docs/screenshot-dark.png" width="900" alt="Savage Mod Player (Dark Mode) spielt ein 32-Kanal-FastTracker-II-Modul">
@@ -30,6 +31,8 @@ Beide Varianten enthalten standardmäßig keine Moduldateien. Musikstücke werde
 Fertige Builds der macOS-App stehen als notarisierte DMGs auf der [Releases-Seite](https://github.com/DanielMuellerIR/savage_modplayer/releases) bereit. DMG herunterladen, öffnen und die App in den Programme-Ordner ziehen.
 
 Der HTML5-Player benötigt keinen Download über die Releases hinaus: Die Datei `savage-mod-player.html` lässt sich direkt im Browser öffnen.
+
+Die iPhone-App wird nicht als fertiger Build verteilt. Sie wird per Sideload mit dem eigenen Apple-Developer-Team installiert — siehe [iPhone-App](#iphone-app-1) unter Build.
 
 ---
 
@@ -68,8 +71,17 @@ Falls keine Vorschau erscheint:
 - **PAL- & NTSC-Taktfrequenzen**: Umschaltbare Paula-Taktung (3,546 MHz PAL vs. 3,580 MHz NTSC) für Paula-basierte MOD-Formate; bei Formaten mit eigenem Frequenzmodell ist die Steuerung ausgeblendet.
 - **Lautstärke & Stereo-Separation**: Psychoakustische (quadratische) Lautstärkeskalierung und einstellbare Stereo-Separation (Bleed von 0% Mono bis 100% Hard-Panning).
 - **Hi-Fi Resampling**: Umschaltbares linear-interpoliertes Sample-Playback für weicheren Sound (deaktivierbar für originalen 8-Bit-Crunch).
-- **WAV- & Stem-Export**: Export des gesamten Songs in eine Stereo-WAV-Datei sowie Export einzelner Instrumentensamples als WAV.
-- **Komplette Tastatursteuerung**: Leertaste für Play/Pause, Pfeiltasten links/rechts für Song-Positionen, Pfeiltasten oben/unten für Song-Wechsel in der Playlist.
+- **WAV- & Stem-Export (macOS-App)**: Export des gesamten Songs in eine Stereo-WAV-Datei sowie Export einzelner Instrumentensamples als WAV. Die iPhone-App hat bewusst keinen Export.
+- **Komplette Tastatursteuerung (macOS-App)**: Leertaste für Play/Pause, Pfeiltasten links/rechts für Song-Positionen, Pfeiltasten oben/unten für Song-Wechsel in der Playlist.
+
+### iPhone-App
+
+- **Hintergrundwiedergabe und Sperrbildschirm-Steuerung**: Die Wiedergabe läuft bei gesperrtem Bildschirm weiter. Titel, Format, Ordner, Titelbild und verstrichene Zeit erscheinen auf dem Sperrbildschirm; Play, Pause, Weiter, Zurück, Positionsregler sowie −15 s / +30 s funktionieren von dort und über die Kopfhörersteuerung. Ein eingehender Anruf pausiert und setzt danach fort; das Abziehen der Kopfhörer pausiert, statt auf den Lautsprecher zu wechseln.
+- **Bibliothek als Ordnerbaum**: Ordner starten zugeklappt, der Pfad zum laufenden Titel klappt automatisch auf, und Wiedergabe wie Zufallswiedergabe laufen über alle Ordner. Live-Suche, Favoriten, Loop-Modi und Sitzungswiederherstellung sind dabei.
+- **Ordner-Import**: Einen Ordner auswählen, und alles Spielbare darin wird mitsamt Struktur in die Bibliothek kopiert. ZIP-Archive werden ausgepackt, Doppelte übersprungen, der Fortschritt angezeigt, und der Import lässt sich abbrechen. Dateien aus einem Cloud-Dateianbieter werden zuvor geladen und koordiniert gelesen.
+- **Finder-Dateifreigabe**: iPhone anschließen, im Finder „Dateien" öffnen und ganze Ordner auf die App ziehen; dieselbe Bibliothek erscheint in der iOS-Dateien-App unter „Auf meinem iPhone". Der Index wird bei jedem Start mit dem Dateisystem abgeglichen.
+- **Visualisierungen standardmäßig aus**: Der Regelfall auf einem Telefon ist „Musik läuft, Bildschirm ist dunkel" — dann wird nichts berechnet, was niemand sieht. Eingeschaltet gibt es Master-Oszilloskop, VU-Meter und eine begrenzte Zahl von Kanal-Oszilloskopen.
+- **Erscheinungsbild**: folgt dem System und lässt sich fest auf hell oder dunkel stellen. Deutsch und Englisch.
 
 ---
 
@@ -130,11 +142,13 @@ Kompatibilitätsmeldungen entstehen aus einer Capability-Analyse. `cwtv` identif
 
 ### Architektur
 
-| Schicht | macOS (Swift) | HTML5-Bonusplayer |
+| Schicht | macOS und iOS (Swift) | HTML5-Bonusplayer |
 |---|---|---|
 | Parser | `ModuleLoader` plus projekteigene MOD-/S3M-/XM-/IT-Parser (`SavageModPlayerCore`) | `modplayer.js` |
 | DSP / Mixer | Projekteigener Sequencer und DSP via `AVAudioSourceNode`, bis 64 logische Kanäle / 256 IT-Voices | `mod-player-worklet.js` (AudioWorklet) |
-| UI | SwiftUI + Canvas | Vanilla JS + CSS Grid |
+| UI | SwiftUI + Canvas (`Sources/SavageModPlayerApp` auf macOS, `ios/SavageModPlayer` auf iOS) | Vanilla JS + CSS Grid |
+| Archive | `bsdtar` auf macOS und Linux, projekteigener `ZipArchiveReader` auf iOS | — |
+| Bibliothek | `SavageModPlayerCore/Library` (Index, Import, Zurücksetzen) — von der iPhone-App genutzt | — |
 | Quick Look | `quicklook/PreviewProvider.swift` (Appex, WAV-Offline-Render) | — |
 
 ---
@@ -156,6 +170,31 @@ Für Release-Builds signiert `build_app.sh` automatisch mit der Developer-ID
 `Developer ID Application: Daniel Mueller (9QSWKSR4NQ)`, sofern sie im
 Schlüsselbund verfügbar ist. Lokale unsignierte Builds sind mit
 `SIGN_APP=0 bash build_app.sh` möglich.
+
+### iPhone-App
+
+Das Xcode-Projekt ist eingecheckt und nutzt eine dateisystem-synchronisierte
+Wurzelgruppe: neue Swift-Dateien unter `ios/SavageModPlayer/` landen ohne
+Projektdatei-Edit im Target. Vorausgesetzt wird Xcode 16 oder neuer.
+
+```bash
+bash ios/scripts/build-simulator.sh      # Build für den Simulator, ohne Signatur
+bash ios/scripts/run-tests.sh            # XCTest im Simulator
+bash ios/scripts/build-device.sh --install   # Build für ein echtes iPhone und Installation
+```
+
+`build-simulator.sh` bricht ab, sobald der Build Warnungen im projekteigenen
+Quellcode meldet — ein grüner Lauf ist also wirklich warnungsfrei. Protokolle
+landen unter `ios/build/` und sind nicht getrackt.
+
+Der Geräte-Build braucht die eigene Apple-Team-ID. Sie wird aus `ios/.env`
+gelesen, das bewusst nicht im Repository liegt:
+
+```bash
+cp ios/.env.example ios/.env      # danach die eigene Team-ID in ios/.env eintragen
+```
+
+Simulator-Build und Simulator-Tests laufen ohne Signatur und damit ohne Team-ID.
 
 ### Kommandozeile (`savage-cli`)
 
@@ -250,6 +289,20 @@ die Parität zwischen Swift- und Browser-DSP ab. Das optionale Referenz-Harness
 vergleicht den nativen Renderer mit dem festgeschriebenen `openmpt123`-Build und
 meldet Dauer, Signalpegel, Hüllkurvenkorrelation, Lag, Onset-Zuordnung und
 spektrale Ähnlichkeit, ohne libopenmpt als Produktions-Backend zu verwenden.
+
+Die iOS-Gates laufen getrennt, headless im Simulator:
+
+```bash
+bash ios/scripts/build-simulator.sh
+bash ios/scripts/run-tests.sh
+```
+
+Der Kern der iPhone-App — ZIP-Reader, Bibliotheks-Index, Importer,
+Zurücksetzen — steckt in der normalen `swift test`-Suite und braucht keinen
+Simulator. Dort läuft nur, was ohne iOS nicht prüfbar ist. Hintergrundwiedergabe,
+Sperrbildschirm-Steuerung und das Speicherverhalten beim Import eines großen
+Archivs lassen sich im Simulator nicht belegen und müssen an einem echten Gerät
+geprüft werden; die Prüfliste steht in [docs/testing.md](docs/testing.md).
 
 ---
 

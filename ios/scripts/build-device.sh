@@ -45,8 +45,11 @@ MSG
     exit 2
 fi
 
+REPO_DIR="$(dirname "$IOS_DIR")"
 DERIVED_DATA="${DERIVED_DATA:-$IOS_DIR/build/DerivedData}"
 ARCHIVE_PATH="${ARCHIVE_PATH:-$IOS_DIR/build/SavageModPlayer.xcarchive}"
+# Produktversion kommt aus der VERSION-Datei, nicht aus dem .xcodeproj.
+APP_VERSION="$(cat "$REPO_DIR/VERSION")"
 LOG="${BUILD_LOG:-$IOS_DIR/build/build-device.log}"
 mkdir -p "$(dirname "$LOG")"
 
@@ -61,6 +64,7 @@ xcodebuild archive \
     -archivePath "$ARCHIVE_PATH" \
     DEVELOPMENT_TEAM="$TEAM" \
     CODE_SIGN_STYLE=Automatic \
+    MARKETING_VERSION="$APP_VERSION" \
     >"$LOG" 2>&1
 STATUS=$?
 set -e

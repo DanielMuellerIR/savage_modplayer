@@ -7,17 +7,18 @@
 **🌐 Sprache / Language:** [English](README.md) · [Deutsch](README.de.md)
 
 <p align="center">
-  <strong>Native macOS tracker player for MOD, S3M, XM, and IT — powered by an independent Swift replay engine.</strong>
+  <strong>Native macOS and iPhone tracker player for MOD, S3M, XM, and IT — powered by an independent Swift replay engine.</strong>
 </p>
 
-A self-contained tracker module player led by its native macOS app:
+A self-contained tracker module player led by its native macOS and iOS apps:
 
 1. **Native macOS app (`Savage Mod Player.app`)** — a SwiftUI desktop application built on `AVAudioEngine`/`AVAudioSourceNode` with true real-time oscilloscopes and VU meters. It plays ProTracker and multichannel MODs (6/8/… channels, including `6CHN`/`8CHN`/`FLT8`), 15-sample Soundtracker modules, **ScreamTracker 3 (`.s3m`)**, **FastTracker II (`.xm`)**, and **Impulse Tracker (`.it`)** — and ships with a **Quick Look plugin**: pressing the space bar on a `.mod`/`.s3m`/`.xm`/`.it` file in Finder opens a playable audio preview.
-2. **Bonus HTML5 player (`savage-mod-player.html`)** — a tiny single HTML file (under 60 KB) that runs straight from the file system with a double click, no web server required. It deliberately focuses on classic 4-channel ProTracker MODs.
+2. **Native iPhone app (`ios/`)** — a SwiftUI app on the same replay engine. It keeps playing while the screen is locked, is operated from the lock screen and headphone controls, browses the library as a real folder tree, and takes in entire collection folders in one go — including ZIP archives, which it unpacks itself. Distributed by sideloading with your own developer team.
+3. **Bonus HTML5 player (`savage-mod-player.html`)** — a tiny single HTML file (under 60 KB) that runs straight from the file system with a double click, no web server required. It deliberately focuses on classic 4-channel ProTracker MODs.
 
-**Not a libopenmpt wrapper:** the native app parses, sequences, synthesizes, and mixes MOD/S3M/XM/IT itself in Swift. It does not link or ship `libopenmpt`, `libxmp`, `libmodplug`, DUMB, or another module replay library. `openmpt123` is used only as an optional external reference during development and testing.
+**Not a libopenmpt wrapper:** the native apps parse, sequence, synthesize, and mix MOD/S3M/XM/IT themselves in Swift. It does not link or ship `libopenmpt`, `libxmp`, `libmodplug`, DUMB, or another module replay library. `openmpt123` is used only as an optional external reference during development and testing.
 
-Neither variant bundles any module files. Songs are loaded via drag & drop or the file dialog.
+No variant bundles any module files. Songs are loaded via drag & drop, the file dialog, or — on iPhone — by importing a folder.
 
 <p align="center">
   <img src="docs/screenshot-dark.png" width="900" alt="Savage Mod Player (dark mode) playing a 32-channel FastTracker II module">
@@ -30,6 +31,8 @@ Neither variant bundles any module files. Songs are loaded via drag & drop or th
 Ready-made builds of the macOS app are available as notarized DMGs on the [releases page](https://github.com/DanielMuellerIR/savage_modplayer/releases). Download the DMG, open it, and drag the app into your Applications folder.
 
 The HTML5 player needs no download beyond the repository itself: simply open `savage-mod-player.html` in a browser.
+
+The iPhone app is not distributed as a ready-made build. It is sideloaded with your own Apple developer team — see [iPhone app](#iphone-app-1) under Build.
 
 ---
 
@@ -68,8 +71,17 @@ If no preview appears:
 - **PAL & NTSC clocks**: switchable Paula clocking (3.546 MHz PAL vs. 3.580 MHz NTSC) for Paula-based MOD formats; the control is hidden for formats with their own frequency model.
 - **Volume & stereo separation**: psychoacoustic (quadratic) volume scaling and adjustable stereo separation (bleed from 0% mono to 100% hard panning).
 - **Hi-fi resampling**: switchable linearly interpolated sample playback for a smoother sound (can be disabled for the original 8-bit crunch).
-- **WAV & stem export**: export the entire song to a stereo WAV file, or export individual instrument samples as WAV.
-- **Full keyboard control**: space bar for play/pause, left/right arrows for song positions, up/down arrows to switch songs in the playlist.
+- **WAV & stem export (macOS app)**: export the entire song to a stereo WAV file, or export individual instrument samples as WAV. The iPhone app deliberately has no export.
+- **Full keyboard control (macOS app)**: space bar for play/pause, left/right arrows for song positions, up/down arrows to switch songs in the playlist.
+
+### iPhone app
+
+- **Background playback and lock screen control**: playback continues while the screen is locked. Title, format, folder, artwork, and elapsed time appear on the lock screen; play, pause, next, previous, the position scrubber, and −15 s / +30 s work from there and from headphone controls. An incoming call pauses and resumes; unplugging headphones pauses instead of switching to the speaker.
+- **Library as a folder tree**: folders start collapsed, the path to the playing track expands automatically, and playback and shuffle run across all folders. Live search, favourites, loop modes, and session restore are included.
+- **Folder import**: pick one folder and everything playable inside is copied into the library with its structure intact. ZIP archives are unpacked, duplicates are skipped, progress is shown, and the import can be cancelled. Files stored in a cloud file provider are downloaded and read through a file coordinator first.
+- **Finder file sharing**: connect the iPhone, open Files in the Finder, and drag whole folders onto the app; the same library appears in the iOS Files app under "On My iPhone". The index is reconciled with the file system on every launch.
+- **Visualizations off by default**: the common case on a phone is music playing with a dark screen, so nothing is computed that nobody sees. Turning them on enables the master oscilloscope, VU meters, and a bounded number of per-channel scopes.
+- **Appearance**: follows the system by default, can be forced to light or dark. German and English.
 
 ---
 
@@ -130,11 +142,13 @@ Compatibility messages are capability-based. `cwtv` identifies the creating trac
 
 ### Architecture
 
-| Layer | macOS (Swift) | Bonus HTML5 player |
+| Layer | macOS and iOS (Swift) | Bonus HTML5 player |
 |---|---|---|
 | Parser | `ModuleLoader` plus project-owned MOD/S3M/XM/IT parsers (`SavageModPlayerCore`) | `modplayer.js` |
 | DSP / mixer | Project-owned sequencer and DSP via `AVAudioSourceNode`, up to 64 logical channels / 256 IT voices | `mod-player-worklet.js` (AudioWorklet) |
-| UI | SwiftUI + Canvas | vanilla JS + CSS grid |
+| UI | SwiftUI + Canvas (`Sources/SavageModPlayerApp` on macOS, `ios/SavageModPlayer` on iOS) | vanilla JS + CSS grid |
+| Archives | `bsdtar` on macOS and Linux, project-owned `ZipArchiveReader` on iOS | — |
+| Library | `SavageModPlayerCore/Library` (index, import, reset) — used by the iPhone app | — |
 | Quick Look | `quicklook/PreviewProvider.swift` (appex, offline WAV render) | — |
 
 ---
@@ -160,6 +174,31 @@ For release builds, `build_app.sh` automatically signs with the Developer ID
 `Developer ID Application: Daniel Mueller (9QSWKSR4NQ)` if it is available in
 the keychain. Local unsigned builds are possible with
 `SIGN_APP=0 bash build_app.sh`.
+
+### iPhone app
+
+The Xcode project is checked in and uses a file-system synchronized root group,
+so new Swift files under `ios/SavageModPlayer/` join the target without editing
+the project file. Xcode 16 or newer is required.
+
+```bash
+bash ios/scripts/build-simulator.sh      # build for the simulator, no signing
+bash ios/scripts/run-tests.sh            # XCTest in the simulator
+bash ios/scripts/build-device.sh --install   # build for a real iPhone and install it
+```
+
+`build-simulator.sh` fails when the build emits warnings in this project's own
+sources, so a green run really is warning-free. Logs land in `ios/build/`, which
+is not tracked.
+
+The device build needs your own Apple developer team ID. It is read from
+`ios/.env`, which is deliberately not in the repository:
+
+```bash
+cp ios/.env.example ios/.env      # then enter your team ID in ios/.env
+```
+
+Simulator builds and simulator tests need no signing and therefore no team ID.
 
 ### Command line (`savage-cli`)
 
@@ -267,6 +306,20 @@ parity between the Swift and browser DSP implementations. The optional reference
 harness compares the native renderer with the pinned `openmpt123` build and reports
 duration, signal levels, envelope correlation, lag, onset matching, and spectral
 similarity without using libopenmpt as a production backend.
+
+The iOS-specific gates run separately, headless in the simulator:
+
+```bash
+bash ios/scripts/build-simulator.sh
+bash ios/scripts/run-tests.sh
+```
+
+The core of the iPhone app — ZIP reader, library index, importer, reset — is
+covered by the ordinary `swift test` suite and does not need a simulator. Only
+what genuinely requires iOS runs there. Background playback, lock screen
+control, and memory behaviour while importing a large archive cannot be shown in
+the simulator and must be checked on a physical device; the checklist is in
+[docs/testing.md](docs/testing.md).
 
 ---
 

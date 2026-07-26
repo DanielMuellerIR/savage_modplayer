@@ -5,6 +5,18 @@ an der macOS-App wie sinnvoll, mit Wiedergabe im gesperrten Zustand, einer
 Playlist mit echten Unterordnern und einem Weg, ganze Modul-Sammlungen bequem
 aufs Gerät zu bekommen.
 
+## Nachträgliche Korrekturen am Plan (2026-07-26, während der Umsetzung)
+
+Diese drei Punkte überschreiben den Rest des Dokuments:
+
+- **Kein WAV-Export in der iPhone-App.** Die App braucht ihn nicht; er bleibt
+  eine Desktop-Funktion. Phase 6 unten nennt ihn noch — er ist gestrichen.
+- **Visualisierungen standardmäßig aus.** Der Regelfall auf einem Telefon ist
+  „Musik läuft, Bildschirm ist dunkel". Der Now-Playing-Tab muss ohne
+  Visualisierungen vollständig sein; sie sind eine Zugabe, die man einschaltet.
+- **Themes sind Hell/Dunkel/System**, kein eigener Farbwelt-Zoo. Voreinstellung
+  ist „System".
+
 ## Bestätigte Entscheidungen (2026-07-26)
 
 | Thema | Entscheidung |

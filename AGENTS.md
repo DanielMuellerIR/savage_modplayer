@@ -3,8 +3,8 @@
 ## Typ und Zweck
 
 - **Typ:** native macOS-GUI-App mit SwiftUI/AVAudioEngine, Quick-Look-Extension,
-  plattformübergreifendes headless CLI (`savage-cli`, macOS + Linux) und kompakte
-  HTML5-Variante.
+  native iPhone-App (SwiftUI, `ios/`), plattformübergreifendes headless CLI
+  (`savage-cli`, macOS + Linux) und kompakte HTML5-Variante.
 - **Zweck:** Tracker-Modul-Player für MOD, S3M, XM und IT. Die native Variante
   unterstützt alle vier Formate; der Single-File-Browserplayer bleibt bewusst
   auf klassische 4-Kanal-ProTracker-MODs begrenzt.
@@ -12,9 +12,13 @@
   und `savage-cli` bauen, testen und spielen unter Linux; App und Quick Look sind
   macOS-only und werden dort per `#if os(macOS)` aus `Package.swift` ausgeblendet.
   Details und Grenzen: [Linux-Plan](tasks/2026-07-05-linux-port/plan.md).
-- `SavageModPlayerCore` ist in `Package.swift` iOS-tauglich deklariert, aber ein
-  iOS-App-Target oder verifizierter iOS-Buildpfad existiert nicht. iOS ist Option,
-  kein Ist-Zustand.
+- **iOS ist Ist-Zustand, nicht Option** (seit 1.6.0): unter `ios/` liegt eine
+  eingecheckte iPhone-App auf demselben `SavageModPlayerCore`, mit
+  Hintergrundwiedergabe, Sperrbildschirm-Steuerung, hierarchischer Bibliothek und
+  rekursivem Ordner-Import. Sie wird per Sideload mit eigenem Developer-Team
+  verteilt; die Team-ID steht ausschließlich in der gitignorierten `ios/.env`.
+  Kein WAV-Export — das ist eine bewusste Auslassung, keine Lücke.
+  Details: [iOS-Plan](tasks/2026-07-26-ios-app/plan.md).
 - Die aktuelle Produktversion steht ausschließlich in [VERSION](VERSION).
 
 ## Architektur und harte Invarianten
@@ -55,6 +59,28 @@
   wird sandboxed und zuerst mit Entitlements signiert; danach die App ohne
   `--deep`. Parserfehler müssen eine endliche Textvorschau statt eines Hängers
   liefern.
+- `Sources/SavageModPlayerCore/Archive/ZipArchiveReader.swift`: eigener
+  ZIP-Reader hinter `canImport(Compression)`, weil iOS weder `Process` noch
+  `bsdtar` hat. Streamt blockweise; der Speicherbedarf darf nie mit der
+  Archivgröße wachsen. Zip-Slip, Symlink-Einträge, verschlüsselte Einträge,
+  Zip64 und unplausible Kompressionsverhältnisse werden **abgelehnt, nicht
+  bereinigt**. Wer dort etwas ändert, fährt die Sicherheitstests mit.
+- `Sources/SavageModPlayerCore/Library/`: Bibliotheks-Schicht der iOS-App
+  (`MusicLibrary`, `LibraryImporter`, `LibraryReset`), plattformneutral und ohne
+  SwiftUI. **Stabile IDs sind relative Pfade** — der App-Container wechselt bei
+  jeder Neuinstallation seine UUID. Der Index liegt in `Application Support` und
+  darf nie die einzige Wahrheit sein: die Bibliothek liegt in `Documents/` und
+  ist über die Finder-Dateifreigabe direkt veränderbar.
+- `ios/SavageModPlayer/` ist eine `PBXFileSystemSynchronizedRootGroup`
+  (`objectVersion 77`): neue Swift-Dateien landen ohne pbxproj-Edit im Target.
+  `Info.plist` ist über `membershipExceptions` aus der Ressourcen-Phase
+  ausgenommen — ohne das kollidiert sie mit der generierten Bundle-Plist.
+- **Swift-6-Isolation auf iOS ist kein Warnungsthema, sondern ein Absturz.** Ein
+  Closure, das in einer `@MainActor`-Klasse gebildet wird, erbt deren Isolation;
+  ruft das System es auf einem anderen Thread auf, endet der Prozess mit SIGTRAP.
+  Betroffen sind Combine-Sinks auf Systembenachrichtigungen und
+  `MPRemoteCommand`-Handler — beide sind deshalb ausdrücklich entkoppelt
+  (`.receive(on:)` bzw. `@Sendable`).
 
 ## Sicherheit, Assets und Öffentlichkeit
 
@@ -108,6 +134,8 @@ Die vollständigen Befehle, Fixture-Regeln und Quick-Look-Fallen stehen in
 | Audio-Renderpfad angefasst | `savage-cli`-WAVs über den lokalen MOD-Korpus byteidentisch zu vorher (Baseline vor der Änderung erzeugen) |
 | gemeinsamer MOD-DSP | `DSPChannelTimingTests`, Sequencer-Tests und `node Tests/js/worklet-timing.mjs` |
 | MOD/S3M/XM/IT-Parser oder -DSP | passende Format-Suite plus lokale Realweltdateien, falls vorhanden |
+| `Archive/`, `Library/`, `PlaylistScanner` | zusätzlich `ZipArchiveReaderTests`, `MusicLibraryTests`, `LibraryImporterTests` und Linux-Lauf |
+| iOS-App (`ios/`) | `bash ios/scripts/build-simulator.sh` und `bash ios/scripts/run-tests.sh`; Hintergrundwiedergabe und Sperrbildschirm sind **nur am Gerät** belegbar, nie aus dem Simulator behaupten |
 | Webquelle/Version | `python3 build.py`, generierten HTML-Diff prüfen, Browser-Smoke bei UI-Verhalten |
 | Quick Look | Build/Signatur/PluginKit headless; Finder-Leertaste als manueller Endtest |
 | Release | volle Suite, App-/Appex-Signatur, DMG/Notary nur bei Auftrag, EN/DE-Doku konsistent |
@@ -131,6 +159,12 @@ Vor einer betroffenen Änderung gezielt [docs/testing.md](docs/testing.md) lesen
   nicht zuverlässig.
 - Audio benötigt `QLPreviewReply(fileURL:)`; eine WAV-Datenreply zeigt nur die
   generische Infokarte.
+- Auf iOS steht die Bibliothek in `Documents/`, ist also für den Nutzer sichtbar
+  und veränderbar. Der Start gleicht deshalb immer mit dem Dateisystem ab;
+  per Finder abgelegte Archive werden gemeldet und erst auf Zuruf ausgepackt.
+- Visualisierungen der iPhone-App sind **standardmäßig aus**. Der Regelfall ist
+  „Musik läuft, Bildschirm ist aus"; der Schalter senkt den Update-Takt des
+  Cores von 30 Hz auf ~5 Hz. Der Now-Playing-Tab muss ohne sie vollständig sein.
 
 Die IT-Implementierung M0–M10 ist abgeschlossen. Dauerhafte Semantik und
 Capability-Grenzen sind projektextern dokumentiert. Historische
@@ -161,8 +195,14 @@ UI-, Audit- und IT-Chronik liegt in Release Notes, Tasks und
   — ausgelagerte erledigte AGENTS-Chronik. `archive/p_modplayer_*` ist ein
   gitignorierter lokaler Sonderbestand und keine aktive Regelquelle.
 - `Sources/SavageModPlayerCore/` — Parser, `DSP/` (Renderkern, plattformneutral),
-  `Audio/` (Ausgabeschicht/PCMSink), `Playlist/`; `Sources/CALSA/` — Systemmodul
+  `Audio/` (Ausgabeschicht/PCMSink), `Playlist/`, `Archive/` (eigener ZIP-Reader),
+  `Library/` (Bibliothek der iOS-App); `Sources/CALSA/` — Systemmodul
   für ALSA (nur Linux); `Sources/SavageCLI/` — `savage-cli` (macOS + Linux).
 - `Sources/` und `Tests/` — native Produkte und Tests; `quicklook/` — Extension;
   `src/`, `modplayer.js`, `mod-player-worklet.js` und
   `savage-mod-player.html` — Webquelle und generiertes Single-File-Produkt.
+- `ios/` — iPhone-App: `SavageModPlayer.xcodeproj` (eingecheckt, synchronized
+  groups), `SavageModPlayer/` mit `Player/`, `Library/`, `UI/` und `Resources/`,
+  `SavageModPlayerTests/` (Simulator) sowie `scripts/` mit
+  `build-simulator.sh`, `run-tests.sh` und `build-device.sh`. `ios/build/` und
+  `ios/.env` sind gitignoriert; `ios/.env.example` ist die Vorlage.

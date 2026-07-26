@@ -17,6 +17,12 @@ CONFIGURATION="${CONFIGURATION:-Debug}"
 DERIVED_DATA="${DERIVED_DATA:-$IOS_DIR/build/DerivedData}"
 LOG="${BUILD_LOG:-$IOS_DIR/build/build-simulator.log}"
 
+# Die Produktversion steht ausschliesslich in der VERSION-Datei im Repo-Wurzel-
+# verzeichnis. Sie hier durchzureichen verhindert, dass der Wert im
+# .xcodeproj still veraltet — der dortige Eintrag ist nur die Rueckfallebene
+# fuer Builds direkt aus Xcode.
+APP_VERSION="$(cat "$REPO_DIR/VERSION")"
+
 mkdir -p "$(dirname "$LOG")"
 
 echo "==> Simulator-Build ($CONFIGURATION)"
@@ -28,6 +34,7 @@ xcodebuild build \
     -destination 'generic/platform=iOS Simulator' \
     -derivedDataPath "$DERIVED_DATA" \
     CODE_SIGNING_ALLOWED=NO \
+    MARKETING_VERSION="$APP_VERSION" \
     >"$LOG" 2>&1
 STATUS=$?
 set -e
