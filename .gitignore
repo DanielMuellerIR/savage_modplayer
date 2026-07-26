@@ -33,5 +33,6 @@ build/
 *.xcuserstate
 *.xcworkspace/xcuserdata/
 # Die Team-ID ist eine Konto-Kennung und gehoert nicht in ein oeffentliches Repo.
-# Vorlage und Erklaerung stehen in ios/.env.example.
-/ios/.env
+# Sie steht in einer lokalen xcconfig, die Xcode und die Build-Skripte gemeinsam
+# lesen. Vorlage und Erklaerung: ios/Signing.local.xcconfig.example.
+/ios/Signing.local.xcconfig

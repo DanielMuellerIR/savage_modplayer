@@ -16,7 +16,7 @@ A self-contained tracker module player led by its native macOS and iOS apps:
 2. **Native iPhone app (`ios/`)** — a SwiftUI app on the same replay engine. It keeps playing while the screen is locked, is operated from the lock screen and headphone controls, browses the library as a real folder tree, and takes in entire collection folders in one go — including ZIP archives, which it unpacks itself. Distributed by sideloading with your own developer team.
 3. **Bonus HTML5 player (`savage-mod-player.html`)** — a tiny single HTML file (under 60 KB) that runs straight from the file system with a double click, no web server required. It deliberately focuses on classic 4-channel ProTracker MODs.
 
-**Not a libopenmpt wrapper:** the native apps parse, sequence, synthesize, and mix MOD/S3M/XM/IT themselves in Swift. It does not link or ship `libopenmpt`, `libxmp`, `libmodplug`, DUMB, or another module replay library. `openmpt123` is used only as an optional external reference during development and testing.
+**Not a libopenmpt wrapper:** the native apps parse, sequence, synthesize, and mix MOD/S3M/XM/IT themselves in Swift. They do not link or ship `libopenmpt`, `libxmp`, `libmodplug`, DUMB, or another module replay library. `openmpt123` is used only as an optional external reference during development and testing.
 
 No variant bundles any module files. Songs are loaded via drag & drop, the file dialog, or — on iPhone — by importing a folder.
 
@@ -191,12 +191,25 @@ bash ios/scripts/build-device.sh --install   # build for a real iPhone and insta
 sources, so a green run really is warning-free. Logs land in `ios/build/`, which
 is not tracked.
 
-The device build needs your own Apple developer team ID. It is read from
-`ios/.env`, which is deliberately not in the repository:
+The device build needs your own Apple developer team ID. It lives in a local
+xcconfig that is deliberately not in the repository:
 
 ```bash
-cp ios/.env.example ios/.env      # then enter your team ID in ios/.env
+cp ios/Signing.local.xcconfig.example ios/Signing.local.xcconfig
+# then enter your team ID under DEVELOPMENT_TEAM
 ```
+
+Xcode reads the same file through the checked-in `ios/Signing.xcconfig`, so there
+is nothing to pick under "Signing & Capabilities" — and nothing that can end up
+in a commit by accident. That matters: selecting the team in Xcode's UI writes it
+into `project.pbxproj`, which is tracked.
+
+**For the first run on a new device, use Xcode.** Registering the device with
+your team, creating the provisioning profile, and trusting the developer
+certificate on the phone are one-time steps that its UI walks you through. Open
+`ios/SavageModPlayer.xcodeproj`, pick the device, press Run. Afterwards
+`build-device.sh` works headlessly for every further build; it passes
+`-allowProvisioningUpdates` so `xcodebuild` may refresh the profile on its own.
 
 Simulator builds and simulator tests need no signing and therefore no team ID.
 

@@ -127,12 +127,23 @@ verifiziert melden.
 
 ### Gerätetest (nur mit echtem iPhone)
 
-Voraussetzung: `ios/.env` mit der eigenen Team-ID (Vorlage `ios/.env.example`,
-die Datei selbst ist gitignoriert).
+Voraussetzung: `ios/Signing.local.xcconfig` mit der eigenen Team-ID (Vorlage
+`ios/Signing.local.xcconfig.example`, die Datei selbst ist gitignoriert). Xcode
+liest dieselbe Datei über das eingecheckte `ios/Signing.xcconfig` — in der
+Oberfläche ist also nichts auszuwählen. Das ist Absicht: Wer das Team dort von
+Hand wählt, schreibt es in `project.pbxproj`, und die Datei ist getrackt.
+
+**Der erste Lauf auf einem neuen Gerät gehört in Xcode.** Gerät registrieren,
+Provisioning-Profil anlegen und das Entwicklerzertifikat auf dem iPhone
+bestätigen sind einmalige Schritte, durch die die Oberfläche führt. Danach:
 
 ```
 bash ios/scripts/build-device.sh --install
 ```
+
+Das Skript übergibt `-allowProvisioningUpdates`, damit `xcodebuild` das Profil
+selbst auffrischen darf; ohne diese Vorarbeit in Xcode scheitert es aber am
+noch nicht registrierten Gerät.
 
 Prüfliste am Gerät:
 
