@@ -187,18 +187,16 @@ bash ios/scripts/build-device.sh --install   # Build für ein echtes iPhone und 
 Quellcode meldet — ein grüner Lauf ist also wirklich warnungsfrei. Protokolle
 landen unter `ios/build/` und sind nicht getrackt.
 
-Der Geräte-Build braucht die eigene Apple-Team-ID. Sie steht in einer lokalen
-xcconfig, die bewusst nicht im Repository liegt:
+Das Signatur-Team steht im Projekt (`DEVELOPMENT_TEAM`). Wer mit einem anderen
+Team baut, ändert es in Xcode unter „Signing & Capabilities" oder übergibt dem
+Skript `SAVAGE_DEVELOPMENT_TEAM=<eigene Team-ID>`.
 
-```bash
-cp ios/Signing.local.xcconfig.example ios/Signing.local.xcconfig
-# danach dort die eigene Team-ID bei DEVELOPMENT_TEAM eintragen
-```
-
-Xcode liest dieselbe Datei über das eingecheckte `ios/Signing.xcconfig`. Damit
-gibt es unter „Signing & Capabilities" nichts auszuwählen — und nichts, was
-versehentlich in einen Commit rutscht. Das ist der Punkt: Wer das Team in Xcodes
-Oberfläche wählt, schreibt es in `project.pbxproj`, und die Datei ist getrackt.
+Die Team-ID ist kein Geheimnis. Apple bettet sie in die Signatur jeder
+ausgelieferten App ein — `codesign -dv --verbose=4` liest sie aus jedem
+heruntergeladenen DMG heraus — und sie steht für die macOS-Signatur ohnehin
+schon in `build_app.sh`. Zu schützen sind der private Schlüssel des
+Signaturzertifikats und die Notarisierungs-Zugangsdaten; beides liegt nicht in
+diesem Repository.
 
 **Für den ersten Lauf auf einem neuen Gerät ist Xcode das richtige Werkzeug.**
 Gerät beim Team registrieren, Provisioning-Profil anlegen und das
@@ -208,7 +206,7 @@ Run drücken. Danach läuft `build-device.sh` headless für jeden weiteren Build
 übergibt `-allowProvisioningUpdates`, damit `xcodebuild` das Profil selbst
 auffrischen darf.
 
-Simulator-Build und Simulator-Tests laufen ohne Signatur und damit ohne Team-ID.
+Simulator-Build und Simulator-Tests laufen ganz ohne Signatur.
 
 ### Kommandozeile (`savage-cli`)
 

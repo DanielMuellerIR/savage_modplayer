@@ -16,10 +16,10 @@
   eingecheckte iPhone-App auf demselben `SavageModPlayerCore`, mit
   Hintergrundwiedergabe, Sperrbildschirm-Steuerung, hierarchischer Bibliothek und
   rekursivem Ordner-Import. Sie wird per Sideload mit eigenem Developer-Team
-  verteilt; die Team-ID steht ausschließlich in der gitignorierten
-  `ios/Signing.local.xcconfig`, die Xcode und Build-Skripte gemeinsam lesen. Sie
-  darf **nie** in `project.pbxproj` landen — genau das passiert, wenn man das
-  Team in Xcode unter „Signing & Capabilities" von Hand auswählt.
+  verteilt; die Team-ID steht im Xcode-Projekt und ist **kein Geheimnis** (Apple
+  bettet sie in die Signatur jeder ausgelieferten App ein; sie steht für die
+  macOS-Signatur ohnehin in `build_app.sh`). Geheim sind der private Schlüssel
+  des Signaturzertifikats und das Notary-Profil — beides gehört nicht ins Repo.
   Kein WAV-Export — das ist eine bewusste Auslassung, keine Lücke.
   Details: [iOS-Plan](tasks/2026-07-26-ios-app/plan.md).
 - Die aktuelle Produktversion steht ausschließlich in [VERSION](VERSION).
@@ -207,7 +207,5 @@ UI-, Audit- und IT-Chronik liegt in Release Notes, Tasks und
 - `ios/` — iPhone-App: `SavageModPlayer.xcodeproj` (eingecheckt, synchronized
   groups), `SavageModPlayer/` mit `Player/`, `Library/`, `UI/` und `Resources/`,
   `SavageModPlayerTests/` (Simulator) sowie `scripts/` mit
-  `build-simulator.sh`, `run-tests.sh` und `build-device.sh`. `ios/build/` und
-  `ios/Signing.local.xcconfig` sind gitignoriert;
-  `ios/Signing.local.xcconfig.example` ist die Vorlage, `ios/Signing.xcconfig`
-  die eingecheckte Klammer, die sie optional einbindet.
+  `build-simulator.sh`, `run-tests.sh` und `build-device.sh`. `ios/build/` ist
+  gitignoriert.
