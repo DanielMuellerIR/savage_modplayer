@@ -26,3 +26,12 @@ build/
 # Code waere dann je nach Rechner im Repo oder nicht.
 /audio/
 /archive/
+
+# iOS-App: Build-Ausgaben und Xcode-Nutzerzustand bleiben draussen. `build/`
+# (oben, ohne fuehrenden Slash) deckt schon ios/build/ ab; die Eintraege hier
+# sind die, die sonst durchrutschen wuerden.
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+# Die Team-ID ist eine Konto-Kennung und gehoert nicht in ein oeffentliches Repo.
+# Vorlage und Erklaerung stehen in ios/.env.example.
+/ios/.env

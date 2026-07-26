@@ -88,6 +88,69 @@ Der Provider muss eine temporäre WAV-Datei und `QLPreviewReply(fileURL:)`
 verwenden. `dataOfContentType: .wav` zeigt nur die generische Info-Karte. Die
 Appex zuerst sandboxed mit Entitlements signieren, danach die App ohne `--deep`.
 
+## iOS-App
+
+Die iPhone-App liegt unter `ios/` und benutzt dasselbe `SavageModPlayerCore` wie
+Mac-App und CLI. Das Projekt ist eingecheckt und arbeitet mit
+`PBXFileSystemSynchronizedRootGroup` (`objectVersion 77`, Xcode 16 oder neuer):
+neue Swift-Dateien unter `ios/SavageModPlayer/` landen ohne pbxproj-Edit im
+Target. Ein Zusammenführungskonflikt in `project.pbxproj` ist damit die Ausnahme,
+nicht der Normalfall.
+
+Headless prüfen:
+
+```
+bash ios/scripts/build-simulator.sh    # Build, bricht bei eigenen Warnungen ab
+bash ios/scripts/run-tests.sh          # XCTest im Simulator
+```
+
+`build-simulator.sh` filtert Warnungen auf den eigenen Quellbaum (`ios/` und
+`Sources/`) und endet mit Exit 3, wenn dort welche auftauchen. Ein grüner Lauf
+heißt also wirklich warnungsfrei. Das vollständige Protokoll liegt unter
+`ios/build/` und ist gitignoriert.
+
+`run-tests.sh` sucht sich ohne `SIMULATOR_NAME` das erste verfügbare iPhone.
+Einzelne Suiten über `TEST_FILTER=SavageModPlayerTests/<Klasse>`.
+
+Der Kern (`ZipArchiveReader`, `MusicLibrary`, `LibraryImporter`,
+`LibraryReset`) wird **nicht** dort geprüft, sondern in der normalen
+SwiftPM-Suite mit `swift test` — plattformneutral und ohne Simulator. Im
+Simulator läuft nur, was ohne iOS nicht prüfbar ist.
+
+### Grenzen des Simulators
+
+Der Simulator belegt **nicht**: Hintergrundwiedergabe bei gesperrtem Bildschirm,
+Sperrbildschirm- und AirPods-Steuerung, Verhalten bei eingehendem Anruf, Route-
+Change beim Abziehen der Kopfhörer und das Speicherverhalten beim Import eines
+großen Archivs. Wer nur den Simulator gefahren hat, darf keines dieser Dinge als
+verifiziert melden.
+
+### Gerätetest (nur mit echtem iPhone)
+
+Voraussetzung: `ios/.env` mit der eigenen Team-ID (Vorlage `ios/.env.example`,
+die Datei selbst ist gitignoriert).
+
+```
+bash ios/scripts/build-device.sh --install
+```
+
+Prüfliste am Gerät:
+
+1. **Sperrbildschirm.** Titel starten, Display sperren. Die Musik läuft weiter.
+   Auf dem Sperrbildschirm erscheinen Titel, Format und Artwork; Play/Pause,
+   Weiter/Zurück und der Positionsregler funktionieren; die verstrichene Zeit
+   läuft mit und springt nicht.
+2. **AirPods.** Doppeltipp beziehungsweise Stiel-Geste pausiert und setzt fort.
+3. **Eingehender Anruf.** Wiedergabe pausiert beim Klingeln und setzt nach dem
+   Auflegen selbständig wieder ein.
+4. **Kopfhörer abziehen.** Wiedergabe pausiert und läuft nicht über den
+   Lautsprecher weiter.
+5. **Speicherverhalten beim Import.** Ein großes Archiv (dreistellige MB)
+   importieren und dabei den Speicher beobachten. Der Verbrauch darf nicht mit
+   der Archivgröße wachsen; die App darf nicht vom System beendet werden.
+6. **Dauerlauf.** Ein anspruchsvolles IT-Modul mindestens zehn Minuten laufen
+   lassen, davon einen Teil bei gesperrtem Bildschirm: keine Aussetzer.
+
 ## Release und Notarisierung
 
 - Reine Doku-/AGENTS-Reorganisation: kein `VERSION`-Bump.
