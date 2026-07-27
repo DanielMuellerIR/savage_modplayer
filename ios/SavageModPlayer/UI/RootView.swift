@@ -43,7 +43,7 @@ struct RootView: View {
                     .tabItem { Label("tab.library", systemImage: "music.note.list") }
                     .tag(Tab.library)
 
-                NowPlayingView(isSceneActive: model.isSceneActive) { selection = .library }
+                NowPlayingView { selection = .library }
                     .tabItem { Label("tab.player", systemImage: "waveform") }
                     .tag(Tab.player)
 
@@ -52,6 +52,9 @@ struct RootView: View {
                     .tabItem { Label("tab.settings", systemImage: "gearshape") }
                     .tag(Tab.settings)
             }
+            .tint(.accentColor)
+            .toolbarBackground(Color.playerSurface, for: .tabBar)
+            .toolbarBackground(.visible, for: .tabBar)
             // Hell, dunkel oder das, was das System vorgibt (nil = nicht
             // erzwingen).
             .preferredColorScheme(settings.theme.colorScheme)
@@ -176,9 +179,7 @@ private struct MiniPlayerBar: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
-            // Material statt einer festen Farbe: passt sich hell/dunkel und dem
-            // Untergrund an.
-            .background(.bar)
+            .background(Color.playerSurface)
             .overlay(alignment: .top) { Divider() }
         }
     }

@@ -57,25 +57,12 @@ final class PlayerSettings: ObservableObject {
         set { themeRaw = newValue.rawValue }
     }
 
-    // Werden die Visualisierungen ueberhaupt gezeichnet?
-    //
-    // Voreinstellung AUS, und das ist kein Versehen: Der uebliche Fall auf einem
-    // Telefon ist "Musik laeuft, Bildschirm ist aus". Oszilloskope, VU-Meter und
-    // Kanalanzeigen kosten dabei nur Rechenzeit und Akku, ohne dass sie jemand
-    // sieht. Wer sie sehen will, schaltet sie in den Einstellungen ein.
-    //
-    // Der Schalter wirkt nicht nur auf das Zeichnen: der Core drosselt bei
-    // abgeschalteten Visualisierungen seinen Aktualisierungs-Takt von 30 Hz auf
-    // ~5 Hz und laesst die teure Wellenform-Berechnung ganz weg. Das ist der
-    // eigentliche Hebel, nicht das Weglassen der Views.
-    @AppStorage("savage.ios.visualizersEnabled") var visualizersEnabled: Bool = false
-
-    // Wie oft die Visualisierungen pro Sekunde neu gezeichnet werden, wenn sie
-    // eingeschaltet sind.
+    // Wie oft die Visualisierungen pro Sekunde neu gezeichnet werden, solange
+    // ihr Abschnitt wirklich im sichtbaren Scrollbereich liegt.
     @AppStorage("savage.ios.visualizerFPS") var visualizerFrameRate: Int = 20
 
     // Wie viele Kanal-Oszilloskope hoechstens gleichzeitig gezeichnet werden.
-    // Ein IT-Modul kann 64 Kanaele haben — die sind auf einem iPhone-Display
-    // weder lesbar noch bezahlbar.
-    @AppStorage("savage.ios.maxChannelScopes") var maxVisibleChannelScopes: Int = 8
+    // Ein IT-Modul kann 64 Kanaele haben; die Ansicht zeigt bewusst hoechstens
+    // 32 in einem mehrzeiligen Raster.
+    @AppStorage("savage.ios.maxChannelScopes") var maxVisibleChannelScopes: Int = 32
 }

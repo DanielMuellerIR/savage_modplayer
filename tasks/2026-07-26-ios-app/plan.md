@@ -5,15 +5,17 @@ an der macOS-App wie sinnvoll, mit Wiedergabe im gesperrten Zustand, einer
 Playlist mit echten Unterordnern und einem Weg, ganze Modul-Sammlungen bequem
 aufs Gerät zu bekommen.
 
-## Nachträgliche Korrekturen am Plan (2026-07-26, während der Umsetzung)
+## Nachträgliche Korrekturen am Plan (zuletzt 2026-07-27)
 
 Diese drei Punkte überschreiben den Rest des Dokuments:
 
 - **Kein WAV-Export in der iPhone-App.** Die App braucht ihn nicht; er bleibt
   eine Desktop-Funktion. Phase 6 unten nennt ihn noch — er ist gestrichen.
-- **Visualisierungen standardmäßig aus.** Der Regelfall auf einem Telefon ist
-  „Musik läuft, Bildschirm ist dunkel". Der Now-Playing-Tab muss ohne
-  Visualisierungen vollständig sein; sie sind eine Zugabe, die man einschaltet.
+- **Visualisierungen nach Sichtbarkeit.** Es gibt keinen Ein-/Aus-Schalter mehr.
+  Scrollt ihr Abschnitt in den Viewport, starten sie sofort; beim
+  Herausscrollen, Tabwechsel oder Sperren werden Canvas und Wellenform-Caches
+  entfernt. Kanal-Scopes stehen in einem 4-/8-spaltigen Raster mit höchstens 32
+  sichtbaren Kanälen.
 - **Themes sind Hell/Dunkel/System**, kein eigener Farbwelt-Zoo. Voreinstellung
   ist „System".
 

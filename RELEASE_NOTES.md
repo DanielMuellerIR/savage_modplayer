@@ -1,6 +1,6 @@
-Savage Mod Player 1.6.0 adds a native iPhone app that plays MOD, S3M, XM, and IT
-files on the same Swift replay engine as the macOS app, keeps playing while the
-screen is locked, and can take in whole collection folders at once.
+Savage Mod Player 1.6.1 refines the native iPhone app with automatic ZIP
+handling, viewport-driven visualizations, a readable multi-row channel layout,
+and the same restrained visual identity as the Mac app.
 
 ## iPhone app
 
@@ -19,13 +19,15 @@ screen is locked, and can take in whole collection folders at once.
   the path to the playing track expands automatically, and playback and shuffle
   run across all folders. Live search, favourites, loop modes, and session
   restore work as they do on the desktop.
-- Visualizations are off by default. The common case on a phone is music playing
-  with the screen dark, and nothing should be computed that nobody sees. Turning
-  them on enables the master oscilloscope, VU meters, and a bounded number of
-  per-channel scopes.
+- Visualizations no longer need an enable switch. They start as their section
+  enters the scroll viewport and stop when it leaves, the tab changes, or the
+  screen locks. Their Canvas views and waveform caches are discarded while
+  hidden. Up to 32 channel scopes use four columns on an iPhone and eight in a
+  wide layout instead of being squeezed into one row.
 - PAL/NTSC clocking, the LED filter, hi-fi interpolation, and stereo separation
-  are all available. Appearance follows the system by default and can be forced
-  to light or dark. German and English are both supported.
+  are all available. Appearance now uses the Mac app's blue/cyan and graphite
+  palette, and the iOS asset is packaged as a true PNG from the same app-icon
+  source. It follows the system by default and can be forced to light or dark.
 
 ## Getting music onto the device
 
@@ -37,7 +39,9 @@ screen is locked, and can take in whole collection folders at once.
 - **Finder file sharing**: connect the iPhone, open Files in the Finder, and
   drag whole folders onto the app. The same library shows up in the iOS Files
   app under "On My iPhone". The app reconciles its index with the file system on
-  every launch, so files added or deleted from outside are picked up.
+  every launch, so files added or deleted from outside are picked up. ZIP
+  archives found there are unpacked automatically instead of waiting for a
+  separate button; only failed or cancelled archives remain available to retry.
 - **Reset library**: a two-step confirmation clears tracks, index, and cached
   extracts; favourites can be kept.
 

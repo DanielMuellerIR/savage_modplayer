@@ -158,6 +158,38 @@ final class LibraryImportIntegrationTests: XCTestCase {
         XCTAssertEqual(library.index.items.count, 5)
     }
 
+    // Ein per Finder/Dateien-App direkt in Documents gelegtes ZIP braucht
+    // keinen separaten Knopf: LibraryStore findet es beim Abgleich, packt es
+    // automatisch aus und ersetzt das Archiv durch den sichtbaren Ordner.
+    @MainActor
+    func testStoreAutomaticallyUnpacksArchiveFoundDuringScan() async throws {
+        let archive = try makeStoredZip(entries: [
+            ("Inside/automatic.it", Data(repeating: 0xC3, count: 256))
+        ])
+        let archiveURL = libraryRoot.appendingPathComponent("drop.zip")
+        try archive.write(to: archiveURL)
+
+        let library = MusicLibrary(rootURL: libraryRoot, indexURL: indexURL)
+        try library.load()
+
+        let suiteName = "LibraryStore-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = LibraryStore(defaults: defaults, library: library)
+        store.start()
+
+        let deadline = Date().addingTimeInterval(5)
+        while store.isBusy, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        XCTAssertFalse(store.isBusy, "automatischer ZIP-Import lief in ein Timeout")
+        XCTAssertEqual(store.tracks.map(\.relativePath), ["drop/Inside/automatic.it"])
+        XCTAssertTrue(store.pendingArchives.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: archiveURL.path))
+    }
+
     // MARK: - Minimaler ZIP-Schreiber (nur "stored", ohne Kompression)
 
     // Baut ein gueltiges ZIP-Archiv im Speicher. Bewusst ohne Kompression: fuer

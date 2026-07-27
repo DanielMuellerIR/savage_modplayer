@@ -36,6 +36,7 @@ struct LibraryView: View {
                         treeList
                     }
                 }
+                .background(Color.playerBackground)
                 .navigationTitle("tab.library")
                 .toolbar { toolbarContent }
                 .sheet(isPresented: $showImport) { LibraryImportSheet() }
@@ -129,6 +130,17 @@ struct LibraryView: View {
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Color.playerBackground)
+            // `safeAreaInset` der Mini-Player-Leiste reicht seine Hoehe in
+            // verschachtelten Tab-/Navigation-Stacks nicht auf allen iOS-
+            // Versionen verlaesslich bis zur List weiter. Dieser zusaetzliche
+            // Scroll-Rand garantiert, dass die letzte Datei vollstaendig ueber
+            // die Leiste gezogen werden kann; ohne Titel entsteht keine Luecke.
+            .contentMargins(
+                .bottom,
+                player.currentTrack == nil ? 0 : 72,
+                for: .scrollContent)
             .searchable(text: $search, prompt: Text("library.search.prompt"))
             .overlay {
                 if rows.isEmpty && isFiltering {
@@ -178,7 +190,8 @@ struct LibraryView: View {
             }
         }
 
-        // Per Finder abgelegte Archive: ausgepackt wird nur auf Zuruf.
+        // Nur Fehler-/Abbruchfaelle bleiben offen. Normal gefundene ZIPs packt
+        // der Bibliotheksabgleich automatisch aus.
         private var pendingRow: some View {
             VStack(alignment: .leading, spacing: 6) {
                 Label("import.pending.title", systemImage: "shippingbox")

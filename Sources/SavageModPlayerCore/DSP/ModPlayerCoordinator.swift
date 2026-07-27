@@ -78,6 +78,9 @@ public final class ModPlayerCoordinator: ObservableObject {
     // ~15 %; Audio-DSP nur ~3-4 %). Ohne sichtbare Oszis reicht ~5 Hz für Uhr/VU.
     public var visualizersVisible = true {
         didSet {
+            if !visualizersVisible {
+                visualizerState.releaseWaveformBuffers()
+            }
             // Läuft der VU-Timer, bei einem Sichtbarkeitswechsel mit der passenden
             // Frequenz neu aufsetzen (30 Hz sichtbar ↔ 5 Hz kompakt).
             guard oldValue != visualizersVisible, vuUpdateTimer != nil else { return }
@@ -189,7 +192,9 @@ public final class ModPlayerCoordinator: ObservableObject {
         self.channels = (1...voiceCount).map { DSPChannel(index: $0) }
         RenderEngine.configure(channels: self.channels, for: mod)
         self.channelCount = count
-        self.visualizerState.resize(channelCount: count)
+        self.visualizerState.resize(
+            channelCount: count,
+            includeWaveforms: visualizersVisible)
         // Einmal pro Song denselben Sequencer ohne Audio bis zum Endsignal
         // vortakten. Die fruehere Rows*Speed/BPM-Schaetzung ignorierte Bxx,
         // Pattern-Loops, Delays und Tempoaenderungen (Referenz-IT: 01:24 statt

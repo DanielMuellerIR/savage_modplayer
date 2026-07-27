@@ -27,6 +27,8 @@ struct SettingsView: View {
                     librarySection
                     aboutSection
                 }
+                .scrollContentBackground(.hidden)
+                .background(Color.playerBackground)
                 .navigationTitle("tab.settings")
                 .sheet(isPresented: $showImport) { LibraryImportSheet() }
                 .sheet(isPresented: $showReset) { LibraryResetConfirmation(isPresented: $showReset) }
@@ -87,25 +89,19 @@ struct SettingsView: View {
                     }
                 }
 
-                Toggle("settings.visualizers", isOn: settings.binding(\.visualizersEnabled))
-
-                // Bildrate und Kanalzahl haben nur Sinn, wenn ueberhaupt
-                // gezeichnet wird.
-                if settings.visualizersEnabled {
-                    Picker("settings.framerate", selection: settings.binding(\.visualizerFrameRate)) {
-                        ForEach([10, 20, 30], id: \.self) { rate in
-                            Text("settings.framerate.value \(rate)").tag(rate)
-                        }
+                Picker("settings.framerate", selection: settings.binding(\.visualizerFrameRate)) {
+                    ForEach([10, 20, 30], id: \.self) { rate in
+                        Text("settings.framerate.value \(rate)").tag(rate)
                     }
-                    Picker("settings.scopes", selection: settings.binding(\.maxVisibleChannelScopes)) {
-                        ForEach([4, 8, 16, 32], id: \.self) { count in
-                            Text(verbatim: "\(count)").tag(count)
-                        }
-                    }
-                    Text("settings.scopes.hint")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
+                Picker("settings.scopes", selection: settings.binding(\.maxVisibleChannelScopes)) {
+                    ForEach([4, 8, 16, 32], id: \.self) { count in
+                        Text(verbatim: "\(count)").tag(count)
+                    }
+                }
+                Text("settings.scopes.hint")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             } header: {
                 Text("settings.appearance")
             } footer: {
@@ -121,15 +117,6 @@ struct SettingsView: View {
                     showImport = true
                 } label: {
                     Label("import.title", systemImage: "folder.badge.plus")
-                }
-
-                if !library.pendingArchives.isEmpty {
-                    Button {
-                        library.unpackPendingArchives()
-                    } label: {
-                        Label("import.pending.unpack", systemImage: "shippingbox")
-                    }
-                    .disabled(library.isBusy)
                 }
 
                 Button(role: .destructive) {

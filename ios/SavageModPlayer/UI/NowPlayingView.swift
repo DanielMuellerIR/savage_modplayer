@@ -3,17 +3,14 @@ import SwiftUI
 
 // Der Wiedergabe-Tab.
 //
-// Grundsatz dieser Ansicht: Sie muss OHNE Visualisierungen vollstaendig
-// aussehen. Die stehen in den Einstellungen auf "aus", weil ein Oszilloskop,
-// das niemand sieht, trotzdem Akku kostet. Titelbild, Transport, Positionsregler
-// und Statuszeile tragen die Seite deshalb allein; Oszilloskope und VU-Meter
-// kommen nur oben drauf, wenn man sie ausdruecklich einschaltet.
+// Grundsatz dieser Ansicht: Visualisierungen duerfen nur Arbeit verursachen,
+// solange der Nutzer sie wirklich sieht. Titelbild, Transport, Positionsregler
+// und Statuszeile stehen oben; scrollt der Visualizer-Abschnitt in den Viewport,
+// werden Canvas und Wellenformen erzeugt. Beim Herausscrollen verschwinden beide
+// wieder und die Audio-Wiedergabe laeuft unveraendert weiter.
 struct NowPlayingView: View {
     @EnvironmentObject private var model: AppModel
 
-    // Ist die App gerade sichtbar? Kommt von RootView, das den Szenen-Zustand
-    // ohnehin beobachtet.
-    let isSceneActive: Bool
     let onOpenLibrary: () -> Void
 
     var body: some View {
@@ -21,7 +18,6 @@ struct NowPlayingView: View {
             player: model.player,
             settings: model.settings,
             library: model.library,
-            isSceneActive: isSceneActive,
             onOpenLibrary: onOpenLibrary)
     }
 
@@ -31,8 +27,9 @@ struct NowPlayingView: View {
         // Die Bibliothek wird hier NICHT beobachtet, sie wird nur an den
         // Favoriten-Schalter weitergereicht — der beobachtet sie selbst.
         let library: LibraryStore
-        let isSceneActive: Bool
         let onOpenLibrary: () -> Void
+        @State private var tabIsVisible = false
+        @State private var visualizerIsInViewport = false
 
         var body: some View {
             NavigationStack {
@@ -45,6 +42,17 @@ struct NowPlayingView: View {
                 }
                 .navigationTitle("tab.player")
                 .navigationBarTitleDisplayMode(.inline)
+            }
+            // Tabwechsel entfernt eine TabView nicht zwingend sofort aus der
+            // Hierarchie. Deshalb wird Tab- und Scroll-Sichtbarkeit getrennt
+            // gemerkt und bei jeder Aenderung gemeinsam an den Player gemeldet.
+            .onAppear {
+                tabIsVisible = true
+                applyVisualizerVisibility()
+            }
+            .onDisappear {
+                tabIsVisible = false
+                applyVisualizerVisibility()
             }
         }
 
@@ -64,25 +72,32 @@ struct NowPlayingView: View {
         // MARK: - Gewaehlter Titel
 
         private func trackContent(track: TrackRef, mod: Mod) -> some View {
-            ScrollView {
-                VStack(spacing: 20) {
-                    artwork(mod: mod)
-                    titleBlock(track: track, mod: mod)
-                    positionBlock(mod: mod)
-                    transportRow
-                    secondaryRow(track: track)
-                    PlaybackStatusRow(
-                        coordinator: player.coordinator,
-                        positionCount: mod.length,
-                        channelCount: mod.usedChannelCount)
-                    visualizers(mod: mod)
+            GeometryReader { viewport in
+                ScrollView {
+                    LazyVStack(spacing: 20) {
+                        artwork(mod: mod)
+                        titleBlock(track: track, mod: mod)
+                        positionBlock(mod: mod)
+                        transportRow
+                        secondaryRow(track: track)
+                        PlaybackStatusRow(
+                            coordinator: player.coordinator,
+                            positionCount: mod.length,
+                            channelCount: mod.usedChannelCount)
+                        visualizers(
+                            mod: mod,
+                            viewportHeight: viewport.size.height,
+                            availableWidth: min(520, max(1, viewport.size.width - 40)))
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
+                    .frame(maxWidth: 520)
+                    // Im Querformat bleibt der Inhalt mittig statt in die Breite
+                    // gezogen zu werden.
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
-                .frame(maxWidth: 520)
-                // Im Querformat bleibt der Inhalt mittig statt in die Breite
-                // gezogen zu werden.
-                .frame(maxWidth: .infinity)
+                .coordinateSpace(name: VisualizerViewport.coordinateSpace)
+                .background(Color.playerBackground)
             }
         }
 
@@ -93,9 +108,13 @@ struct NowPlayingView: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .fill(LinearGradient(
-                        colors: [Color.accentColor.opacity(0.35), Color.accentColor.opacity(0.05)],
+                        colors: [Color.accentColor.opacity(0.30), Color.playerSurface],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                            .stroke(Color.accentColor.opacity(0.25), lineWidth: 1)
+                    }
                 VStack(spacing: 10) {
                     Image(systemName: "waveform")
                         .font(.system(size: 56, weight: .thin))
@@ -240,17 +259,29 @@ struct NowPlayingView: View {
             return modes[(index + 1) % modes.count]
         }
 
-        // MARK: - Visualisierungen (nur auf Wunsch)
+        // MARK: - Visualisierungen (nur im sichtbaren Scrollbereich)
 
-        @ViewBuilder
-        private func visualizers(mod: Mod) -> some View {
-            if settings.visualizersEnabled && isSceneActive {
-                VisualizerSection(
-                    visualizer: player.coordinator.visualizerState,
-                    channelIndices: visibleChannelIndices(mod: mod),
-                    totalChannels: mod.usedChannelCount,
-                    frameRate: settings.visualizerFrameRate)
-            }
+        private func visualizers(
+            mod: Mod,
+            viewportHeight: CGFloat,
+            availableWidth: CGFloat
+        ) -> some View {
+            VisualizerSection(
+                visualizer: player.coordinator.visualizerState,
+                channelIndices: visibleChannelIndices(mod: mod),
+                totalChannels: mod.usedChannelCount,
+                frameRate: settings.visualizerFrameRate,
+                viewportHeight: viewportHeight,
+                availableWidth: availableWidth,
+                onVisibilityChanged: { visible in
+                    visualizerIsInViewport = visible
+                    applyVisualizerVisibility()
+                })
+        }
+
+        private func applyVisualizerVisibility() {
+            player.setVisualizerSectionVisible(
+                tabIsVisible && visualizerIsInViewport)
         }
 
         // Welche Kanaele gezeichnet werden. Ein IT-Modul haelt bis zu 64 Kanaele
@@ -277,25 +308,72 @@ private struct VisualizerSection: View {
     let channelIndices: [Int]
     let totalChannels: Int
     let frameRate: Int
+    let viewportHeight: CGFloat
+    let availableWidth: CGFloat
+    let onVisibilityChanged: (Bool) -> Void
 
     @State private var isVisible = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        Group {
             if isVisible {
-                MasterScopeView(visualizer: visualizer, frameRate: frameRate)
-                ChannelScopesView(
-                    visualizer: visualizer,
-                    channelIndices: channelIndices,
-                    frameRate: frameRate)
-                if channelIndices.count < totalChannels {
-                    Text("player.scopes.limited \(channelIndices.count) \(totalChannels)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    MasterScopeView(visualizer: visualizer, frameRate: frameRate)
+                    ChannelScopesView(
+                        visualizer: visualizer,
+                        channelIndices: channelIndices,
+                        frameRate: frameRate,
+                        availableWidth: availableWidth)
+                    if channelIndices.count < totalChannels {
+                        Text("player.scopes.limited \(channelIndices.count) \(totalChannels)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+            } else {
+                // Gleiche Hoehe wie der echte Inhalt: beim Ein-/Ausblenden darf
+                // der Scrollbereich nicht springen.
+                Color.clear
             }
         }
-        .onAppear { isVisible = true }
-        .onDisappear { isVisible = false }
+        .frame(height: reservedHeight, alignment: .top)
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: VisualizerFramePreferenceKey.self,
+                    value: proxy.frame(in: .named(VisualizerViewport.coordinateSpace)))
+            }
+        }
+        .onPreferenceChange(VisualizerFramePreferenceKey.self) { frame in
+            let visible = frame.maxY > 0 && frame.minY < viewportHeight
+            setVisible(visible)
+        }
+        .onDisappear { setVisible(false) }
+    }
+
+    private var reservedHeight: CGFloat {
+        let channelHeight = ChannelScopesView.height(
+            channelCount: channelIndices.count,
+            availableWidth: availableWidth)
+        let limitHeight: CGFloat = channelIndices.count < totalChannels ? 22 : 0
+        return 64 + 8 + channelHeight + limitHeight
+    }
+
+    private func setVisible(_ visible: Bool) {
+        guard visible != isVisible else { return }
+        isVisible = visible
+        onVisibilityChanged(visible)
+    }
+}
+
+private enum VisualizerViewport {
+    static let coordinateSpace = "now-playing-scroll"
+}
+
+private struct VisualizerFramePreferenceKey: PreferenceKey {
+    static let defaultValue: CGRect = .null
+
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
     }
 }

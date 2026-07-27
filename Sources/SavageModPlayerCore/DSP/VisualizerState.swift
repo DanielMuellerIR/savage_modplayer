@@ -28,10 +28,26 @@ public final class VisualizerState: ObservableObject {
 
     public init() {}
 
-    // Kanal-abhängige Puffer beim Songwechsel passend dimensionieren.
-    public func resize(channelCount: Int) {
+    // Kanal-abhängige Puffer beim Songwechsel passend dimensionieren. Im
+    // sichtbarkeitsgesteuerten iOS-Modus bleiben die Wellenformen leer, bis der
+    // Visualizer wirklich im Viewport liegt; die Mac-App reicht weiterhin den
+    // Standardwert `true` durch.
+    public func resize(channelCount: Int, includeWaveforms: Bool = true) {
         vuLevels = [Float](repeating: 0, count: channelCount)
-        channelWaveforms = (0..<channelCount).map { _ in [Float](repeating: 0, count: 32) }
+        if includeWaveforms {
+            channelWaveforms = (0..<channelCount).map { _ in [Float](repeating: 0, count: 32) }
+            masterSamples = [Float](repeating: 0, count: 128)
+        } else {
+            releaseWaveformBuffers()
+        }
+    }
+
+    // Die letzten Scope-Bilder sind reine Anzeige-Caches. Sobald kein
+    // Oszilloskop sichtbar ist, duerfen sie ihren Speicher freigeben; Spielzeit,
+    // Gesamtdauer und die billigen VU-Pegel bleiben davon unberuehrt.
+    public func releaseWaveformBuffers() {
+        if !channelWaveforms.isEmpty { channelWaveforms = [] }
+        if !masterSamples.isEmpty { masterSamples = [] }
     }
 
     // Signalisiert den beobachtenden Subviews eine Änderung, die nicht über die

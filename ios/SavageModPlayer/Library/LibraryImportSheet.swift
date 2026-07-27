@@ -99,7 +99,7 @@ struct LibraryImportSheet: View {
             }
         }
 
-        // MARK: - Offene Archive (Weg B)
+        // MARK: - Nach Fehler/Abbruch uebrig gebliebene Archive
 
         @ViewBuilder
         private var pendingSection: some View {

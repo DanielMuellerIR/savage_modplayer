@@ -112,6 +112,18 @@ heißt also wirklich warnungsfrei. Das vollständige Protokoll liegt unter
 `run-tests.sh` sucht sich ohne `SIMULATOR_NAME` das erste verfügbare iPhone.
 Einzelne Suiten über `TEST_FILTER=SavageModPlayerTests/<Klasse>`.
 
+Für einen hörbaren Smoke mit aufwendigen XM-/IT-Modulen den Simulator als
+Release-Build starten:
+
+```
+CONFIGURATION=Release bash ios/scripts/build-simulator.sh
+```
+
+Ein Debug-Build kann bei einem 32-Kanal-XM langsamer als Echtzeit rendern. Dann
+meldet Core Audio `IOWorkLoop: skipping cycle due to overload`, und die Ausgabe
+kratzt trotz korrekter Samples. Debug- und Release-WAV müssen für denselben
+Input byteidentisch bleiben; die Release-Reserve ersetzt nicht den Gerätetest.
+
 Der Kern (`ZipArchiveReader`, `MusicLibrary`, `LibraryImporter`,
 `LibraryReset`) wird **nicht** dort geprüft, sondern in der normalen
 SwiftPM-Suite mit `swift test` — plattformneutral und ohne Simulator. Im

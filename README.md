@@ -79,9 +79,9 @@ If no preview appears:
 - **Background playback and lock screen control**: playback continues while the screen is locked. Title, format, folder, artwork, and elapsed time appear on the lock screen; play, pause, next, previous, the position scrubber, and −15 s / +30 s work from there and from headphone controls. An incoming call pauses and resumes; unplugging headphones pauses instead of switching to the speaker.
 - **Library as a folder tree**: folders start collapsed, the path to the playing track expands automatically, and playback and shuffle run across all folders. Live search, favourites, loop modes, and session restore are included.
 - **Folder import**: pick one folder and everything playable inside is copied into the library with its structure intact. ZIP archives are unpacked, duplicates are skipped, progress is shown, and the import can be cancelled. Files stored in a cloud file provider are downloaded and read through a file coordinator first.
-- **Finder file sharing**: connect the iPhone, open Files in the Finder, and drag whole folders onto the app; the same library appears in the iOS Files app under "On My iPhone". The index is reconciled with the file system on every launch.
-- **Visualizations off by default**: the common case on a phone is music playing with a dark screen, so nothing is computed that nobody sees. Turning them on enables the master oscilloscope, VU meters, and a bounded number of per-channel scopes.
-- **Appearance**: follows the system by default, can be forced to light or dark. German and English.
+- **Finder file sharing**: connect the iPhone, open Files in the Finder, and drag whole folders or ZIP archives onto the app; the same library appears in the iOS Files app under "On My iPhone". The index is reconciled with the file system on every launch, and ZIPs are unpacked automatically.
+- **Visibility-driven visualizations**: scroll down and the master oscilloscope, VU meters, and channel scopes start immediately; scroll away, switch tabs, or lock the screen and their views and waveform caches are discarded. Up to 32 channel scopes use a readable four-column phone or eight-column wide layout.
+- **Appearance**: uses the same restrained blue/cyan and graphite palette and the same app icon as the Mac app. It follows the system by default and can be forced to light or dark. German and English.
 
 ---
 

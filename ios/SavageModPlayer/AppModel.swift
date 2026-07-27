@@ -20,10 +20,9 @@ final class AppModel: ObservableObject {
     // Wiedergabe: Core-Coordinator, Titelwechsel, AudioSession, Now Playing.
     let player: PlaybackEngine
 
-    // Ist die App gerade im Vordergrund und sichtbar? Der eine Schalter, an dem
-    // saemtliche Visualisierungen haengen. Bei gesperrtem Bildschirm laeuft der
-    // Ton weiter, aber es wird nichts mehr gezeichnet und nichts mehr an die
-    // Oberflaeche gemeldet — das spart auf einem Telefon spuerbar Akku.
+    // Ist die App gerade im Vordergrund und sichtbar? Zusammen mit dem
+    // Scroll-Viewport entscheidet dieser Zustand, ob Visualisierungen laufen.
+    // Bei gesperrtem Bildschirm laeuft der Ton weiter, die Scope-Arbeit stoppt.
     @Published private(set) var isSceneActive = true
 
     init() {
@@ -38,6 +37,6 @@ final class AppModel: ObservableObject {
         let active = (phase == .active)
         guard active != isSceneActive else { return }
         isSceneActive = active
-        player.setVisualizersEnabled(active)
+        player.setSceneActive(active)
     }
 }

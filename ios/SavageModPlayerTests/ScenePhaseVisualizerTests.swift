@@ -2,10 +2,11 @@ import XCTest
 import SwiftUI
 @testable import SavageModPlayer
 
-// Belegt den Energiespar-Schalter der App: Visualisierungen laufen nur, wenn
-// die App sichtbar ist UND der Nutzer sie eingeschaltet hat.
+// Belegt den sichtbarkeitsgesteuerten Visualizer der App: Der schnelle Takt
+// laeuft nur, wenn die App sichtbar ist UND der Visualizer-Abschnitt den
+// Scroll-Viewport schneidet.
 //
-// Warum das ein Test wert ist: Der Schalter haengt an zwei unabhaengigen
+// Warum das ein Test wert ist: Der Zustand haengt an zwei unabhaengigen
 // Bedingungen, und beide sind leicht zu vergessen. Faellt eine aus, laeuft der
 // Core dauerhaft im 30-Hz-Takt und berechnet Wellenformen fuer einen dunklen
 // Bildschirm — das merkt man erst am Akku, nicht beim Ausprobieren.
@@ -26,27 +27,23 @@ final class ScenePhaseVisualizerTests: XCTestCase {
         model = nil
     }
 
-    // Voreinstellung: aus. Der Regelfall auf einem Telefon ist "Musik laeuft,
-    // Bildschirm ist dunkel".
-    func testVisualizersAreOffByDefault() {
-        XCTAssertFalse(model.settings.visualizersEnabled)
+    // Ohne sichtbaren Abschnitt bleibt der Core im sparsamen Takt.
+    func testVisualizersAreOffUntilTheirSectionIsVisible() {
         XCTAssertFalse(
             model.player.coordinator.visualizersVisible,
-            "Ohne eingeschaltete Visualisierung darf der Core nicht im schnellen Takt laufen"
+            "Ein Visualizer unterhalb des Viewports darf den schnellen Takt nicht starten"
         )
     }
 
-    // Eingeschaltet und sichtbar: der schnelle Takt darf laufen.
-    func testVisualizersRunWhenEnabledAndSceneIsActive() {
-        model.settings.visualizersEnabled = true
-        model.player.applySettings()
+    // In den Abschnitt gescrollt und App sichtbar: der schnelle Takt darf laufen.
+    func testVisualizersRunWhenSectionAndSceneAreVisible() {
+        model.player.setVisualizerSectionVisible(true)
         XCTAssertTrue(model.player.coordinator.visualizersVisible)
     }
 
     // Der eigentliche Punkt: App verschwindet, Visualisierung steht still.
     func testVisualizersStopWhenSceneLeavesForeground() {
-        model.settings.visualizersEnabled = true
-        model.player.applySettings()
+        model.player.setVisualizerSectionVisible(true)
         XCTAssertTrue(model.player.coordinator.visualizersVisible)
 
         model.scenePhaseChanged(to: .background)
@@ -62,14 +59,42 @@ final class ScenePhaseVisualizerTests: XCTestCase {
         XCTAssertTrue(model.player.coordinator.visualizersVisible)
     }
 
-    // Ausgeschaltet bleibt ausgeschaltet, auch wenn die App sichtbar wird.
-    func testSceneActivationDoesNotOverrideTheSetting() {
-        model.settings.visualizersEnabled = false
-        model.player.applySettings()
-
-        model.scenePhaseChanged(to: .background)
-        model.scenePhaseChanged(to: .active)
-
+    // Aus dem Abschnitt herausgescrollt: sofort wieder sparsam.
+    func testLeavingVisualizerSectionStopsFastUpdates() {
+        model.player.setVisualizerSectionVisible(true)
+        XCTAssertTrue(model.player.coordinator.visualizersVisible)
+        model.player.setVisualizerSectionVisible(false)
         XCTAssertFalse(model.player.coordinator.visualizersVisible)
+    }
+
+    // Die Scope-Puffer sind reine Anzeige-Caches und werden beim Ausblenden
+    // wirklich freigegeben, nicht nur nicht mehr gezeichnet.
+    func testHiddenVisualizersReleaseWaveformBuffers() {
+        let coordinator = model.player.coordinator
+        coordinator.visualizersVisible = true
+        coordinator.visualizerState.resize(channelCount: 32)
+        XCTAssertEqual(coordinator.visualizerState.channelWaveforms.count, 32)
+        XCTAssertEqual(coordinator.visualizerState.masterSamples.count, 128)
+
+        coordinator.visualizersVisible = false
+
+        XCTAssertTrue(coordinator.visualizerState.channelWaveforms.isEmpty)
+        XCTAssertTrue(coordinator.visualizerState.masterSamples.isEmpty)
+    }
+
+    func testUpToThirtyTwoChannelScopesAreTheDefault() {
+        XCTAssertEqual(model.settings.maxVisibleChannelScopes, 32)
+    }
+
+    // Das Raster darf auf dem Telefon nicht wieder zu einer einzigen, kaum
+    // lesbaren Zeile zusammenschrumpfen. 32 Kanaele ergeben dort acht Zeilen
+    // mit je vier Scopes; ein breites Layout verwendet vier Zeilen zu acht.
+    func testThirtyTwoScopesUseFourPhoneOrEightWideColumns() {
+        XCTAssertEqual(
+            ChannelScopesView.height(channelCount: 32, availableWidth: 351),
+            600)
+        XCTAssertEqual(
+            ChannelScopesView.height(channelCount: 32, availableWidth: 700),
+            296)
     }
 }

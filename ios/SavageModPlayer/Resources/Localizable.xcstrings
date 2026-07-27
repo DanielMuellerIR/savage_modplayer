@@ -126,13 +126,13 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "%lld Archive liegen unausgepackt in der Bibliothek."
+            "value": "%lld Archive konnten nicht automatisch ausgepackt werden."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%lld archives are waiting to be unpacked."
+            "value": "%lld archives could not be unpacked automatically."
           }
         }
       }
@@ -143,13 +143,13 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ausgepackt wird nur auf Zuruf — bei großen Archiven dauert das."
+            "value": "ZIPs werden normalerweise automatisch ausgepackt. Diese Archive blieben nach einem Fehler oder Abbruch übrig."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Unpacking only happens on request — large archives take a while."
+            "value": "ZIPs are normally unpacked automatically. These archives remain after an error or cancellation."
           }
         }
       }
@@ -160,13 +160,13 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gefundene Archive"
+            "value": "Nicht ausgepackte Archive"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Archives Found"
+            "value": "Archives Not Unpacked"
           }
         }
       }
@@ -177,13 +177,13 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Archive auspacken"
+            "value": "Erneut versuchen"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Unpack Archives"
+            "value": "Try Again"
           }
         }
       }
@@ -1333,13 +1333,13 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Obergrenze für gleichzeitig gezeichnete Kanäle. Ein IT-Modul kann 64 haben — die sind auf einem Telefon weder lesbar noch bezahlbar."
+            "value": "Bis zu 32 Kanäle erscheinen in einem mehrzeiligen Raster. Der Wert begrenzt umfangreiche IT-Module."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Upper limit for channels drawn at the same time. An IT module can have 64 — neither readable nor affordable on a phone."
+            "value": "Up to 32 channels appear in a multi-row grid. This value limits large IT modules."
           }
         }
       }
@@ -1412,36 +1412,19 @@
         }
       }
     },
-    "settings.visualizers": {
-      "extractionState": "manual",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Visualisierungen"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Visualisations"
-          }
-        }
-      }
-    },
     "settings.visualizers.hint": {
       "extractionState": "manual",
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ausgeschaltet spart Akku: Oszilloskope und VU-Meter werden dann gar nicht erst berechnet. Am Klang ändert das nichts."
+            "value": "Oszilloskope starten automatisch beim Hineinscrollen und geben Views wie Wellenform-Caches beim Herausscrollen wieder frei. Am Klang ändert das nichts."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Switched off saves battery: oscilloscopes and VU meters are not even computed. The sound stays exactly the same."
+            "value": "Oscilloscopes start automatically when scrolled into view and release their views and waveform caches when scrolled away. The sound stays exactly the same."
           }
         }
       }

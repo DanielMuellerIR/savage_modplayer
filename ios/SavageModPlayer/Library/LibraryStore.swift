@@ -47,9 +47,11 @@ final class LibraryStore: ObservableObject {
     @Published private(set) var progress: ImportProgress?
     // Abschlussbericht des letzten Import- oder Auspack-Vorgangs.
     @Published private(set) var lastReport: ImportReport?
-    // Archive, die per Finder oder Dateien-App in der Bibliothek gelandet sind.
-    // Ausgepackt wird erst auf Zuruf — bei grossen Archiven dauert das, und
-    // ungefragt darf die App den Nutzer damit nicht ueberraschen.
+    // Archive, die per Finder oder Dateien-App in der Bibliothek gelandet sind
+    // und beim automatischen Auspacken uebrig blieben. Im Normalfall ist diese
+    // Liste leer: der Abgleich behandelt ZIPs wie die Mac-App als Ordner und
+    // packt sie direkt aus. Sichtbar bleiben nur Abbruch- und Fehlerfaelle, damit
+    // der Nutzer sie nach Beseitigung der Ursache erneut versuchen kann.
     @Published private(set) var pendingArchives: [String] = []
     // Fehlermeldung fuer einen Hinweis-Dialog. Die Texte kommen teils aus dem
     // Core und sind dort deutsch formuliert.
@@ -84,8 +86,9 @@ final class LibraryStore: ObservableObject {
     private var generation = 0
     private var filterCache: (key: FilterKey, tracks: [TrackRef], tree: PlaylistScanner.FolderNode?)?
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, library: MusicLibrary? = nil) {
         self.defaults = defaults
+        self.library = library
         let stored = defaults.stringArray(forKey: Self.favoritesDefaultsKey) ?? []
         favorites = Set(stored)
     }
@@ -152,6 +155,17 @@ final class LibraryStore: ObservableObject {
             if let snapshot = outcome.snapshot { self.apply(snapshot) }
             if outcome.archivesComplete { self.pendingArchives = outcome.archives }
             self.errorMessage = outcome.errorMessage ?? self.errorMessage
+
+            // ZIPs aus Finder-Dateifreigabe oder Dateien-App verhalten sich wie
+            // importierte Ordner: finden, automatisch streamend auspacken und
+            // den resultierenden Baum anzeigen. Der Sicherheitsfilter und der
+            // konstante Speicherbedarf bleiben im Core identisch zum manuellen
+            // Weg. Nach Abbruch wird nicht heimlich weitergearbeitet.
+            if outcome.archivesComplete,
+               !outcome.archives.isEmpty,
+               !flag.isSet {
+                await self.unpackArchives(in: library)
+            }
             self.endOperation()
         }
     }
@@ -220,7 +234,6 @@ final class LibraryStore: ObservableObject {
     func unpackPendingArchives() {
         guard !pendingArchives.isEmpty, !isBusy else { return }
         beginOperation(.unpacking)
-        lastReport = nil
 
         currentTask = Task { [weak self] in
             guard let self else { return }
@@ -228,42 +241,52 @@ final class LibraryStore: ObservableObject {
                 self.endOperation()
                 return
             }
-            let flag = self.cancellation
-            let relay = self.makeProgressRelay()
-
-            let outcome: UnpackOutcome = await self.onWorker {
-                let reader = FileProviderReader(isCancelled: { flag.isSet })
-                let importer = LibraryImporter(library: library, coordinatedRead: reader.hook)
-                do {
-                    let report = try importer.unpackPendingArchives(
-                        progress: { relay.send($0) },
-                        isCancelled: { flag.isSet })
-                    // Der Abgleich danach sagt, was uebrig blieb: ausgepackte
-                    // Archive sind weg, gescheiterte liegen noch da. Nach einem
-                    // Abbruch liefert er nur einen Teil und wird ignoriert.
-                    let rescan = try? library.rescan(isCancelled: { flag.isSet })
-                    return UnpackOutcome(
-                        report: report,
-                        archives: rescan?.archivesFound ?? [],
-                        archivesComplete: rescan.map { !$0.wasCancelled } ?? false,
-                        snapshot: LibrarySnapshot.make(from: library),
-                        errorMessage: nil)
-                } catch {
-                    return UnpackOutcome(
-                        report: nil,
-                        archives: [],
-                        archivesComplete: false,
-                        snapshot: LibrarySnapshot.make(from: library),
-                        errorMessage: LibraryStore.describe(error))
-                }
-            }
-
-            self.apply(outcome.snapshot)
-            self.lastReport = outcome.report.map(LibraryStore.sanitized)
-            if outcome.archivesComplete { self.pendingArchives = outcome.archives }
-            self.errorMessage = outcome.errorMessage ?? self.errorMessage
+            await self.unpackArchives(in: library)
             self.endOperation()
         }
+    }
+
+    // Gemeinsamer Auspackpfad fuer den automatischen Abgleich und den
+    // Wiederholen-Knopf nach einem Fehler. Der Aufrufer besitzt bereits den
+    // exklusiven Bibliotheksvorgang; hier wird deshalb kein zweiter Task
+    // gestartet und `isBusy` bleibt lueckenlos wahr.
+    private func unpackArchives(in library: MusicLibrary) async {
+        activity = .unpacking
+        lastReport = nil
+
+        let flag = cancellation
+        let relay = makeProgressRelay()
+        let outcome: UnpackOutcome = await onWorker {
+            let reader = FileProviderReader(isCancelled: { flag.isSet })
+            let importer = LibraryImporter(library: library, coordinatedRead: reader.hook)
+            do {
+                let report = try importer.unpackPendingArchives(
+                    progress: { relay.send($0) },
+                    isCancelled: { flag.isSet })
+                // Der Abgleich danach sagt, was uebrig blieb: ausgepackte
+                // Archive sind weg, gescheiterte liegen noch da. Nach einem
+                // Abbruch liefert er nur einen Teil und wird ignoriert.
+                let rescan = try? library.rescan(isCancelled: { flag.isSet })
+                return UnpackOutcome(
+                    report: report,
+                    archives: rescan?.archivesFound ?? [],
+                    archivesComplete: rescan.map { !$0.wasCancelled } ?? false,
+                    snapshot: LibrarySnapshot.make(from: library),
+                    errorMessage: nil)
+            } catch {
+                return UnpackOutcome(
+                    report: nil,
+                    archives: [],
+                    archivesComplete: false,
+                    snapshot: LibrarySnapshot.make(from: library),
+                    errorMessage: LibraryStore.describe(error))
+            }
+        }
+
+        apply(outcome.snapshot)
+        lastReport = outcome.report.map(LibraryStore.sanitized)
+        if outcome.archivesComplete { pendingArchives = outcome.archives }
+        errorMessage = outcome.errorMessage ?? errorMessage
     }
 
     // MARK: - Abbrechen

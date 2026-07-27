@@ -69,9 +69,11 @@ final class PlaybackEngine: ObservableObject {
     // spiegeln wir sie hier, um unnoetige Aufrufe zu vermeiden.
     private var appliedVolume: Float = -1
 
-    // Ist die App gerade sichtbar? Wird vom Szenen-Schalter gesetzt und zusammen
-    // mit `settings.visualizersEnabled` ausgewertet.
+    // Der schnelle Visualizer-Takt braucht zwei gleichzeitig wahre Bedingungen:
+    // Die App ist vorn UND der Visualizer-Abschnitt schneidet den sichtbaren
+    // Scrollbereich. Die View meldet die zweite Bedingung direkt.
     private var sceneIsActive = true
+    private var visualizerSectionIsVisible = false
 
     // MARK: - Aufbau
 
@@ -197,8 +199,6 @@ final class PlaybackEngine: ObservableObject {
             appliedVolume = volume
             coordinator.setVolume(volume)
         }
-        // Der Visualisierungs-Schalter steht ebenfalls in den Einstellungen, also
-        // wirkt er hier sofort und nicht erst beim naechsten Szenenwechsel.
         applyVisualizerState()
     }
 
@@ -453,7 +453,7 @@ final class PlaybackEngine: ObservableObject {
         coordinator.toggleSolo(channelIndex: channelIndex)
     }
 
-    // MARK: - Szenen-Schalter
+    // MARK: - Sichtbarkeit der Visualisierungen
 
     // false = App im Hintergrund oder Bildschirm gesperrt.
     //
@@ -464,19 +464,26 @@ final class PlaybackEngine: ObservableObject {
     // sondern die 30 Zustandsaenderungen pro Sekunde, die durch die Oberflaeche
     // laufen. Die ausfuehrliche Begruendung steht bei `visualizersVisible` in
     // ModPlayerCoordinator.swift.
-    // Der Aufrufer meldet hier nur, ob die App gerade sichtbar ist. Ob wirklich
-    // gezeichnet wird, entscheidet zusaetzlich der Schalter in den Einstellungen
-    // — und der steht bewusst auf AUS. Der uebliche Fall ist "Musik laeuft,
-    // Bildschirm ist aus"; dann soll nichts berechnet werden, was niemand sieht.
-    func setVisualizersEnabled(_ enabled: Bool) {
-        sceneIsActive = enabled
+    func setSceneActive(_ active: Bool) {
+        guard sceneIsActive != active else { return }
+        sceneIsActive = active
         applyVisualizerState()
     }
 
-    // Sichtbare App UND eingeschaltete Visualisierung — nur dann laeuft der
+    // Kommt direkt von der Geometrie des Wiedergabe-Tabs. Beim Herausscrollen
+    // verschwinden Timeline-/Canvas-Views und die Wellenform-Caches werden im
+    // Core freigegeben; beim Hineinscrollen beginnt der naechste Tick sofort
+    // wieder mit echten Samples.
+    func setVisualizerSectionVisible(_ visible: Bool) {
+        guard visualizerSectionIsVisible != visible else { return }
+        visualizerSectionIsVisible = visible
+        applyVisualizerState()
+    }
+
+    // Sichtbare App UND sichtbarer Scrollabschnitt — nur dann laeuft der
     // schnelle Takt des Cores.
     private func applyVisualizerState() {
-        let active = sceneIsActive && settings.visualizersEnabled
+        let active = sceneIsActive && visualizerSectionIsVisible
         guard coordinator.visualizersVisible != active else { return }
         coordinator.visualizersVisible = active
     }

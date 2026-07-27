@@ -164,10 +164,12 @@ Vor einer betroffenen Änderung gezielt [docs/testing.md](docs/testing.md) lesen
   generische Infokarte.
 - Auf iOS steht die Bibliothek in `Documents/`, ist also für den Nutzer sichtbar
   und veränderbar. Der Start gleicht deshalb immer mit dem Dateisystem ab;
-  per Finder abgelegte Archive werden gemeldet und erst auf Zuruf ausgepackt.
-- Visualisierungen der iPhone-App sind **standardmäßig aus**. Der Regelfall ist
-  „Musik läuft, Bildschirm ist aus"; der Schalter senkt den Update-Takt des
-  Cores von 30 Hz auf ~5 Hz. Der Now-Playing-Tab muss ohne sie vollständig sein.
+  per Finder abgelegte ZIPs werden dabei automatisch streamend ausgepackt.
+- Visualisierungen der iPhone-App sind **sichtbarkeitsgesteuert**. Scrollt ihr
+  Abschnitt in den Viewport, laufen Canvas und Core sofort; beim Herausscrollen,
+  Tabwechsel oder Sperren verschwinden die Views, die Wellenform-Caches werden
+  freigegeben und der Core sinkt von 30 Hz auf ~5 Hz. Kanal-Oszilloskope stehen
+  in einem 4-/8-spaltigen Raster und sind auf 32 sichtbare Kanäle begrenzt.
 
 Die IT-Implementierung M0–M10 ist abgeschlossen. Dauerhafte Semantik und
 Capability-Grenzen sind projektextern dokumentiert. Historische

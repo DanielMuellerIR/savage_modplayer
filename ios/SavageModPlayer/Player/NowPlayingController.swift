@@ -242,15 +242,17 @@ final class NowPlayingController {
     }
 
     private static func drawArtwork(label: String, size: CGSize) -> UIImage {
-        let accent = UIColor(red: 0.24, green: 0.90, blue: 0.71, alpha: 1.0)
+        // Dunkler Mac-Akzent (#5CB3C2), damit App und Sperrbildschirm dieselbe
+        // ruhige Produktfarbe statt des frueheren Neon-Gruens tragen.
+        let accent = UIColor(red: 0.36, green: 0.70, blue: 0.76, alpha: 1.0)
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { context in
             let cg = context.cgContext
 
-            // Hintergrund: senkrechter Verlauf von fast schwarz zu tiefem Gruen.
+            // Hintergrund: dieselben Graphitflaechen wie das dunkle Mac-Design.
             let colors = [
-                UIColor(red: 0.04, green: 0.10, blue: 0.09, alpha: 1.0).cgColor,
-                UIColor(red: 0.01, green: 0.03, blue: 0.04, alpha: 1.0).cgColor
+                UIColor(red: 0.075, green: 0.082, blue: 0.095, alpha: 1.0).cgColor,
+                UIColor(red: 0.020, green: 0.024, blue: 0.030, alpha: 1.0).cgColor
             ] as CFArray
             if let gradient = CGGradient(
                 colorsSpace: CGColorSpaceCreateDeviceRGB(),

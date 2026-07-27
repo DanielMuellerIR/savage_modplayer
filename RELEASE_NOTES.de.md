@@ -1,6 +1,6 @@
-Savage Mod Player 1.6.0 ergänzt eine native iPhone-App. Sie spielt MOD, S3M, XM
-und IT mit derselben Swift-Engine wie die macOS-App, läuft bei gesperrtem
-Bildschirm weiter und nimmt ganze Sammlungsordner auf einen Rutsch auf.
+Savage Mod Player 1.6.1 verfeinert die native iPhone-App mit automatischer
+ZIP-Verarbeitung, sichtbarkeitsgesteuerten Visualisierungen, einem lesbaren
+mehrzeiligen Kanalraster und derselben ruhigen Gestaltung wie die Mac-App.
 
 ## iPhone-App
 
@@ -19,13 +19,16 @@ Bildschirm weiter und nimmt ganze Sammlungsordner auf einen Rutsch auf.
   zugeklappt, der Pfad zum laufenden Titel klappt automatisch auf, und Wiedergabe
   wie Zufallswiedergabe laufen über alle Ordner. Live-Suche, Favoriten,
   Loop-Modi und Sitzungswiederherstellung arbeiten wie auf dem Desktop.
-- Visualisierungen sind standardmäßig aus. Der Regelfall auf einem Telefon ist
-  „Musik läuft, Bildschirm ist dunkel", und dann soll nichts berechnet werden,
-  was niemand sieht. Eingeschaltet gibt es Master-Oszilloskop, VU-Meter und eine
-  begrenzte Zahl von Kanal-Oszilloskopen.
+- Visualisierungen brauchen keinen Ein-/Aus-Schalter mehr. Sie starten, sobald
+  ihr Abschnitt in den Scrollbereich kommt, und stoppen beim Herausscrollen,
+  Tabwechsel oder Sperren. Canvas-Views und Wellenform-Caches werden im
+  unsichtbaren Zustand freigegeben. Bis zu 32 Kanal-Oszilloskope stehen auf dem
+  iPhone in vier, auf breiten Layouts in acht Spalten statt gequetscht in einer
+  Zeile.
 - PAL/NTSC-Takt, LED-Filter, Hi-Fi-Interpolation und Stereo-Separation sind
-  vorhanden. Das Erscheinungsbild folgt dem System und lässt sich fest auf hell
-  oder dunkel stellen. Deutsch und Englisch werden beide unterstützt.
+  vorhanden. Das Erscheinungsbild nutzt nun die Blau-/Cyan-/Graphit-Palette der
+  Mac-App; das iOS-Asset ist als echtes PNG aus derselben Icon-Quelle verpackt.
+  Es folgt dem System und lässt sich fest auf hell oder dunkel stellen.
 
 ## Musik auf das Gerät bekommen
 
@@ -39,7 +42,9 @@ Bildschirm weiter und nimmt ganze Sammlungsordner auf einen Rutsch auf.
   ganze Ordner auf die App ziehen. Dieselbe Bibliothek erscheint in der
   iOS-Dateien-App unter „Auf meinem iPhone". Die App gleicht ihren Index bei
   jedem Start mit dem Dateisystem ab, sodass von außen abgelegte oder gelöschte
-  Dateien richtig ankommen.
+  Dateien richtig ankommen. Dort gefundene ZIP-Archive werden automatisch
+  ausgepackt statt auf einen separaten Knopf zu warten; nur fehlgeschlagene oder
+  abgebrochene Archive bleiben zum erneuten Versuch stehen.
 - **Bibliothek zurücksetzen:** eine zweistufige Bestätigung löscht Titel, Index
   und zwischengespeicherte Extrakte; Favoriten können erhalten bleiben.
 
