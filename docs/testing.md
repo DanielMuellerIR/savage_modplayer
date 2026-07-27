@@ -173,6 +173,10 @@ Prüfliste am Gerät:
    der Archivgröße wachsen; die App darf nicht vom System beendet werden.
 6. **Dauerlauf.** Ein anspruchsvolles IT-Modul mindestens zehn Minuten laufen
    lassen, davon einen Teil bei gesperrtem Bildschirm: keine Aussetzer.
+7. **Visualisierungen.** Im Wiedergabe-Tab bis zu den Visualisierungen scrollen:
+   Pegel, Master- und Kanal-Oszilloskope starten sofort. Wieder hochscrollen,
+   kurz in einen anderen Tab wechseln und zurückkehren; beim erneuten
+   Sichtbarwerden starten alle drei Anzeigen wieder.
 
 ## Release und Notarisierung
 

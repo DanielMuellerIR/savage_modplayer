@@ -43,7 +43,9 @@ struct RootView: View {
                     .tabItem { Label("tab.library", systemImage: "music.note.list") }
                     .tag(Tab.library)
 
-                NowPlayingView { selection = .library }
+                NowPlayingView(isSelected: selection == .player) {
+                    selection = .library
+                }
                     .tabItem { Label("tab.player", systemImage: "waveform") }
                     .tag(Tab.player)
 

@@ -41,6 +41,43 @@ final class ScenePhaseVisualizerTests: XCTestCase {
         XCTAssertTrue(model.player.coordinator.visualizersVisible)
     }
 
+    // TabView behaelt seine Kinder am Leben. Deshalb darf die Sichtbarkeit des
+    // Abschnitts allein nicht genuegen; umgekehrt muss die Kombination aus
+    // aktivem Tab und sichtbarem Abschnitt den Core wirklich einschalten.
+    func testVisualizerActivationRequiresSelectedTabAndVisibleSection() {
+        XCTAssertFalse(
+            VisualizerActivation.shouldRun(
+                tabSelected: false,
+                sectionVisible: false))
+        XCTAssertFalse(
+            VisualizerActivation.shouldRun(
+                tabSelected: true,
+                sectionVisible: false))
+        XCTAssertFalse(
+            VisualizerActivation.shouldRun(
+                tabSelected: false,
+                sectionVisible: true))
+        XCTAssertTrue(
+            VisualizerActivation.shouldRun(
+                tabSelected: true,
+                sectionVisible: true))
+    }
+
+    // Beim Sperren bleiben Tab und Scrollposition erhalten. Die Canvas-Views
+    // muessen trotzdem aus der Hierarchie verschwinden, nicht nur ihre Puffer.
+    func testVisualizerCanvasRequiresActiveScene() {
+        XCTAssertFalse(
+            VisualizerActivation.shouldRender(
+                tabSelected: true,
+                sceneActive: false,
+                sectionVisible: true))
+        XCTAssertTrue(
+            VisualizerActivation.shouldRender(
+                tabSelected: true,
+                sceneActive: true,
+                sectionVisible: true))
+    }
+
     // Der eigentliche Punkt: App verschwindet, Visualisierung steht still.
     func testVisualizersStopWhenSceneLeavesForeground() {
         model.player.setVisualizerSectionVisible(true)

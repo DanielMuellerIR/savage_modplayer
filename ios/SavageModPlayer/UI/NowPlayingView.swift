@@ -11,6 +11,7 @@ import SwiftUI
 struct NowPlayingView: View {
     @EnvironmentObject private var model: AppModel
 
+    let isSelected: Bool
     let onOpenLibrary: () -> Void
 
     var body: some View {
@@ -18,6 +19,8 @@ struct NowPlayingView: View {
             player: model.player,
             settings: model.settings,
             library: model.library,
+            isSelected: isSelected,
+            sceneIsActive: model.isSceneActive,
             onOpenLibrary: onOpenLibrary)
     }
 
@@ -27,8 +30,9 @@ struct NowPlayingView: View {
         // Die Bibliothek wird hier NICHT beobachtet, sie wird nur an den
         // Favoriten-Schalter weitergereicht — der beobachtet sie selbst.
         let library: LibraryStore
+        let isSelected: Bool
+        let sceneIsActive: Bool
         let onOpenLibrary: () -> Void
-        @State private var tabIsVisible = false
         @State private var visualizerIsInViewport = false
 
         var body: some View {
@@ -43,17 +47,12 @@ struct NowPlayingView: View {
                 .navigationTitle("tab.player")
                 .navigationBarTitleDisplayMode(.inline)
             }
-            // Tabwechsel entfernt eine TabView nicht zwingend sofort aus der
-            // Hierarchie. Deshalb wird Tab- und Scroll-Sichtbarkeit getrennt
-            // gemerkt und bei jeder Aenderung gemeinsam an den Player gemeldet.
-            .onAppear {
-                tabIsVisible = true
-                applyVisualizerVisibility()
-            }
-            .onDisappear {
-                tabIsVisible = false
-                applyVisualizerVisibility()
-            }
+            // TabView behaelt nicht ausgewaehlte Tabs im Speicher. Der
+            // Auswahlzustand kommt deshalb ausdruecklich von RootView; auf
+            // onAppear/onDisappear allein ist hier kein Verlass.
+            .onAppear { applyVisualizerVisibility() }
+            .onChange(of: isSelected) { _, _ in applyVisualizerVisibility() }
+            .onDisappear { player.setVisualizerSectionVisible(false) }
         }
 
         // MARK: - Kein Titel gewaehlt
@@ -271,6 +270,8 @@ struct NowPlayingView: View {
                 channelIndices: visibleChannelIndices(mod: mod),
                 totalChannels: mod.usedChannelCount,
                 frameRate: settings.visualizerFrameRate,
+                tabSelected: isSelected,
+                sceneIsActive: sceneIsActive,
                 viewportHeight: viewportHeight,
                 availableWidth: availableWidth,
                 onVisibilityChanged: { visible in
@@ -281,7 +282,9 @@ struct NowPlayingView: View {
 
         private func applyVisualizerVisibility() {
             player.setVisualizerSectionVisible(
-                tabIsVisible && visualizerIsInViewport)
+                VisualizerActivation.shouldRun(
+                    tabSelected: isSelected,
+                    sectionVisible: visualizerIsInViewport))
         }
 
         // Welche Kanaele gezeichnet werden. Ein IT-Modul haelt bis zu 64 Kanaele
@@ -308,6 +311,8 @@ private struct VisualizerSection: View {
     let channelIndices: [Int]
     let totalChannels: Int
     let frameRate: Int
+    let tabSelected: Bool
+    let sceneIsActive: Bool
     let viewportHeight: CGFloat
     let availableWidth: CGFloat
     let onVisibilityChanged: (Bool) -> Void
@@ -316,7 +321,11 @@ private struct VisualizerSection: View {
 
     var body: some View {
         Group {
-            if isVisible {
+            if VisualizerActivation.shouldRender(
+                tabSelected: tabSelected,
+                sceneActive: sceneIsActive,
+                sectionVisible: isVisible
+            ) {
                 VStack(alignment: .leading, spacing: 8) {
                     MasterScopeView(visualizer: visualizer, frameRate: frameRate)
                     ChannelScopesView(
@@ -337,17 +346,9 @@ private struct VisualizerSection: View {
             }
         }
         .frame(height: reservedHeight, alignment: .top)
-        .background {
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: VisualizerFramePreferenceKey.self,
-                    value: proxy.frame(in: .named(VisualizerViewport.coordinateSpace)))
-            }
-        }
-        .onPreferenceChange(VisualizerFramePreferenceKey.self) { frame in
-            let visible = frame.maxY > 0 && frame.minY < viewportHeight
-            setVisible(visible)
-        }
+        .modifier(ScrollVisibilityObserver(
+            viewportHeight: viewportHeight,
+            onVisibilityChanged: setVisible))
         .onDisappear { setVisible(false) }
     }
 
@@ -370,10 +371,45 @@ private enum VisualizerViewport {
     static let coordinateSpace = "now-playing-scroll"
 }
 
-private struct VisualizerFramePreferenceKey: PreferenceKey {
-    static let defaultValue: CGRect = .null
+// Die App unterstuetzt iOS 17, waehrend SwiftUI erst ab iOS 18 eine eigene
+// Scroll-Sichtbarkeits-API anbietet. Auf aktuellen Geraeten verwenden wir diese
+// direkte Quelle; iOS 17 bekommt dieselbe Aussage ueber onGeometryChange. Der
+// fruehere PreferenceKey aus einem LazyVStack lieferte auf echten Geraeten
+// nicht verlaesslich ein erstes sichtbares Rechteck und liess alle Scopes leer.
+private struct ScrollVisibilityObserver: ViewModifier {
+    let viewportHeight: CGFloat
+    let onVisibilityChanged: (Bool) -> Void
 
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        value = nextValue()
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollVisibilityChange(threshold: 0.01) { visible in
+                onVisibilityChanged(visible)
+            }
+        } else {
+            content.onGeometryChange(for: Bool.self) { proxy in
+                let frame = proxy.frame(in: .named(VisualizerViewport.coordinateSpace))
+                return frame.maxY > 0 && frame.minY < viewportHeight
+            } action: { visible in
+                onVisibilityChanged(visible)
+            }
+        }
+    }
+}
+
+// Kleine, separat testbare Wahrheitstabellen fuer Tab, Viewport und
+// Szenenzustand. Das verhindert sowohl tote Anzeigen im aktiven Tab als auch
+// weiterlaufende Wellenform-Caches oder Canvas-Views im Hintergrund.
+enum VisualizerActivation {
+    static func shouldRun(tabSelected: Bool, sectionVisible: Bool) -> Bool {
+        tabSelected && sectionVisible
+    }
+
+    static func shouldRender(
+        tabSelected: Bool,
+        sceneActive: Bool,
+        sectionVisible: Bool
+    ) -> Bool {
+        tabSelected && sceneActive && sectionVisible
     }
 }

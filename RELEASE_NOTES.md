@@ -1,6 +1,6 @@
-Savage Mod Player 1.6.1 refines the native iPhone app with automatic ZIP
-handling, viewport-driven visualizations, a readable multi-row channel layout,
-and the same restrained visual identity as the Mac app.
+Savage Mod Player 1.6.2 fixes viewport activation of the native iPhone
+visualizers while retaining automatic ZIP handling, a readable multi-row
+channel layout, and the Mac app's restrained visual identity.
 
 ## iPhone app
 
@@ -15,6 +15,10 @@ and the same restrained visual identity as the Mac app.
   incoming call pauses and resumes, unplugging headphones pauses instead of
   switching to the speaker, and a media services restart rebuilds the engine
   including the low-pass node used by the LED filter.
+- Visualizer activation on physical iPhones no longer depends on unreliable
+  lazy-stack lifecycle callbacks. Tab selection is tracked explicitly, and
+  scroll visibility uses the native iOS 18 mechanism with an iOS 17 geometry
+  fallback.
 - The library is a real folder tree, not a flat list. Folders start collapsed,
   the path to the playing track expands automatically, and playback and shuffle
   run across all folders. Live search, favourites, loop modes, and session
