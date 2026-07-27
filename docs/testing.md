@@ -67,6 +67,8 @@ Consumer muss sauber als `outputClosed` enden.
 
 `bash build_app.sh` baut die Release-App und die Quick-Look-Appex. Ein bloßes
 `swift build` deckt Extension, Signatur und Bundle-Integration nicht ab.
+`python3 Tests/ui_source_tests.py` schützt zusätzlich die Pflichtbedienelemente
+des kompakten Footers; der sichtbare Fenster-Smoke bleibt trotzdem erforderlich.
 
 Headless prüfen:
 
@@ -87,6 +89,102 @@ Scrubbing und Wiedergabe müssen funktionieren. Vor GUI-Fokus Daniel fragen.
 Der Provider muss eine temporäre WAV-Datei und `QLPreviewReply(fileURL:)`
 verwenden. `dataOfContentType: .wav` zeigt nur die generische Info-Karte. Die
 Appex zuerst sandboxed mit Entitlements signieren, danach die App ohne `--deep`.
+
+## iOS-App
+
+Die iPhone-App liegt unter `ios/` und benutzt dasselbe `SavageModPlayerCore` wie
+Mac-App und CLI. Das Projekt ist eingecheckt und arbeitet mit
+`PBXFileSystemSynchronizedRootGroup` (`objectVersion 77`, Xcode 16 oder neuer):
+neue Swift-Dateien unter `ios/SavageModPlayer/` landen ohne pbxproj-Edit im
+Target. Ein Zusammenführungskonflikt in `project.pbxproj` ist damit die Ausnahme,
+nicht der Normalfall.
+
+Headless prüfen:
+
+```
+bash ios/scripts/build-simulator.sh    # Build, bricht bei eigenen Warnungen ab
+bash ios/scripts/run-tests.sh          # XCTest im Simulator
+```
+
+`build-simulator.sh` filtert Warnungen auf den eigenen Quellbaum (`ios/` und
+`Sources/`) und endet mit Exit 3, wenn dort welche auftauchen. Ein grüner Lauf
+heißt also wirklich warnungsfrei. Das vollständige Protokoll liegt unter
+`ios/build/` und ist gitignoriert.
+
+`run-tests.sh` sucht sich ohne `SIMULATOR_NAME` das erste verfügbare iPhone.
+Einzelne Suiten über `TEST_FILTER=SavageModPlayerTests/<Klasse>`.
+
+Für einen hörbaren Smoke mit aufwendigen XM-/IT-Modulen den Simulator als
+Release-Build starten:
+
+```
+CONFIGURATION=Release bash ios/scripts/build-simulator.sh
+```
+
+Ein Debug-Build kann bei einem 32-Kanal-XM oder einem alten 16-Kanal-IT mit
+Speed 1 und 250 BPM langsamer als Echtzeit rendern. Dann meldet Core Audio
+`IOWorkLoop: skipping cycle due to overload`, und die Ausgabe kratzt trotz
+korrekter Samples. Debug- und Release-WAV müssen für denselben Input
+byteidentisch bleiben; die Release-Reserve ersetzt nicht den Gerätetest.
+
+Der Kern (`ZipArchiveReader`, `MusicLibrary`, `LibraryImporter`,
+`LibraryReset`) wird **nicht** dort geprüft, sondern in der normalen
+SwiftPM-Suite mit `swift test` — plattformneutral und ohne Simulator. Im
+Simulator läuft nur, was ohne iOS nicht prüfbar ist.
+
+### Grenzen des Simulators
+
+Der Simulator belegt **nicht**: Hintergrundwiedergabe bei gesperrtem Bildschirm,
+Sperrbildschirm- und AirPods-Steuerung, Verhalten bei eingehendem Anruf, Route-
+Change beim Abziehen der Kopfhörer und das Speicherverhalten beim Import eines
+großen Archivs. Wer nur den Simulator gefahren hat, darf keines dieser Dinge als
+verifiziert melden.
+
+### Gerätetest (nur mit echtem iPhone)
+
+Das Signatur-Team steht im Projekt (`DEVELOPMENT_TEAM`), ein anderes Team über
+`SAVAGE_DEVELOPMENT_TEAM`. Die Team-ID ist bewusst nicht versteckt: Apple bettet
+sie in die Signatur jeder ausgelieferten App ein, und sie steht für die
+macOS-Signatur ohnehin in `build_app.sh`. Geheim sind der private Schlüssel des
+Signaturzertifikats und das Notary-Keychain-Profil — beides liegt nicht im Repo.
+
+**Der erste Lauf auf einem neuen Gerät gehört in Xcode.** Gerät registrieren,
+Provisioning-Profil anlegen und das Entwicklerzertifikat auf dem iPhone
+bestätigen sind einmalige Schritte, durch die die Oberfläche führt. Die
+eingecheckte Scheme verwendet für Run bewusst Release, weil der unoptimierte
+Replay-Core bei anspruchsvollen Modulen nicht echtzeitfähig sein muss; Tests
+bleiben Debug. Danach:
+
+```
+bash ios/scripts/build-device.sh --install
+# Bei mehreren gekoppelten iPhones:
+SAVAGE_DEVICE='<Name oder ID>' bash ios/scripts/build-device.sh --install
+```
+
+Das Skript übergibt `-allowProvisioningUpdates`, damit `xcodebuild` das Profil
+selbst auffrischen darf; ohne diese Vorarbeit in Xcode scheitert es aber am
+noch nicht registrierten Gerät.
+
+Prüfliste am Gerät:
+
+1. **Sperrbildschirm.** Titel starten, Display sperren. Die Musik läuft weiter.
+   Auf dem Sperrbildschirm erscheinen Titel, Format und Artwork; Play/Pause,
+   Weiter/Zurück und der Positionsregler funktionieren; die verstrichene Zeit
+   läuft mit und springt nicht.
+2. **AirPods.** Doppeltipp beziehungsweise Stiel-Geste pausiert und setzt fort.
+3. **Eingehender Anruf.** Wiedergabe pausiert beim Klingeln und setzt nach dem
+   Auflegen selbständig wieder ein.
+4. **Kopfhörer abziehen.** Wiedergabe pausiert und läuft nicht über den
+   Lautsprecher weiter.
+5. **Speicherverhalten beim Import.** Ein großes Archiv (dreistellige MB)
+   importieren und dabei den Speicher beobachten. Der Verbrauch darf nicht mit
+   der Archivgröße wachsen; die App darf nicht vom System beendet werden.
+6. **Dauerlauf.** Ein anspruchsvolles IT-Modul mindestens zehn Minuten laufen
+   lassen, davon einen Teil bei gesperrtem Bildschirm: keine Aussetzer.
+7. **Visualisierungen.** Im Wiedergabe-Tab bis zu den Visualisierungen scrollen:
+   Pegel, Master- und Kanal-Oszilloskope starten sofort. Wieder hochscrollen,
+   kurz in einen anderen Tab wechseln und zurückkehren; beim erneuten
+   Sichtbarwerden starten alle drei Anzeigen wieder.
 
 ## Release und Notarisierung
 

@@ -156,7 +156,20 @@ if [[ "$NOTARIZE" == "1" ]]; then
         echo "  git config --local savageModPlayer.notaryProfile <profil>" >&2
         exit 1
     fi
-    if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+    # Fünf Versuche statt einem: `notarytool history` meldet gelegentlich
+    # fälschlich „No Keychain password item found", obwohl das Profil da ist
+    # (in einem realen Notary-Lauf beobachtet). Ein einzelner Fehlversuch würde
+    # sonst einen ganzen Lauf grundlos abbrechen; ein wirklich fehlendes Profil
+    # scheitert auch nach fünf Versuchen.
+    notary_profile_works() {
+        local attempt
+        for attempt in 1 2 3 4 5; do
+            xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 && return 0
+            sleep 3
+        done
+        return 1
+    }
+    if ! notary_profile_works; then
         echo "ABBRUCH: Notary-Keychain-Profil nicht gefunden oder nicht nutzbar: $NOTARY_PROFILE" >&2
         echo "Einmal interaktiv anlegen:" >&2
         echo "  xcrun notarytool store-credentials $NOTARY_PROFILE" >&2

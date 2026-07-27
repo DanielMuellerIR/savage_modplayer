@@ -25,7 +25,11 @@ let package = Package(
     name: "SavageModPlayerApp",
     platforms: [
         .macOS(.v13),
-        .iOS(.v16)
+        // iOS 17 ist das Minimum der iPhone-App unter ios/ — dort werden
+        // Observation, .scrollTargetBehavior und die neueren SwiftUI-APIs
+        // genutzt. Der Core selbst kaeme mit weniger aus, aber ein einziges
+        // Minimum haelt Paket und App-Target deckungsgleich.
+        .iOS(.v17)
     ],
     products: appProducts + [
         .executable(name: "savage-cli", targets: ["SavageCLI"]),

@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Baut die App fuer ein echtes iPhone (Sideload mit eigenem Developer-Team).
+#
+# Die Team-ID steht im Xcode-Projekt (DEVELOPMENT_TEAM). Sie ist kein Geheimnis:
+# Apple bettet sie in die Signatur jeder ausgelieferten App ein, `codesign -dv`
+# liest sie aus jedem heruntergeladenen DMG heraus, und sie steht in diesem Repo
+# ohnehin schon in build_app.sh und beiden READMEs. Ein Versteckspiel waere
+# Aufwand ohne Schutzwirkung. Zu schuetzen sind die privaten Schluessel der
+# Signaturzertifikate und das Notary-Profil — nicht diese Kennung.
+#
+# Wer mit einem anderen Team baut, setzt SAVAGE_DEVELOPMENT_TEAM.
+#
+# Aufruf:
+#   ios/scripts/build-device.sh              # baut und archiviert
+#   ios/scripts/build-device.sh --install    # zusaetzlich auf ein angeschlossenes
+#                                            # Geraet installieren
+#   SAVAGE_DEVICE='<Name oder ID>' ios/scripts/build-device.sh --install
+#                                            # Ziel bei mehreren iPhones
+#
+# Hintergrundwiedergabe und Sperrbildschirm-Steuerung lassen sich NUR hier
+# pruefen — der Simulator belegt davon nichts. Die Pruefliste steht in
+# docs/testing.md unter "iOS-Geraetetest".
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IOS_DIR="$(dirname "$SCRIPT_DIR")"
+
+INSTALL=0
+if [ "${1:-}" = "--install" ]; then INSTALL=1; fi
+
+REPO_DIR="$(dirname "$IOS_DIR")"
+DERIVED_DATA="${DERIVED_DATA:-$IOS_DIR/build/DerivedData}"
+ARCHIVE_PATH="${ARCHIVE_PATH:-$IOS_DIR/build/SavageModPlayer.xcarchive}"
+# Produktversion kommt aus der VERSION-Datei, nicht aus dem .xcodeproj.
+APP_VERSION="$(cat "$REPO_DIR/VERSION")"
+LOG="${BUILD_LOG:-$IOS_DIR/build/build-device.log}"
+mkdir -p "$(dirname "$LOG")"
+
+# Alle Argumente in einem nichtleeren Array halten: Das mit macOS ausgelieferte
+# Bash 3 behandelt "${LEERES_ARRAY[@]}" unter `set -u` als ungesetzte Variable.
+XCODEBUILD_ARGS=(
+    archive
+    -project "$IOS_DIR/SavageModPlayer.xcodeproj"
+    -scheme SavageModPlayer
+    -configuration Release
+    -destination 'generic/platform=iOS'
+    -derivedDataPath "$DERIVED_DATA"
+    -archivePath "$ARCHIVE_PATH"
+    -allowProvisioningUpdates
+    CODE_SIGN_STYLE=Automatic
+    MARKETING_VERSION="$APP_VERSION"
+)
+if [ -n "${SAVAGE_DEVELOPMENT_TEAM:-}" ]; then
+    XCODEBUILD_ARGS+=(DEVELOPMENT_TEAM="$SAVAGE_DEVELOPMENT_TEAM")
+fi
+
+echo "==> Geraete-Build"
+set +e
+xcodebuild "${XCODEBUILD_ARGS[@]}" >"$LOG" 2>&1
+STATUS=$?
+set -e
+
+if [ "$STATUS" -ne 0 ]; then
+    echo "FEHLER: Archivieren fehlgeschlagen (Exit $STATUS):"
+    grep -E "error:|\*\* ARCHIVE" "$LOG" | tail -30 || tail -30 "$LOG"
+    echo "Vollstaendiges Protokoll: $LOG"
+    exit "$STATUS"
+fi
+
+echo "OK: Archiv liegt unter $ARCHIVE_PATH"
+
+if [ "$INSTALL" -eq 1 ]; then
+    APP="$ARCHIVE_PATH/Products/Applications/SavageModPlayer.app"
+    if [ ! -d "$APP" ]; then
+        echo "FEHLER: App im Archiv nicht gefunden: $APP"
+        exit 4
+    fi
+
+    # `devicectl list devices` enthaelt auch Watches und kann mehrere iPhones
+    # mit Namen samt Leerzeichen liefern. Die tabellarische Ausgabe mit awk zu
+    # zerlegen waehlt dann leicht die falsche Spalte oder das falsche Geraet.
+    # Deshalb die dokumentierte JSON-Schnittstelle verwenden. Bei mehreren
+    # iPhones muss der Aufrufer bewusst Name oder ID angeben.
+    if [ -n "${SAVAGE_DEVICE:-}" ]; then
+        TARGET_DEVICE="$SAVAGE_DEVICE"
+    else
+        DEVICE_LIST_JSON="$(mktemp "${TMPDIR:-/tmp}/savage-devices.XXXXXX")"
+        set +e
+        xcrun devicectl list devices --json-output "$DEVICE_LIST_JSON" --quiet
+        DEVICE_LIST_STATUS=$?
+        set -e
+        if [ "$DEVICE_LIST_STATUS" -ne 0 ]; then
+            unlink "$DEVICE_LIST_JSON"
+            exit "$DEVICE_LIST_STATUS"
+        fi
+
+        set +e
+        TARGET_DEVICE=$(/usr/bin/python3 - "$DEVICE_LIST_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    devices = json.load(handle).get("result", {}).get("devices", [])
+
+iphones = [
+    device for device in devices
+    if device.get("hardwareProperties", {}).get("platform") == "iOS"
+    and device.get("connectionProperties", {}).get("pairingState") == "paired"
+]
+if len(iphones) != 1:
+    print(
+        "FEHLER: Genau ein gekoppeltes iPhone erwartet, gefunden: "
+        f"{len(iphones)}. SAVAGE_DEVICE='<Name oder ID>' setzen.",
+        file=sys.stderr,
+    )
+    raise SystemExit(5)
+print(iphones[0]["identifier"])
+PY
+        )
+        DEVICE_STATUS=$?
+        set -e
+        unlink "$DEVICE_LIST_JSON"
+        if [ "$DEVICE_STATUS" -ne 0 ]; then exit "$DEVICE_STATUS"; fi
+    fi
+
+    echo "==> Installiere auf angeschlossenem Geraet"
+    xcrun devicectl device install app --device "$TARGET_DEVICE" "$APP"
+    echo "OK: installiert. Jetzt die Geraete-Pruefliste aus docs/testing.md abarbeiten."
+fi

@@ -98,7 +98,7 @@ Arbeit an einem AGENTS-Hotspot.
    übersprungen, 0 Fehler — wie die Baseline. Zusätzlich `bash build_app.sh`
    grün inklusive Appex-Signatur.*
 3. ✅ `swift build` + `swift test` grün im `swift:6.0`-Container. *Erreicht
-   2026-07-15 auf Popo: **216 Tests, 0 Fehler, 2 übersprungen**. Die Differenz zu
+   2026-07-15 auf dem Linux-Testrechner: **216 Tests, 0 Fehler, 2 übersprungen**. Die Differenz zu
    den 230 macOS-Tests sind exakt die 14 Testmethoden, die die AVAudioEngine-
    gebundene Live-Klasse instanziieren und deshalb geguardet sind.*
 
@@ -188,7 +188,7 @@ alloziert; Songende über `endReachedFrame` als kurze Lieferung.
 **Verifiziert:**
 
 - `savage-cli --play` spielt auf macOS (AVAudioEngine) und Linux (ALSA).
-- Linux-Laufzeit lautlos geprüft, ohne Popos Desktop zu beschallen: `.asoundrc`
+- Linux-Laufzeit lautlos geprüft, ohne den Desktop des Testrechners zu beschallen: `.asoundrc`
   mit `pcm.!default { type null }` biegt `default` auf ALSAs null-Plugin um —
   echter `snd_pcm_open`/`writei`/`drain`-Pfad, Ergebnis `sourceFinished`, Exit 0.
 - `ModulePCMSourceTests`: der Echtzeitpfad liefert **sample-identisch** dasselbe
@@ -241,7 +241,8 @@ MPRIS2, .desktop-Datei, statisches Binary/AppImage. Erst bei Bedarf.
 
 ## Rahmenbedingungen
 
-- **Linux-Verifikation läuft** (seit 2026-07-15 freigeschaltet). Lokal (M5) gibt
+- **Linux-Verifikation läuft** (seit 2026-07-15 freigeschaltet). Auf dem
+  macOS-Entwicklungsrechner gibt
   es weder Docker noch Podman noch ein Linux-SDK; verifiziert wird auf dem
   Fleet-Linux-Host im `swift:6.0`-Container:
 

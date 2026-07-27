@@ -141,35 +141,97 @@ public enum PlaylistScanner {
     }
 
     // Entpackt ein Archiv in ein frisches Unterverzeichnis von `tempDir` und
-    // liefert dessen URL (nil bei Fehler). Nutzt das System-`bsdtar`
-    // (libarchive), das sowohl Zip als auch 7-Zip lesen kann — keine
-    // Zusatz-Abhaengigkeit noetig.
+    // liefert dessen URL (nil bei Fehler).
+    //
+    // Zwei Wege, eine Weiche:
+    // - macOS und Linux nutzen das System-`bsdtar` (libarchive). Das liest Zip
+    //   UND 7-Zip, ohne dass das Projekt eine Abhaengigkeit mitschleppt.
+    // - iOS hat weder `Process` noch ein Kommandozeilen-Werkzeug. Dort
+    //   uebernimmt der eigene `ZipArchiveReader` (reines Swift); `.7z` bleibt
+    //   dort unlesbar und wird sauber gemeldet statt still zu scheitern.
     private static func extractArchive(_ archive: URL, tempDir: URL) -> URL? {
-        // bsdtar liegt auf macOS und den meisten Linux-Distributionen unter
-        // /usr/bin (dort aus dem Paket libarchive-tools). Fehlt es, wird das
-        // Archiv still ignoriert — dasselbe Verhalten wie bei einem defekten
-        // Archiv, kein Grund den ganzen Scan abzubrechen.
-        guard let bsdtar = bsdtarURL else { return nil }
-        let fm = FileManager.default
         let dest = tempDir.appendingPathComponent("extracted-\(UUID().uuidString)", isDirectory: true)
         do {
-            try fm.createDirectory(at: dest, withIntermediateDirectories: true, attributes: nil)
-            let process = Process()
-            process.executableURL = bsdtar
-            process.arguments = ["-x", "-f", archive.path, "-C", dest.path]
-            // Fehlermeldungen nicht ins App-Log spammen; Erfolg zaehlt per Exit-Code.
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                print("Archiv nicht lesbar (bsdtar exit \(process.terminationStatus)): \(archive.lastPathComponent)")
-                return nil
-            }
+            try unpackArchive(archive, into: dest, isCancelled: { false })
             return dest
         } catch {
             print("Archiv-Entpacken fehlgeschlagen: \(error)")
+            try? FileManager.default.removeItem(at: dest)
             return nil
+        }
+    }
+
+    // Oeffentlicher Einstieg fuers Entpacken: legt `destination` an und schreibt
+    // die spielbaren Eintraege des Archivs dorthin. Wirft bei Fehlern, damit der
+    // Aufrufer (z.B. der Bibliotheks-Import) dem Nutzer einen Grund nennen kann.
+    // `isCancelled` wird waehrend laengerer Archive regelmaessig abgefragt.
+    public static func unpackArchive(
+        _ archive: URL,
+        into destination: URL,
+        isCancelled: () -> Bool = { false }
+    ) throws {
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true, attributes: nil)
+        #if os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
+        try unpackUsingZipReader(archive, into: destination, isCancelled: isCancelled)
+        #else
+        try unpackUsingBsdtar(archive, into: destination)
+        #endif
+    }
+
+    // Fehler, die beim Entpacken ausserhalb des eigentlichen ZIP-Lesers
+    // entstehen koennen (fehlendes Werkzeug, nicht unterstuetztes Format).
+    public enum ArchiveError: Error, LocalizedError {
+        case unsupportedFormat(String)
+        case toolMissing
+        case toolFailed(String, Int32)
+
+        public var errorDescription: String? {
+            switch self {
+            case .unsupportedFormat(let name):
+                return "Archivformat wird auf dieser Plattform nicht unterstuetzt: \(name)"
+            case .toolMissing:
+                return "Zum Entpacken fehlt das Systemwerkzeug bsdtar (libarchive)."
+            case .toolFailed(let name, let status):
+                return "Archiv nicht lesbar (bsdtar Exit \(status)): \(name)"
+            }
+        }
+    }
+
+    #if os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
+    // Entpacken ohne Hilfsprozess. Nur ZIP; alles andere (insbesondere `.7z`)
+    // wird abgelehnt, damit der Aufrufer den Unterschied melden kann.
+    private static func unpackUsingZipReader(
+        _ archive: URL,
+        into destination: URL,
+        isCancelled: () -> Bool
+    ) throws {
+        guard archive.pathExtension.lowercased() == "zip" else {
+            throw ArchiveError.unsupportedFormat(archive.lastPathComponent)
+        }
+        // Vorfilter: nur Moduldateien landen auf der Platte. Bei den grossen
+        // Sammlungsarchiven spart das den Loewenanteil an Zeit und Platz.
+        _ = try ZipArchiveReader.extract(
+            archive: archive,
+            to: destination,
+            shouldExtract: isModFile,
+            isCancelled: isCancelled
+        )
+    }
+    #else
+    // bsdtar liegt auf macOS und den meisten Linux-Distributionen unter
+    // /usr/bin (dort aus dem Paket libarchive-tools).
+    private static func unpackUsingBsdtar(_ archive: URL, into destination: URL) throws {
+        guard let bsdtar = bsdtarURL else { throw ArchiveError.toolMissing }
+        let process = Process()
+        process.executableURL = bsdtar
+        process.arguments = ["-x", "-f", archive.path, "-C", destination.path]
+        // Fehlermeldungen nicht ins App-Log spammen; Erfolg zaehlt per Exit-Code.
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw ArchiveError.toolFailed(archive.lastPathComponent, process.terminationStatus)
         }
     }
 
@@ -182,6 +244,7 @@ public enum PlaylistScanner {
         let candidate = URL(fileURLWithPath: "/usr/bin/bsdtar")
         return FileManager.default.isExecutableFile(atPath: candidate.path) ? candidate : nil
     }
+    #endif
 
     // MARK: - Baum bauen & abflachen
 
