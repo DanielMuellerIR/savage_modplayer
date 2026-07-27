@@ -241,7 +241,8 @@ MPRIS2, .desktop-Datei, statisches Binary/AppImage. Erst bei Bedarf.
 
 ## Rahmenbedingungen
 
-- **Linux-Verifikation läuft** (seit 2026-07-15 freigeschaltet). Lokal (M5) gibt
+- **Linux-Verifikation läuft** (seit 2026-07-15 freigeschaltet). Auf dem
+  macOS-Entwicklungsrechner gibt
   es weder Docker noch Podman noch ein Linux-SDK; verifiziert wird auf dem
   Fleet-Linux-Host im `swift:6.0`-Container:
 

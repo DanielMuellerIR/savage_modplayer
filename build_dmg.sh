@@ -158,9 +158,9 @@ if [[ "$NOTARIZE" == "1" ]]; then
     fi
     # Fünf Versuche statt einem: `notarytool history` meldet gelegentlich
     # fälschlich „No Keychain password item found", obwohl das Profil da ist
-    # (2026-07-26 auf M3 belegt). Ein einzelner Fehlversuch würde sonst einen
-    # ganzen Lauf grundlos abbrechen; ein wirklich fehlendes Profil scheitert
-    # auch nach fünf Versuchen.
+    # (in einem realen Notary-Lauf beobachtet). Ein einzelner Fehlversuch würde
+    # sonst einen ganzen Lauf grundlos abbrechen; ein wirklich fehlendes Profil
+    # scheitert auch nach fünf Versuchen.
     notary_profile_works() {
         local attempt
         for attempt in 1 2 3 4 5; do

@@ -23,7 +23,8 @@ require_notary_profile() {
     # Nur ein echter Aufruf erkennt, ob das Profil auf diesem Mac benutzbar ist.
     # Fünf Versuche statt einem: `notarytool history` meldet gelegentlich
     # fälschlich „No Keychain password item found", obwohl das Profil da ist
-    # (2026-07-26 auf M3 belegt — Versuch 1 fehlgeschlagen, Versuch 2 sofort ok).
+    # (in einem realen Notary-Lauf beobachtet: Versuch 1 fehlgeschlagen,
+    # Versuch 2 war sofort erfolgreich).
     # Ein einzelner Fehlversuch würde sonst einen ganzen Lauf grundlos abbrechen;
     # ein wirklich fehlendes Profil scheitert auch nach fünf Versuchen.
     local attempt
