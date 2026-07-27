@@ -36,8 +36,8 @@ Rutsch hineinbekommt.
 - **`RenderEngine.swift` bleibt plattformneutral** — kein AVFoundation, kein
   Combine, keine CoreAudio-Typen. Der Linux-Build ist der Nachweis.
 - **Kein Push zu `github`, kein Release, keine Notarisierung.** Commits gehen
-  ausschließlich zum privaten Fleet-Remote `minipc`, und nur mit
-  aufgabenbezogenen Pfaden im Index. Kein `git add .`, kein Reset, kein Clean.
+  ausschließlich zum privaten Fleet-Remote, und nur mit aufgabenbezogenen
+  Pfaden im Index. Kein `git add .`, kein Reset, kein Clean.
 - Fremdes WIP und andere Worktrees bleiben unangetastet.
 
 ## Reihenfolge
