@@ -1,6 +1,12 @@
-Savage Mod Player 1.6.3 prevents unoptimized iPhone development builds from
-starving real-time audio while retaining automatic ZIP handling,
-viewport-driven visualizers, and the Mac app's restrained visual identity.
+Savage Mod Player 1.6.4 keeps essential transport controls available in the
+compact Mac player while retaining optimized iPhone playback, automatic ZIP
+handling, and viewport-driven visualizers.
+
+## macOS app
+
+- The compact footer now retains the shuffle toggle and the 30-second backward
+  and forward buttons. The position scrubber is not a substitute for relative
+  skips or choosing the playlist order.
 
 ## iPhone app
 

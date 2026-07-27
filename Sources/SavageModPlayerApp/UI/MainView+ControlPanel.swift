@@ -225,9 +225,10 @@ extension MainView {
                 }
             }
 
-            // Zeile 2: Kern-Transport (Play/Pause, Stopp, Titelwechsel) + Lautstärke.
-            // Die vier Sekunden-Seek-Buttons und Shuffle/HUD/Info/WAV entfallen hier
-            // bewusst — der Slider oben deckt das Suchen ab; „nur Musik hören".
+            // Zeile 2: Kern-Transport + Lautstärke. Die großen ±30-s-Sprünge und
+            // Shuffle bleiben auch im Kompaktmodus erreichbar: Der Positions-
+            // Slider ersetzt weder einen relativen Sprung noch die Wahl der
+            // Abspielreihenfolge. Nur ±10 s, HUD, Info und WAV-Export entfallen.
             HStack(spacing: 8) {
                 SpinningDiskButton(
                     isPlaying: coordinator.isPlaying,
@@ -244,6 +245,22 @@ extension MainView {
                 .disabled(!coordinator.isPlaying)
                 .help("Stopp: Wiedergabe beenden — der nächste Start beginnt wieder am Songanfang.")
 
+                Button(action: { coordinator.seek(bySeconds: -30) }) {
+                    transportButtonLabel(systemName: "gobackward.30")
+                }
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                .cornerRadius(theme == .workbench ? 0 : 15)
+                .disabled(!coordinator.isPlaying)
+                .help("30 Sekunden zurückspringen.")
+
+                Button(action: { coordinator.seek(bySeconds: 30) }) {
+                    transportButtonLabel(systemName: "goforward.30")
+                }
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                .cornerRadius(theme == .workbench ? 0 : 15)
+                .disabled(!coordinator.isPlaying)
+                .help("30 Sekunden vorspringen.")
+
                 Button(action: { prevTrack() }) {
                     transportButtonLabel(systemName: "backward.end.fill")
                 }
@@ -259,6 +276,33 @@ extension MainView {
                 .cornerRadius(theme == .workbench ? 0 : 15)
                 .disabled(playlist.isEmpty)
                 .help("Nächster Titel der Playlist (⌘→ oder Pfeil rechts).")
+
+                Button(action: { shuffleEnabled.toggle() }) {
+                    ZStack {
+                        if theme == .cyber {
+                            Circle()
+                                .fill(shuffleEnabled ? Color.spaceAccent : Color.spaceSurface)
+                                .overlay(Circle().stroke(Color.spaceAccent.opacity(0.3), lineWidth: 1))
+                        } else {
+                            Rectangle()
+                                .fill(shuffleEnabled ? Color.lightAccent : Color.lightSurfaceAlt)
+                        }
+                        Image(systemName: "shuffle")
+                            .scaledFont(11, weight: .bold)
+                            .foregroundColor(
+                                shuffleEnabled
+                                    ? (theme == .cyber ? .black : .white)
+                                    : (theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
+                            )
+                    }
+                    .frame(width: 30, height: 30)
+                }
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                .cornerRadius(theme == .workbench ? 0 : 15)
+                .disabled(playlist.isEmpty)
+                .help(shuffleEnabled
+                      ? "Zufallswiedergabe ist AN: Titel-Wechsel und Songende springen zufällig durch die Playlist."
+                      : "Zufallswiedergabe ist AUS: die Playlist spielt der Reihe nach.")
 
                 Spacer(minLength: 0)
 

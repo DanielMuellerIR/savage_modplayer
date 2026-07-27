@@ -110,8 +110,8 @@ The transport buttons speak for themselves, but the tracker-specific readouts an
 
 **Transport & navigation**
 
-- **Shuffle**: when on, track changes and song ends jump randomly through the playlist; when off, the playlist plays in order.
-- **−15 s / +30 s**: skip backward/forward (row-accurate; approximate across tempo changes).
+- **Shuffle**: when on, track changes and song ends jump randomly through the playlist; when off, the playlist plays in order. The toggle remains visible in the compact Mac player.
+- **−30 s / +30 s**: skip backward/forward (row-accurate; approximate across tempo changes). Both remain visible in the compact Mac player; full mode additionally offers −10 s / +10 s.
 - **Position slider**: pick a spot in the song — also works while stopped, in which case Play starts from there.
 
 ---

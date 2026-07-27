@@ -110,8 +110,8 @@ Die Transport-Tasten erklären sich von selbst, doch die tracker-typischen Anzei
 
 **Transport & Navigation**
 
-- **Shuffle** (Zufallswiedergabe): eingeschaltet springen Titelwechsel und Songende zufällig durch die Playlist; ausgeschaltet spielt die Playlist der Reihe nach.
-- **−15 s / +30 s**: zurück-/vorspringen (zeilengenau; bei Tempo-Wechseln näherungsweise).
+- **Shuffle** (Zufallswiedergabe): eingeschaltet springen Titelwechsel und Songende zufällig durch die Playlist; ausgeschaltet spielt die Playlist der Reihe nach. Der Schalter bleibt auch im kompakten Mac-Player sichtbar.
+- **−30 s / +30 s**: zurück-/vorspringen (zeilengenau; bei Tempo-Wechseln näherungsweise). Diese beiden Sprünge bleiben auch im kompakten Mac-Player sichtbar; der Vollmodus bietet zusätzlich −10 s / +10 s.
 - **Positions-Schieberegler**: eine Stelle im Song wählen — funktioniert auch bei gestoppter Wiedergabe: Play startet dann ab dieser Stelle.
 
 ---

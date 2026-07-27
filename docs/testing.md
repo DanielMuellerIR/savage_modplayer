@@ -67,6 +67,8 @@ Consumer muss sauber als `outputClosed` enden.
 
 `bash build_app.sh` baut die Release-App und die Quick-Look-Appex. Ein bloßes
 `swift build` deckt Extension, Signatur und Bundle-Integration nicht ab.
+`python3 Tests/ui_source_tests.py` schützt zusätzlich die Pflichtbedienelemente
+des kompakten Footers; der sichtbare Fenster-Smoke bleibt trotzdem erforderlich.
 
 Headless prüfen:
 
