@@ -14,19 +14,27 @@ ROOT = Path(__file__).resolve().parent.parent
 # Hier stuende sonst eine Liste privater Rechnernamen und wuerde genau die Namen
 # veroeffentlichen, die sie schuetzen soll. Wir LESEN die Datei nur.
 #
+# Auch ihr PFAD steht hier nicht: Ein Vorgaberwert haette den Namen des privaten
+# Repos in dieses oeffentliche geschrieben — genau das hat die Pruefung am
+# 2026-07-27 an sich selbst gefunden. Der Pfad kommt deshalb ausschliesslich aus
+# der Umgebung, zu setzen einmal pro Rechner in `~/.zshenv`.
+#
 # Verwendet werden ausschliesslich die mit `gate:` markierten Zeilen. Die Liste
 # enthaelt daneben absichtlich unscharfe Eintraege (Produktnamen, kurze
 # Abkuerzungen), die auch voellig legitim vorkommen; als Testbedingung wuerden
-# die den Lauf dauerhaft rot faerben. Fehlt die Datei — etwa in oeffentlicher CI
-# — entfaellt die Namenspruefung, und nur die strukturelle Pruefung greift.
-_DENYLIST = Path(os.environ.get("SAVAGE_HYGIENE_DENYLIST")
-                 or Path.home() / "git/theplan/tools/leak-denylist.txt")
+# die den Lauf dauerhaft rot faerben. Ist die Variable nicht gesetzt — etwa in
+# oeffentlicher CI — entfaellt die Namenspruefung, und nur die strukturelle
+# Pruefung greift.
+_DENYLIST_ENV = "HYGIENE_DENYLIST"
 
 
 def _hard_name_pattern():
     """Nur die `gate:`-Regeln als ein Muster, oder None wenn nicht lesbar."""
+    pfad = os.environ.get(_DENYLIST_ENV)
+    if not pfad:
+        return None
     try:
-        lines = _DENYLIST.read_text(encoding="utf-8").splitlines()
+        lines = Path(pfad).read_text(encoding="utf-8").splitlines()
     except OSError:
         return None
     frags = []
