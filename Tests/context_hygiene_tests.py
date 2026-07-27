@@ -2,6 +2,7 @@
 """Deterministische Evals fuer den kleinen, vollstaendigen Agenten-Kontext."""
 
 from pathlib import Path
+import re
 import subprocess
 import unittest
 
@@ -54,16 +55,43 @@ class ContextHygieneTests(unittest.TestCase):
         self.assertIn("GUI-Smoke", backlog)
         self.assertIn("Amiga-Periodentabelle", backlog)
 
-    def test_public_start_context_has_no_private_path_or_remote(self):
-        text = "\n".join(
-            (ROOT / path).read_text(encoding="utf-8")
-            for path in ("AGENTS.md", "CLAUDE.md", "docs/testing.md",
-                         "tasks/backlog.md",
-                         "docs/AGENTS-history-through-2026-07-12.md")
-        )
-        self.assertNotIn("/Users/", text)
-        self.assertNotIn("minipc", text)
-        self.assertNotIn("Nextcloud", text)
+    def test_no_markdown_file_leaks_private_infrastructure(self):
+        """Alle getrackten Markdown-Dateien, nicht nur eine feste Handvoll.
+
+        Vorher standen hier fuenf Pfade fest verdrahtet. Am 2026-07-27 fiel auf,
+        dass `tasks/2026-07-05-linux-port/plan.md` nie geprueft wurde und deshalb
+        zweimal den Kurznamen eines privaten Rechners veroeffentlicht hat.
+
+        Der Nadel-Katalog bleibt bewusst STRUKTURELL. Rechnernamen gehoeren nicht
+        hierher: Dieses Repo ist oeffentlich, und eine Liste privater Hostnamen in
+        einer Assertion veroeffentlicht genau die Namen, die sie schuetzen soll.
+        Die namensbasierte Pruefung laeuft ausserhalb dieses Repos gegen eine
+        private Denylist, ueber alle oeffentlichen Repos hinweg.
+
+        `/Users/<name>` ist bewusst KEIN Befund (Entscheidung 2026-07-27): Der
+        Name steht ohnehin auf dem GitHub-Profil, und Beispiele oder Screenshots
+        duerfen einen echten Desktop-Pfad zeigen.
+        """
+        tracked = subprocess.run(
+            ["git", "ls-files", "*.md"], cwd=ROOT,
+            check=True, capture_output=True, text=True).stdout.splitlines()
+        self.assertGreater(len(tracked), 5, "keine Markdown-Dateien gefunden")
+
+        # Private IPv4-Bereiche nach RFC 1918 plus der link-local-Bereich.
+        # Dokumentationsadressen (192.0.2.x, 198.51.100.x, 203.0.113.x) und
+        # 127.0.0.1 sind ausdruecklich erlaubt und deshalb nicht erfasst.
+        private_ip = re.compile(
+            r"\b(?:10\.\d{1,3}|192\.168|169\.254|172\.(?:1[6-9]|2\d|3[01]))"
+            r"\.\d{1,3}\.\d{1,3}\b")
+
+        for relative in tracked:
+            with self.subTest(path=relative):
+                text = (ROOT / relative).read_text(encoding="utf-8")
+                found = private_ip.search(text)
+                self.assertIsNone(
+                    found,
+                    "private IP-Adresse in %s: %s"
+                    % (relative, found.group(0) if found else ""))
 
 
 if __name__ == "__main__":
