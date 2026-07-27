@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Deterministische Evals fuer den kleinen, vollstaendigen Agenten-Kontext."""
 
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -8,6 +9,36 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# Private Namensliste — sie liegt bewusst AUSSERHALB dieses oeffentlichen Repos.
+# Hier stuende sonst eine Liste privater Rechnernamen und wuerde genau die Namen
+# veroeffentlichen, die sie schuetzen soll. Wir LESEN die Datei nur.
+#
+# Verwendet werden ausschliesslich die mit `gate:` markierten Zeilen. Die Liste
+# enthaelt daneben absichtlich unscharfe Eintraege (Produktnamen, kurze
+# Abkuerzungen), die auch voellig legitim vorkommen; als Testbedingung wuerden
+# die den Lauf dauerhaft rot faerben. Fehlt die Datei — etwa in oeffentlicher CI
+# — entfaellt die Namenspruefung, und nur die strukturelle Pruefung greift.
+_DENYLIST = Path(os.environ.get("SAVAGE_HYGIENE_DENYLIST")
+                 or Path.home() / "git/theplan/tools/leak-denylist.txt")
+
+
+def _hard_name_pattern():
+    """Nur die `gate:`-Regeln als ein Muster, oder None wenn nicht lesbar."""
+    try:
+        lines = _DENYLIST.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    frags = []
+    for raw in lines:
+        line = re.sub(r"\s+#.*$", "", raw.rstrip()).strip()
+        if not line.startswith("gate:"):
+            continue
+        rule = line[len("gate:"):].strip()
+        frags.append(rule[3:].strip() if rule.startswith("re:")
+                     else re.escape(rule))
+    return re.compile("|".join("(?:%s)" % f for f in frags),
+                      re.IGNORECASE) if frags else None
 
 
 class ContextHygieneTests(unittest.TestCase):
@@ -62,11 +93,10 @@ class ContextHygieneTests(unittest.TestCase):
         dass `tasks/2026-07-05-linux-port/plan.md` nie geprueft wurde und deshalb
         zweimal den Kurznamen eines privaten Rechners veroeffentlicht hat.
 
-        Der Nadel-Katalog bleibt bewusst STRUKTURELL. Rechnernamen gehoeren nicht
-        hierher: Dieses Repo ist oeffentlich, und eine Liste privater Hostnamen in
-        einer Assertion veroeffentlicht genau die Namen, die sie schuetzen soll.
-        Die namensbasierte Pruefung laeuft ausserhalb dieses Repos gegen eine
-        private Denylist, ueber alle oeffentlichen Repos hinweg.
+        Zwei Pruefungen: private IPv4-Bereiche direkt hier, und private Namen
+        gegen die `gate:`-Zeilen der Liste ausserhalb dieses Repos (siehe
+        `_hard_name_pattern`). Im Repo selbst steht dadurch kein einziger
+        interner Name.
 
         `/Users/<name>` ist bewusst KEIN Befund (Entscheidung 2026-07-27): Der
         Name steht ohnehin auf dem GitHub-Profil, und Beispiele oder Screenshots
@@ -84,14 +114,27 @@ class ContextHygieneTests(unittest.TestCase):
             r"\b(?:10\.\d{1,3}|192\.168|169\.254|172\.(?:1[6-9]|2\d|3[01]))"
             r"\.\d{1,3}\.\d{1,3}\b")
 
+        names = _hard_name_pattern()
         for relative in tracked:
             with self.subTest(path=relative):
                 text = (ROOT / relative).read_text(encoding="utf-8")
                 found = private_ip.search(text)
-                self.assertIsNone(
-                    found,
-                    "private IP-Adresse in %s: %s"
-                    % (relative, found.group(0) if found else ""))
+                # assertFalse statt assertIsNone: assertIsNone druckt das
+                # Match-Objekt mit und damit den Fund im Klartext. Die Meldung
+                # soll auch in einem oeffentlichen CI-Log unbedenklich sein.
+                self.assertFalse(
+                    bool(found),
+                    "private IP-Adresse in %s, Zeile %d"
+                    % (relative,
+                       text.count("\n", 0, found.start()) + 1 if found else 0))
+                if names is None:
+                    continue
+                hit = names.search(text)
+                self.assertFalse(
+                    bool(hit),
+                    "privater Name in %s, Zeile %d — Begriff siehe lokale Liste"
+                    % (relative,
+                       text.count("\n", 0, hit.start()) + 1 if hit else 0))
 
 
 if __name__ == "__main__":
