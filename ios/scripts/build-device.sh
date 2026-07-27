@@ -14,6 +14,8 @@
 #   ios/scripts/build-device.sh              # baut und archiviert
 #   ios/scripts/build-device.sh --install    # zusaetzlich auf ein angeschlossenes
 #                                            # Geraet installieren
+#   SAVAGE_DEVICE='<Name oder ID>' ios/scripts/build-device.sh --install
+#                                            # Ziel bei mehreren iPhones
 #
 # Hintergrundwiedergabe und Sperrbildschirm-Steuerung lassen sich NUR hier
 # pruefen — der Simulator belegt davon nichts. Die Pruefliste steht in
@@ -34,27 +36,27 @@ APP_VERSION="$(cat "$REPO_DIR/VERSION")"
 LOG="${BUILD_LOG:-$IOS_DIR/build/build-device.log}"
 mkdir -p "$(dirname "$LOG")"
 
-# Leeres Array, wenn nichts ueberschrieben wird — dann gilt der Wert aus dem
-# Projekt. Ein leeres "" als Argument wuerde xcodebuild dagegen stoeren.
-TEAM_OVERRIDE=()
+# Alle Argumente in einem nichtleeren Array halten: Das mit macOS ausgelieferte
+# Bash 3 behandelt "${LEERES_ARRAY[@]}" unter `set -u` als ungesetzte Variable.
+XCODEBUILD_ARGS=(
+    archive
+    -project "$IOS_DIR/SavageModPlayer.xcodeproj"
+    -scheme SavageModPlayer
+    -configuration Release
+    -destination 'generic/platform=iOS'
+    -derivedDataPath "$DERIVED_DATA"
+    -archivePath "$ARCHIVE_PATH"
+    -allowProvisioningUpdates
+    CODE_SIGN_STYLE=Automatic
+    MARKETING_VERSION="$APP_VERSION"
+)
 if [ -n "${SAVAGE_DEVELOPMENT_TEAM:-}" ]; then
-    TEAM_OVERRIDE=(DEVELOPMENT_TEAM="$SAVAGE_DEVELOPMENT_TEAM")
+    XCODEBUILD_ARGS+=(DEVELOPMENT_TEAM="$SAVAGE_DEVELOPMENT_TEAM")
 fi
 
 echo "==> Geraete-Build"
 set +e
-xcodebuild archive \
-    -project "$IOS_DIR/SavageModPlayer.xcodeproj" \
-    -scheme SavageModPlayer \
-    -configuration Release \
-    -destination 'generic/platform=iOS' \
-    -derivedDataPath "$DERIVED_DATA" \
-    -archivePath "$ARCHIVE_PATH" \
-    -allowProvisioningUpdates \
-    CODE_SIGN_STYLE=Automatic \
-    MARKETING_VERSION="$APP_VERSION" \
-    "${TEAM_OVERRIDE[@]}" \
-    >"$LOG" 2>&1
+xcodebuild "${XCODEBUILD_ARGS[@]}" >"$LOG" 2>&1
 STATUS=$?
 set -e
 
@@ -73,8 +75,55 @@ if [ "$INSTALL" -eq 1 ]; then
         echo "FEHLER: App im Archiv nicht gefunden: $APP"
         exit 4
     fi
+
+    # `devicectl list devices` enthaelt auch Watches und kann mehrere iPhones
+    # mit Namen samt Leerzeichen liefern. Die tabellarische Ausgabe mit awk zu
+    # zerlegen waehlt dann leicht die falsche Spalte oder das falsche Geraet.
+    # Deshalb die dokumentierte JSON-Schnittstelle verwenden. Bei mehreren
+    # iPhones muss der Aufrufer bewusst Name oder ID angeben.
+    if [ -n "${SAVAGE_DEVICE:-}" ]; then
+        TARGET_DEVICE="$SAVAGE_DEVICE"
+    else
+        DEVICE_LIST_JSON="$(mktemp "${TMPDIR:-/tmp}/savage-devices.XXXXXX")"
+        set +e
+        xcrun devicectl list devices --json-output "$DEVICE_LIST_JSON" --quiet
+        DEVICE_LIST_STATUS=$?
+        set -e
+        if [ "$DEVICE_LIST_STATUS" -ne 0 ]; then
+            unlink "$DEVICE_LIST_JSON"
+            exit "$DEVICE_LIST_STATUS"
+        fi
+
+        set +e
+        TARGET_DEVICE=$(/usr/bin/python3 - "$DEVICE_LIST_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    devices = json.load(handle).get("result", {}).get("devices", [])
+
+iphones = [
+    device for device in devices
+    if device.get("hardwareProperties", {}).get("platform") == "iOS"
+    and device.get("connectionProperties", {}).get("pairingState") == "paired"
+]
+if len(iphones) != 1:
+    print(
+        "FEHLER: Genau ein gekoppeltes iPhone erwartet, gefunden: "
+        f"{len(iphones)}. SAVAGE_DEVICE='<Name oder ID>' setzen.",
+        file=sys.stderr,
+    )
+    raise SystemExit(5)
+print(iphones[0]["identifier"])
+PY
+        )
+        DEVICE_STATUS=$?
+        set -e
+        unlink "$DEVICE_LIST_JSON"
+        if [ "$DEVICE_STATUS" -ne 0 ]; then exit "$DEVICE_STATUS"; fi
+    fi
+
     echo "==> Installiere auf angeschlossenem Geraet"
-    xcrun devicectl device install app --device "$(xcrun devicectl list devices \
-        | awk 'NR>2 && $0 !~ /^$/ {print $3; exit}')" "$APP"
+    xcrun devicectl device install app --device "$TARGET_DEVICE" "$APP"
     echo "OK: installiert. Jetzt die Geraete-Pruefliste aus docs/testing.md abarbeiten."
 fi

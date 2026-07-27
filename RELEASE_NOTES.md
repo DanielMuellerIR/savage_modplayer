@@ -1,6 +1,6 @@
-Savage Mod Player 1.6.2 fixes viewport activation of the native iPhone
-visualizers while retaining automatic ZIP handling, a readable multi-row
-channel layout, and the Mac app's restrained visual identity.
+Savage Mod Player 1.6.3 prevents unoptimized iPhone development builds from
+starving real-time audio while retaining automatic ZIP handling,
+viewport-driven visualizers, and the Mac app's restrained visual identity.
 
 ## iPhone app
 
@@ -19,6 +19,10 @@ channel layout, and the Mac app's restrained visual identity.
   lazy-stack lifecycle callbacks. Tab selection is tracked explicitly, and
   scroll visibility uses the native iOS 18 mechanism with an iOS 17 geometry
   fallback.
+- Xcode's shared Run action now uses the optimized Release configuration.
+  Unoptimized Swift replay code can be slower than real time for high-row-rate,
+  multi-channel IT modules, which previously produced a short scratch followed
+  by dropouts on a physical iPhone. Simulator tests remain Debug builds.
 - The library is a real folder tree, not a flat list. Folders start collapsed,
   the path to the playing track expands automatically, and playback and shuffle
   run across all folders. Live search, favourites, loop modes, and session

@@ -119,10 +119,11 @@ Release-Build starten:
 CONFIGURATION=Release bash ios/scripts/build-simulator.sh
 ```
 
-Ein Debug-Build kann bei einem 32-Kanal-XM langsamer als Echtzeit rendern. Dann
-meldet Core Audio `IOWorkLoop: skipping cycle due to overload`, und die Ausgabe
-kratzt trotz korrekter Samples. Debug- und Release-WAV müssen für denselben
-Input byteidentisch bleiben; die Release-Reserve ersetzt nicht den Gerätetest.
+Ein Debug-Build kann bei einem 32-Kanal-XM oder einem alten 16-Kanal-IT mit
+Speed 1 und 250 BPM langsamer als Echtzeit rendern. Dann meldet Core Audio
+`IOWorkLoop: skipping cycle due to overload`, und die Ausgabe kratzt trotz
+korrekter Samples. Debug- und Release-WAV müssen für denselben Input
+byteidentisch bleiben; die Release-Reserve ersetzt nicht den Gerätetest.
 
 Der Kern (`ZipArchiveReader`, `MusicLibrary`, `LibraryImporter`,
 `LibraryReset`) wird **nicht** dort geprüft, sondern in der normalen
@@ -147,10 +148,15 @@ Signaturzertifikats und das Notary-Keychain-Profil — beides liegt nicht im Rep
 
 **Der erste Lauf auf einem neuen Gerät gehört in Xcode.** Gerät registrieren,
 Provisioning-Profil anlegen und das Entwicklerzertifikat auf dem iPhone
-bestätigen sind einmalige Schritte, durch die die Oberfläche führt. Danach:
+bestätigen sind einmalige Schritte, durch die die Oberfläche führt. Die
+eingecheckte Scheme verwendet für Run bewusst Release, weil der unoptimierte
+Replay-Core bei anspruchsvollen Modulen nicht echtzeitfähig sein muss; Tests
+bleiben Debug. Danach:
 
 ```
 bash ios/scripts/build-device.sh --install
+# Bei mehreren gekoppelten iPhones:
+SAVAGE_DEVICE='<Name oder ID>' bash ios/scripts/build-device.sh --install
 ```
 
 Das Skript übergibt `-allowProvisioningUpdates`, damit `xcodebuild` das Profil

@@ -1,6 +1,7 @@
-Savage Mod Player 1.6.2 repariert die Viewport-Aktivierung der Visualisierungen
-in der nativen iPhone-App und behält die automatische ZIP-Verarbeitung, das
-lesbare mehrzeilige Kanalraster und die ruhige Gestaltung der Mac-App bei.
+Savage Mod Player 1.6.3 verhindert, dass unoptimierte iPhone-Entwicklungsbuilds
+die Echtzeit-Audioausgabe aushungern, und behält automatische ZIP-Verarbeitung,
+sichtbarkeitsgesteuerte Visualisierungen und die ruhige Gestaltung der Mac-App
+bei.
 
 ## iPhone-App
 
@@ -19,6 +20,11 @@ lesbare mehrzeilige Kanalraster und die ruhige Gestaltung der Mac-App bei.
   unzuverlässigen Lifecycle-Rückrufen einer Lazy-Liste. Die Tab-Auswahl wird
   explizit verfolgt; die Scroll-Sichtbarkeit kommt auf iOS 18 vom System und auf
   iOS 17 aus einer Geometrie-Abfrage.
+- Die gemeinsame Xcode-Scheme startet die App nun als optimierten Release-Build.
+  Unoptimierter Swift-Replay-Code kann bei mehrkanaligen IT-Modulen mit hoher
+  Zeilenrate langsamer als Echtzeit sein; auf einem echten iPhone entstanden
+  dadurch zuvor ein kurzes Kratzen und anschließende Aussetzer.
+  Simulator-Tests bleiben Debug-Builds.
 - Die Bibliothek ist ein echter Ordnerbaum, keine flache Liste. Ordner starten
   zugeklappt, der Pfad zum laufenden Titel klappt automatisch auf, und Wiedergabe
   wie Zufallswiedergabe laufen über alle Ordner. Live-Suche, Favoriten,

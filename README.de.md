@@ -181,6 +181,7 @@ Projektdatei-Edit im Target. Vorausgesetzt wird Xcode 16 oder neuer.
 bash ios/scripts/build-simulator.sh      # Build für den Simulator, ohne Signatur
 bash ios/scripts/run-tests.sh            # XCTest im Simulator
 bash ios/scripts/build-device.sh --install   # Build für ein echtes iPhone und Installation
+SAVAGE_DEVICE='<Name oder ID>' bash ios/scripts/build-device.sh --install  # mehrere iPhones
 ```
 
 `build-simulator.sh` bricht ab, sobald der Build Warnungen im projekteigenen
@@ -202,9 +203,12 @@ diesem Repository.
 Gerät beim Team registrieren, Provisioning-Profil anlegen und das
 Entwicklerzertifikat auf dem iPhone bestätigen sind einmalige Schritte, durch die
 die Oberfläche führt. `ios/SavageModPlayer.xcodeproj` öffnen, Gerät auswählen,
-Run drücken. Danach läuft `build-device.sh` headless für jeden weiteren Build; es
-übergibt `-allowProvisioningUpdates`, damit `xcodebuild` das Profil selbst
-auffrischen darf.
+Run drücken. Die gemeinsame Scheme verwendet für Run bewusst Release:
+unoptimierter Swift-DSP kann bei anspruchsvollen Modulen langsamer als Echtzeit
+sein und dann kratzen; Simulator-Tests bleiben Debug. Danach läuft
+`build-device.sh` headless für jeden weiteren Build; es übergibt
+`-allowProvisioningUpdates`, damit `xcodebuild` das Profil selbst auffrischen
+darf.
 
 Simulator-Build und Simulator-Tests laufen ganz ohne Signatur.
 
