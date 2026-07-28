@@ -12,15 +12,10 @@
   und `savage-cli` bauen, testen und spielen unter Linux; App und Quick Look sind
   macOS-only und werden dort per `#if os(macOS)` aus `Package.swift` ausgeblendet.
   Details und Grenzen: [Linux-Plan](tasks/2026-07-05-linux-port/plan.md).
-- **iOS ist Ist-Zustand, nicht Option** (seit 1.6.0): unter `ios/` liegt eine
-  eingecheckte iPhone-App auf demselben `SavageModPlayerCore`, mit
-  Hintergrundwiedergabe, Sperrbildschirm-Steuerung, hierarchischer Bibliothek und
-  rekursivem Ordner-Import. Sie wird per Sideload mit eigenem Developer-Team
-  verteilt; die Team-ID steht im Xcode-Projekt und ist **kein Geheimnis** (Apple
-  bettet sie in die Signatur jeder ausgelieferten App ein; sie steht für die
-  macOS-Signatur ohnehin in `build_app.sh`). Geheim sind der private Schlüssel
-  des Signaturzertifikats und das Notary-Profil — beides gehört nicht ins Repo.
-  Kein WAV-Export — das ist eine bewusste Auslassung, keine Lücke.
+- **iOS ist Ist-Zustand, nicht Option** (seit 1.6.0): `ios/` enthält die native
+  iPhone-App mit Hintergrundwiedergabe, Sperrbildschirm-Steuerung, Bibliothek und
+  rekursivem Import. Sideload-Team-ID und Bundle-Signatur sind öffentlich;
+  privater Schlüssel und Notary-Profil bleiben geheim. WAV-Export fehlt bewusst.
   Details: [iOS-Plan](tasks/2026-07-26-ios-app/plan.md).
 - Die aktuelle Produktversion steht ausschließlich in [VERSION](VERSION).
 
@@ -34,56 +29,38 @@
   Im Echtzeit-Renderblock niemals Heap-Allokationen, Locks oder dynamische
   Objective-C-Aufrufe einführen. Kanal-/Voice-Puffer bleiben voralloziert; IT
   trennt bis zu 64 Pattern-Kanäle von 256 Voices.
-- **`RenderEngine.swift` ist plattformneutral und muss es bleiben.** Kein
-  AVFoundation, kein Combine, keine CoreAudio-Typen (`AudioBufferList`, `ObjCBool`,
-  `OSStatus`) — sonst bricht der Linux-Build. Der Renderblock hat die neutrale
-  Signatur `ModuleRenderBlock`; CoreAudio lebt ausschließlich im Adapter
-  `ModPlayerCoordinator.makeSourceNodeRenderBlock`. `ModPlayerCoordinator` und
-  `VisualizerState` sind hinter `canImport(AVFoundation)`/`canImport(Combine)`
-  geguardet.
-- `Sources/SavageModPlayerCore/Audio/`: Ausgabeschicht (`PCMSink` & Co.), aus
-  `vicious_sidplayer` übernommene Kopie plus eigenes `ModulePCMSource`. Frei von
-  Format-Wissen halten. Änderungen dort mit dem SID-Repo abgleichen — eine
-  Extraktion in ein gemeinsames Paket lohnt erst nach Bewährung in beiden.
-- **Eine Engine, mehrere Ausgaben.** `ModuleRenderer` (Offline/Quick Look),
-  `ModulePCMSource` (Echtzeit-CLI) und `ModPlayerCoordinator` (App) holen alle aus
-  `RenderEngine.createRenderBlock`. Ein Fix darf sie nicht auseinanderlaufen
-  lassen; `ModulePCMSourceTests` deckt die Gleichheit von Echtzeit- und
-  Offlinepfad sample-genau ab.
-- `modplayer.js` und `mod-player-worklet.js` bilden Parser/DSP des HTML5-Players;
-  `src/` enthält UI-Quellen, `build.py` erzeugt die getrackte
-  `savage-mod-player.html`. Generiertes HTML nach Web-/Versionsänderungen neu bauen
-  und den Diff prüfen.
+- **`RenderEngine.swift` bleibt plattformneutral:** kein AVFoundation, Combine
+  oder CoreAudio. `ModuleRenderBlock` ist die neutrale Schnittstelle; CoreAudio
+  lebt nur in `ModPlayerCoordinator.makeSourceNodeRenderBlock`. Plattformcode
+  bleibt mit `canImport` geschützt.
+- `Sources/SavageModPlayerCore/Audio/`: formatfreie Ausgabeschicht (`PCMSink`,
+  `ModulePCMSource`). Änderungen mit `vicious_sidplayer` abgleichen; ein
+  gemeinsames Paket lohnt erst nach Bewährung in beiden Projekten.
+- **Eine Engine, mehrere Ausgaben.** Offline-Renderer, Echtzeit-CLI und App
+  verwenden `RenderEngine.createRenderBlock`; `ModulePCMSourceTests` vergleicht
+  Echtzeit- und Offlinepfad sample-genau.
+- `modplayer.js`, `mod-player-worklet.js` und `src/` sind Webquellen; `build.py`
+  erzeugt `savage-mod-player.html`. Nach Web-/Versionsänderungen neu bauen und
+  den Diff prüfen.
 - Der gemeinsame 4-Kanal-MOD-DSP in Swift und JavaScript muss mathematisch
   konsistent bleiben. Nach einem Fix in einer Variante die andere prüfen und bei
   ausstehender Parität einen Eintrag in [tasks/backlog.md](tasks/backlog.md)
   anlegen, nicht in dieser Dauerdatei.
-- `quicklook/PreviewProvider.swift` rendert höchstens 60 Sekunden WAV. Die Appex
-  wird sandboxed und zuerst mit Entitlements signiert; danach die App ohne
-  `--deep`. Parserfehler müssen eine endliche Textvorschau statt eines Hängers
-  liefern.
-- `Sources/SavageModPlayerCore/Archive/ZipArchiveReader.swift`: eigener
-  ZIP-Reader hinter `canImport(Compression)`, weil iOS weder `Process` noch
-  `bsdtar` hat. Streamt blockweise; der Speicherbedarf darf nie mit der
-  Archivgröße wachsen. Zip-Slip, Symlink-Einträge, verschlüsselte Einträge,
-  Zip64 und unplausible Kompressionsverhältnisse werden **abgelehnt, nicht
-  bereinigt**. Wer dort etwas ändert, fährt die Sicherheitstests mit.
-- `Sources/SavageModPlayerCore/Library/`: Bibliotheks-Schicht der iOS-App
-  (`MusicLibrary`, `LibraryImporter`, `LibraryReset`), plattformneutral und ohne
-  SwiftUI. **Stabile IDs sind relative Pfade** — der App-Container wechselt bei
-  jeder Neuinstallation seine UUID. Der Index liegt in `Application Support` und
-  darf nie die einzige Wahrheit sein: die Bibliothek liegt in `Documents/` und
-  ist über die Finder-Dateifreigabe direkt veränderbar.
-- `ios/SavageModPlayer/` ist eine `PBXFileSystemSynchronizedRootGroup`
-  (`objectVersion 77`): neue Swift-Dateien landen ohne pbxproj-Edit im Target.
-  `Info.plist` ist über `membershipExceptions` aus der Ressourcen-Phase
-  ausgenommen — ohne das kollidiert sie mit der generierten Bundle-Plist.
-- **Swift-6-Isolation auf iOS ist kein Warnungsthema, sondern ein Absturz.** Ein
-  Closure, das in einer `@MainActor`-Klasse gebildet wird, erbt deren Isolation;
-  ruft das System es auf einem anderen Thread auf, endet der Prozess mit SIGTRAP.
-  Betroffen sind Combine-Sinks auf Systembenachrichtigungen und
-  `MPRemoteCommand`-Handler — beide sind deshalb ausdrücklich entkoppelt
-  (`.receive(on:)` bzw. `@Sendable`).
+- Quick Look rendert höchstens 60 Sekunden WAV. Appex zuerst mit Entitlements,
+  danach die App ohne `--deep` signieren. Parserfehler liefern eine endliche
+  Textvorschau.
+- `ZipArchiveReader` streamt blockweise; Speicherbedarf darf nicht mit der
+  Archivgröße wachsen. Zip-Slip, Symlinks, Verschlüsselung, Zip64 und
+  unplausible Kompressionsverhältnisse werden **abgelehnt, nicht bereinigt**.
+- `Sources/SavageModPlayerCore/Library/` bleibt plattformneutral. **Stabile IDs
+  sind relative Pfade.** Der Index ist nur Cache; Wahrheit ist `Documents/`, das
+  auch über Finder-Dateifreigabe verändert werden kann.
+- Das iOS-Projekt nutzt `PBXFileSystemSynchronizedRootGroup`; neue Swift-Dateien
+  brauchen keinen pbxproj-Edit. `Info.plist` bleibt über
+  `membershipExceptions` aus der Ressourcen-Phase ausgenommen.
+- **Swift-6-Isolation auf iOS kann SIGTRAP auslösen.** Combine-Sinks auf
+  Systembenachrichtigungen und `MPRemoteCommand`-Handler bleiben deshalb
+  ausdrücklich entkoppelt (`.receive(on:)` beziehungsweise `@Sendable`).
 
 ## Sicherheit, Assets und Öffentlichkeit
 
@@ -100,24 +77,20 @@
 - Veröffentlichung und Release-Erstellung sind externe Wirkungen. GitHub,
   Notarisierung oder `publish_github.sh` nur nach Daniels konkretem Auftrag;
   vorher den Workflow `github-publish` laden.
-- Drei Einstiegspunkte: `build_app.sh` baut nur, `./install.sh` installiert
-  notarisiert, `./release.sh` packt das DMG (installiert nie). Beide heften
-  zuerst der App selbst ein Ticket an. Profilname aus `NOTARY_PROFILE` oder
-  `git config savageModPlayer.notaryProfile`.
+- `build_app.sh` baut nur, `install.sh` installiert notarisiert, `release.sh`
+  packt das DMG und installiert nie. Notary-Profil nur über `NOTARY_PROFILE`
+  oder die projektlokale Git-Konfiguration referenzieren.
 
 ## Git, Version und Parallelität
 
-- Vor Änderungen ausschließlich den privaten kanonischen Fleet-Remote aus den
-  globalen Regeln fetchen und nur einen sicheren Stand verwenden. Automatische
-  Commits/Pushes gehen ausschließlich dorthin; `origin`/GitHub bleiben ohne
-  konkreten Auftrag unangetastet.
+- Vor Änderungen den privaten kanonischen Fleet-Remote fetchen. Automatische
+  Commits/Pushes gehen nur dorthin; GitHub bleibt ohne Auftrag unangetastet.
 - Nur Scope-Pfade stagen. Fremdes WIP erhalten; keine destruktiven Git- oder
   Dateibefehle. Reine AGENTS-/CLAUDE-/Doku-Reorganisation erhöht die
   Produktversion nicht.
-- Eine echte Produktänderung aktualisiert `VERSION`, die betroffene Nutzer- und
-  Release-Doku sowie eingebettete Versionsartefakte. Danach gezielt testen,
-  committen und ausschließlich zum privaten kanonischen Fleet-Remote pushen.
-  Expected-Ausgaben nie still regenerieren.
+- Produktänderungen aktualisieren `VERSION`, Nutzer-/Release-Doku und
+  eingebettete Versionsartefakte. Danach testen, committen und zum privaten
+  kanonischen Remote pushen. Expected-Ausgaben nie still regenerieren.
 - Gemeinsame Hotspots (`ModuleModels.swift`, `DSPChannel.swift`,
   `AudioCoordinator.swift`, Parser-/Sequencer-Kern, `ContentView.swift`,
   `build_app.sh`) nur seriell editieren. Nie zwei Writer im selben logischen Repo
@@ -148,28 +121,13 @@ headless Gates; nach einem sichtbaren Test die Test-App wieder ausblenden.
 
 ## Progressive Detailregeln und bestätigte Fallen
 
-Vor einer betroffenen Änderung gezielt [docs/testing.md](docs/testing.md) lesen:
+Vor betroffenen Änderungen [docs/testing.md](docs/testing.md) lesen. Dort stehen
+Notary-, Quick-Look-, Release- und Gerätetestdetails. Dauerhafte iOS-Semantik:
 
-- Notary-Keychain-Profile sind pro Mac und müssen vor Nutzung verifiziert werden;
-  konkrete Profilnamen bleiben in privater Setup-Doku.
-- `RELEASE_NOTES.md` beginnt ohne eigene H1, weil `publish_github.sh` den
-  GitHub-Release-Titel separat setzt.
-- VLC kann `.mod` als `org.videolan.mod` exportieren; dann nimmt Quick Look den
-  System-Medienpfad und fragt die Extension nicht an. `.s3m` eignet sich als
-  belastbarer Extension-Smoke.
-- Ein Rebuild kann die lokale Appex-Registrierung verlieren; mit `pluginkit`
-  registrieren und prüfen. `qlmanage -p -o` testet moderne Preview-Extensions
-  nicht zuverlässig.
-- Audio benötigt `QLPreviewReply(fileURL:)`; eine WAV-Datenreply zeigt nur die
-  generische Infokarte.
-- Auf iOS steht die Bibliothek in `Documents/`, ist also für den Nutzer sichtbar
-  und veränderbar. Der Start gleicht deshalb immer mit dem Dateisystem ab;
-  per Finder abgelegte ZIPs werden dabei automatisch streamend ausgepackt.
-- Visualisierungen der iPhone-App sind **sichtbarkeitsgesteuert**. Scrollt ihr
-  Abschnitt in den Viewport, laufen Canvas und Core sofort; beim Herausscrollen,
-  Tabwechsel oder Sperren verschwinden die Views, die Wellenform-Caches werden
-  freigegeben und der Core sinkt von 30 Hz auf ~5 Hz. Kanal-Oszilloskope stehen
-  in einem 4-/8-spaltigen Raster und sind auf 32 sichtbare Kanäle begrenzt.
+- Finder-ZIPs werden beim Dateisystemabgleich automatisch streamend ausgepackt.
+- Visualisierungen laufen nur im sichtbaren Abschnitt. Beim Herausscrollen,
+  Tabwechsel oder Sperren verschwinden Views und Caches; der Core sinkt auf
+  etwa 5 Hz. Höchstens 32 Kanal-Oszilloskope erscheinen im 4-/8-spaltigen Raster.
 
 Die IT-Implementierung M0–M10 ist abgeschlossen. Dauerhafte Semantik und
 Capability-Grenzen sind projektextern dokumentiert. Historische
@@ -178,36 +136,15 @@ geschlossen und dürfen nicht reaktiviert werden.
 
 ## Aktive nächste Schritte
 
-Nur [tasks/backlog.md](tasks/backlog.md) ist die aktive Projektliste. Dort stehen
-unter anderem die offene Release-Notes-Entscheidung, der GUI-Dateiargument-Smoke,
-der Rest des Linux-Ports (Tastatursteuerung, Playlist, Dropout-Nachweis),
-optionale Visualizer-/Churn-Arbeit und seltene XM-Feinheiten. Erledigte Release-,
-UI-, Audit- und IT-Chronik liegt in Release Notes, Tasks und
-[docs/AGENTS-history-through-2026-07-12.md](docs/AGENTS-history-through-2026-07-12.md).
+Nur [tasks/backlog.md](tasks/backlog.md) ist die aktive Projektliste. Erledigtes
+liegt in Release Notes, Tasks und der ausgelagerten AGENTS-Historie.
 
 ## Verzeichnisstruktur
 
-- [CLAUDE.md](CLAUDE.md) — dünne Claude-Brücke zu diesem Kanon.
-- [README.md](README.md) und [README.de.md](README.de.md) — Produkt, Bedienung,
-  Build und CLI; [RELEASE_NOTES.md](RELEASE_NOTES.md) und
-  [RELEASE_NOTES.de.md](RELEASE_NOTES.de.md) — aktuelle Release-Historie.
-- [docs/testing.md](docs/testing.md) — Test-/Build-/Quick-Look-Runbook;
-  `docs/screenshot-dark.png` ist ein Produktasset, keine Regelquelle.
-- [tasks/backlog.md](tasks/backlog.md) — echte offene Arbeit;
-  [Linux-Plan](tasks/2026-07-05-linux-port/plan.md) — optionales größeres
-  Vorhaben.
-- [docs/AGENTS-history-through-2026-07-12.md](docs/AGENTS-history-through-2026-07-12.md)
-  — ausgelagerte erledigte AGENTS-Chronik. `archive/p_modplayer_*` ist ein
-  gitignorierter lokaler Sonderbestand und keine aktive Regelquelle.
-- `Sources/SavageModPlayerCore/` — Parser, `DSP/` (Renderkern, plattformneutral),
-  `Audio/` (Ausgabeschicht/PCMSink), `Playlist/`, `Archive/` (eigener ZIP-Reader),
-  `Library/` (Bibliothek der iOS-App); `Sources/CALSA/` — Systemmodul
-  für ALSA (nur Linux); `Sources/SavageCLI/` — `savage-cli` (macOS + Linux).
-- `Sources/` und `Tests/` — native Produkte und Tests; `quicklook/` — Extension;
-  `src/`, `modplayer.js`, `mod-player-worklet.js` und
-  `savage-mod-player.html` — Webquelle und generiertes Single-File-Produkt.
-- `ios/` — iPhone-App: `SavageModPlayer.xcodeproj` (eingecheckt, synchronized
-  groups), `SavageModPlayer/` mit `Player/`, `Library/`, `UI/` und `Resources/`,
-  `SavageModPlayerTests/` (Simulator) sowie `scripts/` mit
-  `build-simulator.sh`, `run-tests.sh` und `build-device.sh`. `ios/build/` ist
-  gitignoriert.
+- `README*` und `RELEASE_NOTES*`: Produkt, Bedienung und Release-Historie.
+- `docs/testing.md`: Test-/Build-Runbook; `tasks/backlog.md`: offene Arbeit;
+  `docs/AGENTS-history-through-2026-07-12.md`: erledigte Regelchronik.
+- `Sources/SavageModPlayerCore/`: Parser, DSP, Audio, Playlist, Archive und
+  Library; `Sources/SavageCLI/`: CLI; `quicklook/`: Extension.
+- `src/`, `modplayer*.js`, `savage-mod-player.html`: Webplayer.
+- `ios/`: iPhone-App, Tests und Build-Skripte; `ios/build/` ist gitignoriert.

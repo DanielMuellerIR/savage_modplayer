@@ -16,6 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Kontext- und Doku-Regeln
+        run: python3 Tests/context_hygiene_tests.py
+
       - name: Swift Version
         run: swift --version
 

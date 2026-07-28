@@ -84,7 +84,7 @@ class ContextHygieneTests(unittest.TestCase):
             with self.subTest(path=nested.relative_to(ROOT)):
                 self.assertLessEqual(root_size + nested.stat().st_size, 32_768)
 
-    def test_deferred_rules_and_stale_handoff_are_reachable(self):
+    def test_deferred_rules_and_backlog_state_are_reachable(self):
         testing = (ROOT / "docs/testing.md").read_text(encoding="utf-8")
         backlog = (ROOT / "tasks/backlog.md").read_text(encoding="utf-8")
         for marker in ("DSPChannelTimingTests", "worklet-timing.mjs",
@@ -92,7 +92,8 @@ class ContextHygieneTests(unittest.TestCase):
                        "Notary-Keychain"):
             self.assertIn(marker, testing)
         self.assertIn("GUI-Smoke", backlog)
-        self.assertIn("Amiga-Periodentabelle", backlog)
+        self.assertIn("Pxy-Effekt-Memory", backlog)
+        self.assertIn("XM unterstützt lineare und Amiga-Perioden", backlog)
 
     def test_no_markdown_file_leaks_private_infrastructure(self):
         """Alle getrackten Markdown-Dateien, nicht nur eine feste Handvoll.
