@@ -1,6 +1,6 @@
 # Aktiver Projekt-Backlog
 
-Stand: 2026-07-27 · Version 1.6.4.
+Stand: 2026-08-02 · Version 1.6.5.
 
 Diese Datei ist die einzige aktive Projektliste. Erledigte Chronik liegt in
 Release Notes, abgeschlossenen Tasks und `archive/`.
@@ -28,8 +28,45 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
    (`savage-cli --play`, ALSA); es fehlen Tastatursteuerung (Pause, nächster
    Titel, Quit) und Playlist-Wiedergabe über `--list`. Details:
    [Linux-Plan](2026-07-05-linux-port/plan.md).
+3. **iOS: Modul-Laden vom MainActor holen.** `PlaybackEngine.loadModule` liest,
+   parst und übergibt synchron auf dem Hauptthread (`Data(contentsOf:)`,
+   `ModuleLoader.parse`, `setMod` samt Dauerprobe). Große Module und
+   Cloud-Dateien frieren die Oberfläche ein und können den Watchdog auslösen.
+   Umbau: Lesen/Parsen/Dauerberechnung als abbrechbarer Hintergrundauftrag,
+   nur das Ergebnis des noch aktuellen Ladeauftrags auf dem MainActor
+   übernehmen. Betrifft auch die Skip-Schleife in `activateTrack` und
+   `rebuildAfterMediaServicesReset`; wegen der Swift-6-Isolationsfallen
+   (SIGTRAP, siehe AGENTS) mit Bedacht und mit Simulator-Tests umsetzen.
+4. **iOS: „Öffnen mit …" umsetzen oder Deklaration entfernen.** `Info.plist`
+   registriert MOD/S3M/XM/IT/ZIP als Dokumenttypen, aber es gibt keinen
+   `onOpenURL`-Handler — eine übergebene Datei startet nur die App und wird
+   verworfen. Security-scoped importieren und abspielen; andernfalls die
+   Dokumenttypen streichen.
 
 ## Optionaler Feinschliff
+
+- **iOS-Review-Nachschliff (Code-Review 2026-08-02):**
+  - Player-Queue mit Filterkontext: `RootView` ersetzt bei jeder Änderung von
+    `LibraryStore.tracks` die Queue durch die Gesamtbibliothek — auch wenn die
+    Wiedergabe bewusst aus Suche oder Favoriten gestartet wurde. Queue-Quelle
+    samt Filter merken und Bibliotheksänderungen nur innerhalb der aktiven
+    Auswahl abgleichen.
+  - `FileProviderReader`: die synchrone `NSFileCoordinator`-Koordination hat
+    kein Zeitlimit und ignoriert nach dem letzten Vorab-Check das Abbruchflag;
+    ein hängender fremder File Provider blockiert den Bibliotheks-Worker
+    dauerhaft. Watchdog mit `coordinator.cancel()` plus Stall-Timeout —
+    ehrlich nur mit realem File-Provider-Szenario belegbar.
+  - `NowPlayingController`: `deactivate()` wird außerhalb von `activate()` nie
+    aufgerufen; neue Instanzen (vor allem in Tests) sammeln wirkungslose
+    Handler im globalen `MPRemoteCommandCenter`. Tokens in einen Halter mit
+    garantiertem Teardown verschieben.
+  - `Info.plist`-Dokumenttypnamen (`UTTypeDescription`/`CFBundleTypeName`)
+    sind nur deutsch; über `InfoPlist.xcstrings` auch englisch lokalisieren.
+  - AVAudioSession-Doppelverwaltung auflösen: `ModPlayerCoordinator.play()`
+    setzt und aktiviert die iOS-Session zusätzlich zum
+    `AudioSessionController` der App (Fehlerbehandlung nur per `print`).
+    Session-Verwaltung ausschließlich in der App bündeln und den
+    iOS-Block im Core entfernen; Verhalten am Gerät gegenprüfen.
 
 - **Visualizer-Bildrate als Opt-in-Einstellung.** Default bleibt 30 Hz und damit
   volle Optik. Optionen etwa 30/24/15/10 Hz speisen den Full-Mode-

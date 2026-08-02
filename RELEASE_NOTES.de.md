@@ -1,94 +1,86 @@
-Savage Mod Player 1.6.4 hält die wesentlichen Transportfunktionen auch im
-kompakten Mac-Player erreichbar und behält die optimierte iPhone-Wiedergabe,
-automatische ZIP-Verarbeitung und sichtbarkeitsgesteuerte Visualisierungen bei.
+Savage Mod Player 1.6.5 ist ein Korrektheits- und Robustheits-Release über
+alle Zielplattformen: ein hörbarer XM-Stimmungsfix, strengere Parser und
+ZIP-Verarbeitung, ein sichererer Bibliotheks-Import sowie kleinere Fixes in
+der iPhone-App, im CLI und in den Build-Skripten.
 
-## macOS-App
+## Wiedergabe-Korrektheit
 
-- Im kompakten Fußbereich bleiben jetzt der Shuffle-Schalter sowie die Sprünge
-  um 30 Sekunden zurück und vor sichtbar. Der Positionsregler ersetzt weder
-  relative Sprünge noch die Wahl der Abspielreihenfolge.
+- XM-Module mit Amiga-Frequenztabelle spielen jetzt in der Tonhöhe, die
+  FastTracker II definiert (Frequenz = 8363 × 1712 / Periode). Bisher wurden
+  sie gegen die Amiga-PAL-Clock gerechnet und klangen rund zwei Oktaven zu
+  tief. Module mit linearer Frequenztabelle sind nicht betroffen.
+- Ein S3M-Header-Global-Volume von 0 gilt jetzt als bewusst stummer Start.
+  Die einzige dokumentierte Realwelt-Ausnahme bleibt: Dateien aus Scream
+  Tracker vor 3.20 speichern 0 oft als „nicht gesetzt" und behalten volle
+  Lautstärke.
+- Im Titel-Loop der iPhone-App springt die angezeigte Spielzeit (App und
+  Sperrbildschirm) am Loop-Punkt zurück, statt die Titeldauer zu überholen.
+
+## Strengere Parser und ZIP-Verarbeitung
+
+- Der S3M-Parser validiert die deklarierte Länge jedes gepackten Patterns und
+  lehnt abgeschnittene Patterns ab, statt stillschweigend Sampledaten als
+  Noten-Events zu lesen.
+- Der XM-Parser lehnt abgeschnittene Header und Dateien ab und behandelt
+  Pattern-Zellen, die über die deklarierten Pattern-Daten hinausragen, als
+  Korruption.
+- Der ZIP-Reader erzwingt sein Eintragslimit bereits beim Einlesen des
+  Inhaltsverzeichnisses, gleicht es gegen den EOCD-Datensatz ab und lehnt
+  Einträge ab, die dieselbe Zieldatei treffen würden — auch Schreibweisen,
+  die nur auf case-insensitiven Dateisystemen kollidieren. Zieldateien werden
+  exklusiv angelegt, nie überschrieben.
+
+## Bibliotheks-Import
+
+- Ein Quellarchiv wird nur nach vollständig erfolgreicher Übernahme gelöscht:
+  kein Abbruch, keine Fehler und mindestens eine übernommene Datei. Archive
+  ohne spielbaren Inhalt, teilweise übernommene Archive und Einträge mit
+  nicht unterstützter Kompressionsmethode lassen das Original nicht mehr
+  verschwinden.
+- Ein Abbruch wird über die gesamte Kette als solcher erkannt (auch beim
+  Warten auf Cloud-Dateien) und nicht mehr als Dateifehler gemeldet.
+- Unlesbare Quellordner erscheinen im Bericht statt still zu fehlen, ein
+  unterbrochener Dateisystem-Abgleich entfernt keine bekannten Einträge mehr
+  aus dem Index, und ein teilweise gescheitertes Zurücksetzen baut den Index
+  aus dem tatsächlich verbliebenen Bestand neu auf.
+- Das Entpacken auf macOS und Linux (bsdtar) lässt sich jetzt abbrechen.
+- Archive, deren Name dem Amiga-Präfix `mod.` entspricht (etwa
+  `mod.collection.zip`), gelten überall als Archiv und werden entpackt, statt
+  als unspielbare „Moduldatei" importiert zu werden.
+
+## Quick Look
+
+- Der Vorschau-Cache-Schlüssel entsteht aus genau den Bytes, die gelesen und
+  gerendert wurden. Eine an Ort und Stelle ersetzte Datei — selbst mit
+  identischer Größe und Änderungszeit — kann nicht mehr die Audiodaten der
+  Vorgängerdatei aus dem Cache liefern.
+
+## CLI
+
+- `--play` mit `--seconds 0` respektiert jetzt die dokumentierte
+  600-Sekunden-Kappung, statt einen Loop endlos zu spielen.
+- `--play` lehnt `--out`, `--stdout`, `--normalize` und `--rate` ab, statt
+  sie still zu ignorieren.
 
 ## iPhone-App
 
-- Die native SwiftUI-App liegt unter `ios/` und bindet dasselbe
-  `SavageModPlayerCore` ein wie die macOS-App, die Quick-Look-Erweiterung und der
-  Kommandozeilen-Renderer. Es gibt keine zweite Wiedergabe-Implementierung.
-- Die Wiedergabe läuft im Hintergrund und bei gesperrtem Gerät weiter. Titel,
-  Format, Ordner, Titelbild und verstrichene Zeit erscheinen auf dem
-  Sperrbildschirm; Play, Pause, Weiter, Zurück, der Positionsregler sowie
-  −15 s / +30 s funktionieren von dort und über die Kopfhörersteuerung.
-- Die Audiositzung behandelt die Fälle, die auf einem Telefon wirklich
-  vorkommen: ein eingehender Anruf pausiert und setzt danach fort, das Abziehen
-  der Kopfhörer pausiert statt auf den Lautsprecher zu wechseln, und ein Neustart
-  der Systemaudiodienste baut die Engine samt Tiefpass des LED-Filters neu auf.
-- Die Visualizer-Aktivierung auf echten iPhones hängt nicht mehr an
-  unzuverlässigen Lifecycle-Rückrufen einer Lazy-Liste. Die Tab-Auswahl wird
-  explizit verfolgt; die Scroll-Sichtbarkeit kommt auf iOS 18 vom System und auf
-  iOS 17 aus einer Geometrie-Abfrage.
-- Die gemeinsame Xcode-Scheme startet die App nun als optimierten Release-Build.
-  Unoptimierter Swift-Replay-Code kann bei mehrkanaligen IT-Modulen mit hoher
-  Zeilenrate langsamer als Echtzeit sein; auf einem echten iPhone entstanden
-  dadurch zuvor ein kurzes Kratzen und anschließende Aussetzer.
-  Simulator-Tests bleiben Debug-Builds.
-- Die Bibliothek ist ein echter Ordnerbaum, keine flache Liste. Ordner starten
-  zugeklappt, der Pfad zum laufenden Titel klappt automatisch auf, und Wiedergabe
-  wie Zufallswiedergabe laufen über alle Ordner. Live-Suche, Favoriten,
-  Loop-Modi und Sitzungswiederherstellung arbeiten wie auf dem Desktop.
-- Visualisierungen brauchen keinen Ein-/Aus-Schalter mehr. Sie starten, sobald
-  ihr Abschnitt in den Scrollbereich kommt, und stoppen beim Herausscrollen,
-  Tabwechsel oder Sperren. Canvas-Views und Wellenform-Caches werden im
-  unsichtbaren Zustand freigegeben. Bis zu 32 Kanal-Oszilloskope stehen auf dem
-  iPhone in vier, auf breiten Layouts in acht Spalten statt gequetscht in einer
-  Zeile.
-- PAL/NTSC-Takt, LED-Filter, Hi-Fi-Interpolation und Stereo-Separation sind
-  vorhanden. Das Erscheinungsbild nutzt nun die Blau-/Cyan-/Graphit-Palette der
-  Mac-App; das iOS-Asset ist als echtes PNG aus derselben Icon-Quelle verpackt.
-  Es folgt dem System und lässt sich fest auf hell oder dunkel stellen.
+- „Zurück" über eine defekte Datei sucht jetzt rückwärts weiter, statt wieder
+  vorwärts zum aktuellen Titel zu springen.
+- Ein pausierter Titel behält seine Position auch nach einem Neustart der
+  Systemaudiodienste mit anschließendem App-Neustart.
+- Fehler und offene Archive erscheinen auch bei leerer Bibliothek — ein
+  gescheitertes Auspacken der einzigen ZIP-Datei ist damit sichtbar und
+  wiederholbar.
 
-## Musik auf das Gerät bekommen
+## Build-Skripte und CI
 
-- **Ordner-Import in der App:** einen Ordner auswählen, und alles Spielbare
-  darin wird mitsamt Struktur in die Bibliothek kopiert. Archive werden
-  ausgepackt, Doppelte übersprungen, der Fortschritt angezeigt, und der Import
-  lässt sich abbrechen, ohne eine halbfertige Bibliothek zu hinterlassen.
-  Dateien aus einem Cloud-Dateianbieter werden zuvor geladen und koordiniert
-  gelesen.
-- **Finder-Dateifreigabe:** iPhone anschließen, im Finder „Dateien" öffnen und
-  ganze Ordner auf die App ziehen. Dieselbe Bibliothek erscheint in der
-  iOS-Dateien-App unter „Auf meinem iPhone". Die App gleicht ihren Index bei
-  jedem Start mit dem Dateisystem ab, sodass von außen abgelegte oder gelöschte
-  Dateien richtig ankommen. Dort gefundene ZIP-Archive werden automatisch
-  ausgepackt statt auf einen separaten Knopf zu warten; nur fehlgeschlagene oder
-  abgebrochene Archive bleiben zum erneuten Versuch stehen.
-- **Bibliothek zurücksetzen:** eine zweistufige Bestätigung löscht Titel, Index
-  und zwischengespeicherte Extrakte; Favoriten können erhalten bleiben.
-
-## ZIP ohne fremde Werkzeuge
-
-- Der Core hat einen eigenen ZIP-Reader bekommen. Er streamt jeden Eintrag
-  blockweise direkt in seine Zieldatei, der Speicherbedarf wächst also nicht mit
-  der Archivgröße — ein 120-MB-Archiv braucht jetzt rund 7 MB statt 122 MB.
-- Entpackt werden ausschließlich spielbare Moduldateien. Bei einem großen
-  Sammlungsarchiv spart das den Löwenanteil an Zeit und Platz.
-- Einträge, die aus dem Zielordner herausführen, symbolische Links,
-  verschlüsselte Einträge, ZIP64-Archive und unplausible Kompressionsverhältnisse
-  werden abgelehnt statt bereinigt; die CRC32-Prüfsumme jedes Eintrags wird
-  verifiziert.
-- macOS und Linux nutzen weiterhin das System-`bsdtar`, das auch 7-Zip liest.
-  Auf iOS wird 7-Zip nicht unterstützt und genau so gemeldet.
-
-## Verifikation und bekannte Grenzen
-
-- Die vollständige Swift-Suite, der Linux-Container-Lauf, der macOS-App- und
-  Quick-Look-Build, byteidentische Kommandozeilen-WAV-Ausgabe gegen die vorherige
-  Baseline über den lokalen Modulbestand sowie Build und Testlauf im
-  iOS-Simulator decken das Release ab.
-- Hintergrundwiedergabe, Sperrbildschirm-Steuerung, Kopfhörerverhalten und der
-  Speicherbedarf beim Import eines großen Archivs sind nur auf einem echten Gerät
-  belegbar und werden nicht auf Basis eines Simulatorlaufs behauptet.
-- Die iPhone-App hat keinen WAV-Export; der bleibt eine Desktop-Funktion.
-- MPTM, VST-/AudioUnit-Plugin-Wiedergabe und externe MIDI-Ausgabe bleiben
-  außerhalb der nativen Engine. Der HTML5-Player bleibt bewusst auf klassische
-  vierkanalige ProTracker-MOD-Dateien begrenzt.
-- Das DMG ist mit Developer ID signiert, von Apple notarisiert und enthält App
-  und Quick-Look-Erweiterung. Moduldateien werden nicht mitgeliefert.
+- `release.sh`, `install.sh` und `ios/scripts/build-device.sh` parsen alle
+  Argumente, bevor irgendetwas passiert: `--help` antwortet sofort, und
+  unbekannte Optionen brechen ab, statt Builds, Notarisierung oder
+  Installation anzustoßen.
+- Der Notarisierungs-Helfer räumt sein Temp-Verzeichnis auf jedem Fehlerpfad
+  auf, und `release.sh` entfernt ein altes DMG vor dem Lauf, damit die
+  Erfolgsprüfung wirklich diesen Lauf belegt.
+- CI baut zusätzlich das App-Bundle samt Quick-Look-Erweiterung (unsigniert),
+  führt die UI-Quelltests aus und baut und testet die iPhone-App gegen das
+  Simulator-SDK.
