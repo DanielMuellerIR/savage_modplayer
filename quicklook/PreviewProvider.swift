@@ -24,13 +24,19 @@ class PreviewProvider: QLPreviewProvider, QLPreviewingController {
         do {
             let data = try Data(contentsOf: request.fileURL)
             let mod = try ModuleLoader.parse(data: data)
+            // Cache-Identitaet aus GENAU den eingelesenen Bytes ableiten —
+            // nicht danach erneut aus Pfad/Groesse/Aenderungszeit der URL.
+            // Wird die Datei zwischen Lesen und Attributabfrage ersetzt (oder
+            // mit gleicher Groesse/Zeit ueberschrieben), verband der alte
+            // Schluessel sonst dauerhaft alte Audiodaten mit neuer Identitaet.
+            let cacheKey = PreviewCacheIdentity.key(forContents: data)
 
             // WICHTIG: Die WAV als DATEI-URL liefern, nicht als Daten-Reply.
             // QLPreviewReply(dataOfContentType:) zeigt fuer Audio nur die
             // generische Info-Karte; erst initWithFileURL: (laut Header explizit
             // inkl. UTTypeAudio) bekommt den nativen Audio-Player mit
             // Play/Scrubbing. Die Datei liegt im Sandbox-Container der Extension.
-            let wavURL = try Self.previewWav(for: mod, sourceURL: request.fileURL)
+            let wavURL = try Self.previewWav(for: mod, cacheKey: cacheKey)
             let reply = QLPreviewReply(fileURL: wavURL)
 
             // Titelzeile des Preview-Fensters: Songname + Format + Kanalzahl.
@@ -48,22 +54,16 @@ class PreviewProvider: QLPreviewProvider, QLPreviewingController {
         }
     }
 
-    // Rendert jede unveränderte Quelldatei nur einmal. Finder fordert dieselbe
-    // Vorschau häufig mehrfach an; ohne diesen Cache sah der Nutzer bei jedem
-    // Öffnen wieder lange den Ladeindikator.
-    private static func previewWav(for mod: Mod, sourceURL: URL) throws -> URL {
+    // Rendert jeden Dateiinhalt nur einmal. Finder fordert dieselbe Vorschau
+    // häufig mehrfach an; ohne diesen Cache sah der Nutzer bei jedem Öffnen
+    // wieder lange den Ladeindikator. `cacheKey` kommt aus den eingelesenen
+    // Bytes (PreviewCacheIdentity) und gehört damit zu exakt dem `mod`, das
+    // hier gerendert wird.
+    private static func previewWav(for mod: Mod, cacheKey: String) throws -> URL {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent("SavagePreviews", isDirectory: true)
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        let values = try sourceURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        let fileSize = values.fileSize ?? 0
-        let modificationDate = values.contentModificationDate ?? .distantPast
-        let cacheKey = PreviewCacheIdentity.key(
-            sourceURL: sourceURL,
-            fileSize: fileSize,
-            modificationDate: modificationDate
-        )
         let cachedURL = dir.appendingPathComponent("\(cacheKey).wav")
         if fm.fileExists(atPath: cachedURL.path) {
             return cachedURL
@@ -74,9 +74,10 @@ class PreviewProvider: QLPreviewProvider, QLPreviewingController {
             maxDurationSeconds: previewDurationSeconds
         )
 
-        // Aufraeumen: Der Dateistempel ist Teil des Cache-Schlüssels. Alte
-        // Varianten bleiben nur kurz liegen, damit wiederholtes Leertasten
-        // schnell bleibt, ohne den Extension-Container dauerhaft zu füllen.
+        // Aufraeumen: Der Schlüssel hängt am Inhalt — WAVs ersetzter oder
+        // gelöschter Dateien verwaisen und verschwinden über dieses
+        // Alters-Aufräumen, damit wiederholtes Leertasten schnell bleibt,
+        // ohne den Extension-Container dauerhaft zu füllen.
         if let existing = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) {
             let cutoff = Date().addingTimeInterval(-86_400)
             for url in existing {

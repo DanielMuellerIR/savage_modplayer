@@ -29,14 +29,22 @@ _DENYLIST_ENV = "HYGIENE_DENYLIST"
 
 
 def _hard_name_pattern():
-    """Nur die `gate:`-Regeln als ein Muster, oder None wenn nicht lesbar."""
+    """Nur die `gate:`-Regeln als ein Muster, oder None wenn nicht konfiguriert.
+
+    Opt-out ist AUSSCHLIESSLICH die nicht gesetzte Variable (oeffentliche CI).
+    Ist sie gesetzt, der Pfad aber unlesbar, schlaegt der Test fehl — sonst
+    waere eine ausdruecklich konfigurierte Schutzpruefung unbemerkt
+    deaktiviert. Die Meldung nennt bewusst weder Pfad noch Inhalt.
+    """
     pfad = os.environ.get(_DENYLIST_ENV)
     if not pfad:
         return None
     try:
         lines = Path(pfad).read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
+    except OSError as error:
+        raise RuntimeError(
+            "%s ist gesetzt, aber die Liste ist nicht lesbar (%s)."
+            % (_DENYLIST_ENV, type(error).__name__))
     frags = []
     for raw in lines:
         line = re.sub(r"\s+#.*$", "", raw.rstrip()).strip()
@@ -50,6 +58,20 @@ def _hard_name_pattern():
 
 
 class ContextHygieneTests(unittest.TestCase):
+    def test_unreadable_denylist_fails_instead_of_silently_skipping(self):
+        """Gesetzte, aber unlesbare Denylist => Fehler, kein stilles Opt-out."""
+        broken = str(ROOT / "Tests" / "__gibt_es_nicht__" / "denylist.txt")
+        original = os.environ.get(_DENYLIST_ENV)
+        os.environ[_DENYLIST_ENV] = broken
+        try:
+            with self.assertRaises(RuntimeError):
+                _hard_name_pattern()
+        finally:
+            if original is None:
+                os.environ.pop(_DENYLIST_ENV, None)
+            else:
+                os.environ[_DENYLIST_ENV] = original
+
     def test_root_rules_fit_and_keep_invariants(self):
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         self.assertGreaterEqual(len(agents.encode("utf-8")), 6_000)

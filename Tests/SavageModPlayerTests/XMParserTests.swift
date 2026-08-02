@@ -269,6 +269,86 @@ final class XMParserTests: XCTestCase {
         XCTAssertTrue(amiga.dropFirst(44).contains(where: { $0 != 0 }))
     }
 
+    func testXMAmigaC4PlaysAtFastTrackerClock() throws {
+        // XM mit Amiga-Frequenztabelle: C-4 hat die FT2-Periode 1712 und muss
+        // laut XM-Spezifikation mit 8363 Hz spielen (Frequenz = 8363*1712 /
+        // Periode). Gegen die Paula-PAL-Clock gerechnet laege C-4 bei rund
+        // 2072 Hz — etwa zwei Oktaven zu tief.
+        var amigaData = makeXM()
+        amigaData[0x4A] = 0
+        amigaData[0x4B] = 0
+        let mod = try XMParser.parse(data: amigaData)
+        XCTAssertFalse(mod.linearFrequency)
+
+        let state = RenderEngine.makeRenderState(for: mod, sampleRate: 44100)
+        XCTAssertEqual(state.clockRateOverride, 8363.0 * 1712.0)
+
+        // Render-Pfad bis zum ersten Notentrigger laufen lassen und die
+        // resultierende Abspielfrequenz von Kanal 0 (C-4, Instrument 1) messen.
+        let channels = RenderEngine.makeRenderChannels(for: mod)
+        for _ in 0..<8 {
+            SequencerCore.advanceIfNeeded(
+                state: state, channels: channels, mod: mod, sampleRate: 44100)
+            if channels[0].sampleSpeed > 0 { break }
+            let step = UInt64(max(1, Int(ceil(state.outputsUntilNextTick))))
+            state.outputsUntilNextTick -= Double(step)
+            state.elapsedFrames += step
+        }
+        let hz = channels[0].sampleSpeed * 44100
+        XCTAssertEqual(hz, 8363, accuracy: 1.0)
+    }
+
+    func testXMClockOverrideDoesNotLeakIntoOtherFormats() throws {
+        // Lineares XM bekommt zwar denselben Override, ignoriert ihn aber in
+        // der Exponentialformel; MOD bleibt beim PAL/NTSC-Schalter (0).
+        let linear = try XMParser.parse(data: makeXM())
+        XCTAssertEqual(RenderEngine.clockRateOverride(for: linear), 8363.0 * 1712.0)
+    }
+
+    // MARK: - Struktur-Guards
+
+    func testTruncatedFileIsRejectedInsteadOfParsingAsEmptyModule() {
+        // 70 Bytes mit gueltiger Signatur, songLength 1, numChannels 1 und
+        // deklariertem 276-Byte-Header: Frueher wurde daraus ein kuenstliches
+        // leeres XM (Order-Table und Restfelder lasen 0 hinter dem Dateiende).
+        var bytes = [UInt8](repeating: 0, count: 70)
+        bytes.replaceSubrange(0..<17, with: Array("Extended Module: ".utf8))
+        bytes[0x3C] = 0x14; bytes[0x3D] = 0x01      // headerSize 276
+        bytes[0x40] = 1                             // songLength
+        bytes[0x44] = 1                             // numChannels
+        XCTAssertThrowsError(try XMParser.parse(data: Data(bytes))) { error in
+            XCTAssertEqual(error as? XMParser.ParserError, .fileTooSmall)
+        }
+    }
+
+    func testHeaderSizeMustCoverUsedOrderEntries() {
+        // headerSize unter 20 + songLength kann die genutzte Order-Table nicht
+        // enthalten -> strukturell defekt.
+        var data = makeXM()
+        data[0x3C] = 21; data[0x3D] = 0; data[0x3E] = 0; data[0x3F] = 0
+        XCTAssertThrowsError(try XMParser.parse(data: data)) { error in
+            guard case .unsupportedDimensions? = error as? XMParser.ParserError else {
+                return XCTFail("erwartet unsupportedDimensions, war \(error)")
+            }
+        }
+    }
+
+    func testCellCrossingDeclaredPatternDataIsRejected() {
+        // patternDataSize von Pattern 0 auf 2 Bytes druecken: die erste Zelle
+        // (Maskenbyte + Note + Instrument) ragt dann ueber die deklarierten
+        // Pattern-Daten hinaus und muss als Korruption gelten — frueher wurden
+        // die Folgebytes still als Zellinhalt uebernommen.
+        var data = makeXM()
+        let patternStart = 0x3C + 276               // headerSize des Fixtures
+        data[patternStart + 7] = 2
+        data[patternStart + 8] = 0
+        XCTAssertThrowsError(try XMParser.parse(data: data)) { error in
+            guard case .corruptPattern? = error as? XMParser.ParserError else {
+                return XCTFail("erwartet corruptPattern, war \(error)")
+            }
+        }
+    }
+
     func testPattern0Notes() throws {
         let mod = try XMParser.parse(data: makeXM())
         let rows = mod.patterns[0].rows

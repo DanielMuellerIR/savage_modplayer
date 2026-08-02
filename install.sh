@@ -18,6 +18,26 @@
 # Letzte Zeile bei Erfolg: INSTALL OK: /Applications/Savage Mod Player.app (<version>)
 set -euo pipefail
 cd "$(dirname "$0")"
+
+usage() {
+    cat <<EOF
+Usage: ./install.sh
+
+Baut, notarisiert und installiert nach /Applications. Es gibt keine Optionen;
+-h/--help zeigt nur diese Hilfe.
+EOF
+}
+
+# install.sh kennt keine Optionen: Hilfe sofort beantworten, alles andere
+# ablehnen — frueher lief ./install.sh --help ungebremst durch Build,
+# Notarisierung, pkill und den Austausch unter /Applications.
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unbekannte Option: $arg" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
 source ./notarize-lib.sh
 
 require_notary_profile

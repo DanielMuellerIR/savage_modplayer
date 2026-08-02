@@ -19,6 +19,7 @@ public class S3MParser {
         case noChannels
         case unsupportedDimensions(String)
         case resourceLimit(String)
+        case corruptPattern(String)
 
         public var errorDescription: String? {
             switch self {
@@ -34,6 +35,8 @@ public class S3MParser {
                 return "Nicht unterstützte S3M-Abmessungen: \(detail)."
             case .resourceLimit(let detail):
                 return "S3M-Modul überschreitet das sichere Ressourcenlimit: \(detail)."
+            case .corruptPattern(let detail):
+                return "Beschädigtes S3M-Pattern: \(detail)."
             }
         }
     }
@@ -70,6 +73,7 @@ public class S3MParser {
         let ordNum = word(0x20)
         let insNum = word(0x22)
         let patNum = word(0x24)
+        let cwtv = word(0x28)           // "created with tracker version", z.B. 0x1320 = ST 3.20
         let ffi = word(0x2A)            // 1 = signed Samples (alt), 2 = unsigned
         let globalVolume = byte(0x30)
         let initialSpeed = byte(0x31)
@@ -257,13 +261,44 @@ public class S3MParser {
             var grid = (0..<64).map { _ in [Note](repeating: emptyNote, count: channelCount) }
 
             if para > 0 {
-                var pos = para * 16 + 2 // 2 Bytes gepackte Länge überspringen
+                let packedStart = para * 16
+                // Das Zwei-Byte-Längenfeld deklariert die Gesamtlänge des
+                // gepackten Patterns INKLUSIVE der beiden Längenbytes. Diese
+                // Grenze gilt für JEDEN Feldzugriff — sonst liest ein
+                // abgeschnittenes Pattern Sample- oder Folgedaten als Events
+                // und scannt bei bis zu 100 Patterns wiederholt große Teile
+                // einer präparierten Datei.
+                let declaredLength = word(packedStart)
+                // 64 Zeilen brauchen mindestens 64 Terminator-Bytes plus das
+                // Längenfeld; weniger kann strukturell kein volles Pattern sein.
+                guard declaredLength >= 2 + 64, packedStart + declaredLength <= data.count else {
+                    throw ParserError.corruptPattern(
+                        "Pattern \(p): deklarierte Länge \(declaredLength) passt nicht zur Datei")
+                }
+                let dataEnd = packedStart + declaredLength
+                var pos = packedStart + 2
                 var row = 0
-                while row < 64 && pos < data.count {
+                while row < 64 {
+                    // Fehlende Zeilen vor dem deklarierten Ende sind Korruption,
+                    // kein stilles "Rest bleibt leer".
+                    guard pos < dataEnd else {
+                        throw ParserError.corruptPattern(
+                            "Pattern \(p): endet nach Zeile \(row) statt 64")
+                    }
                     let what = byte(pos); pos += 1
                     if what == 0 {
                         row += 1
                         continue
+                    }
+                    // Benötigte Bytes aus den Flag-Bits ableiten und die Grenze
+                    // VOR dem Lesen prüfen.
+                    var needed = 0
+                    if what & 32 != 0 { needed += 2 }
+                    if what & 64 != 0 { needed += 1 }
+                    if what & 128 != 0 { needed += 2 }
+                    guard pos + needed <= dataEnd else {
+                        throw ParserError.corruptPattern(
+                            "Pattern \(p): Event in Zeile \(row) überschreitet die Pattern-Grenze")
                     }
                     var noteByte = 255
                     var instByte = 0
@@ -322,9 +357,21 @@ public class S3MParser {
             format: .s3m,
             initialSpeed: initialSpeed > 0 ? initialSpeed : 6,
             initialTempo: initialTempo >= 32 ? initialTempo : 125,
-            initialGlobalVolume: (1...64).contains(globalVolume) ? globalVolume : 64,
+            initialGlobalVolume: normalizedGlobalVolume(globalVolume, createdWithTracker: cwtv),
             channelPannings: pannings
         )
+    }
+
+    // Header-Global-Volume: Der Spezifikationsbereich ist 0...64 und gilt
+    // wörtlich — auch 0 (ein bewusst stumm startender Song). Einzige,
+    // dokumentierte Realwelt-Ausnahme (so auch in OpenMPT, Beispiel
+    // DARKNESS.S3M von Purple Motion, ST 3.00): Scream Tracker vor 3.20
+    // schrieb 0 häufig als "nicht gesetzt", dort gilt weiter volle
+    // Lautstärke. Werte über 64 werden wie bisher auf 64 geklemmt.
+    static func normalizedGlobalVolume(_ raw: Int, createdWithTracker cwtv: Int) -> Int {
+        let clamped = min(max(0, raw), 64)
+        if clamped == 0, cwtv < 0x1320 { return 64 }
+        return clamped
     }
 
     // S3M-Buchstaben-Effekt (cmd 1 = A, 2 = B, …) auf interne Effekt-IDs

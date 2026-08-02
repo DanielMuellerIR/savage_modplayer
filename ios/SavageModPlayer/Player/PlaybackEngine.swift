@@ -251,8 +251,13 @@ final class PlaybackEngine: ObservableObject {
     // eine einzelne faule Datei darf einen Abend Musik nicht stoppen. Nach einer
     // vollen Runde durch die Liste wird abgebrochen, damit eine komplett
     // unlesbare Sammlung nicht in einer Endlosschleife landet.
-    private func activateTrack(at index: Int, autoPlay: Bool) {
+    //
+    // `direction` ist die Suchrichtung fuer das Ueberspringen: Bei "Zurueck"
+    // (-1) wird absteigend weitergesucht — sonst spraenge die Rueckwaerts-
+    // Navigation ueber eine defekte Datei wieder VORWAERTS zum aktuellen Titel.
+    private func activateTrack(at index: Int, direction: Int = 1, autoPlay: Bool) {
         guard !queue.isEmpty else { return }
+        let step = direction < 0 ? -1 : 1
         var position = ((index % queue.count) + queue.count) % queue.count
         var skipped: [String] = []
 
@@ -265,7 +270,7 @@ final class PlaybackEngine: ObservableObject {
                 return
             }
             skipped.append(track.displayName)
-            position = (position + 1) % queue.count
+            position = (((position + step) % queue.count) + queue.count) % queue.count
         }
 
         // Kein einziger Titel liess sich laden.
@@ -386,11 +391,14 @@ final class PlaybackEngine: ObservableObject {
 
         let target = currentIndex + step
         if target >= 0 && target < queue.count {
-            activateTrack(at: target, autoPlay: shouldPlay)
+            activateTrack(at: target, direction: step, autoPlay: shouldPlay)
             return
         }
         // Am Rand der Liste von der anderen Seite weitermachen.
-        activateTrack(at: target < 0 ? queue.count - 1 : 0, autoPlay: shouldPlay)
+        activateTrack(
+            at: target < 0 ? queue.count - 1 : 0,
+            direction: step,
+            autoPlay: shouldPlay)
     }
 
     // Zufaelliger Titel, aber nie derselbe zweimal hintereinander — solange die
@@ -409,9 +417,11 @@ final class PlaybackEngine: ObservableObject {
     private func handleSongEnd() {
         switch settings.loopMode {
         case .track:
-            // Nichts zu tun: der Renderblock springt am Songende von selbst
-            // zurueck auf Position 0 und spielt denselben Titel weiter.
-            break
+            // Der Renderblock springt am Songende von selbst zurueck zum
+            // Neustartpunkt. Nur die Anzeige-Uhr muss mit: elapsedFrames
+            // zaehlte sonst weiter, und UI-/Sperrbildschirm-Spielzeit
+            // ueberholten ab der zweiten Runde die Titeldauer.
+            coordinator.resetElapsedToLoopStart()
         case .playlist:
             advance(step: 1, automatic: true)
         case LoopMode.none:
@@ -657,6 +667,10 @@ final class PlaybackEngine: ObservableObject {
         // seek(toPosition:row:) merkt sich im gestoppten Zustand das Ziel; der
         // naechste play()-Aufruf baut die Engine samt Tiefpass dort neu auf.
         coordinator.seek(toPosition: position, row: row)
+        // Die rekonstruierte Position sofort sichern: loadModule hat sie eben
+        // auf 0 gesetzt, und im pausierten Zustand laeuft kein Heartbeat —
+        // ein App-Neustart nach dem Reset starte sonst faelschlich bei 0.
+        persistPlaybackPosition()
 
         if wasPlaying || wasPaused {
             play()

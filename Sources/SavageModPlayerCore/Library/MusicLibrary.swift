@@ -96,6 +96,12 @@ public struct RescanReport: Sendable {
     // Wurde der Durchlauf abgebrochen? Dann fehlt der Loesch-Abgleich, weil
     // ueber nicht besuchte Dateien nichts bekannt ist.
     public let wasCancelled: Bool
+    // Ist der Verzeichnis-Enumerator auf einen Fehler gestossen (z.B. ein
+    // voruebergehend unlesbares Unterverzeichnis)? Der Lauf gilt dann wie ein
+    // Abbruch als unvollstaendig: kein Loesch-Abgleich, und auch die
+    // Archivliste kann Luecken haben. Der Text ist fuer die Oberflaeche
+    // gedacht.
+    public let enumerationError: String?
 
     public init(
         added: [String],
@@ -103,7 +109,8 @@ public struct RescanReport: Sendable {
         unchanged: Int,
         changed: [String] = [],
         archivesFound: [String],
-        wasCancelled: Bool = false
+        wasCancelled: Bool = false,
+        enumerationError: String? = nil
     ) {
         self.added = added
         self.removed = removed
@@ -111,7 +118,11 @@ public struct RescanReport: Sendable {
         self.changed = changed
         self.archivesFound = archivesFound
         self.wasCancelled = wasCancelled
+        self.enumerationError = enumerationError
     }
+
+    // Sah der Durchlauf garantiert den ganzen Bestand?
+    public var isComplete: Bool { !wasCancelled && enumerationError == nil }
 }
 
 // MARK: - Bibliothek
@@ -249,8 +260,22 @@ public final class MusicLibrary: @unchecked Sendable {
         let indexRelativePath = relativePath(for: indexURL)
 
         let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
+        // Der errorHandler faengt Enumerationsfehler (etwa ein voruebergehend
+        // unlesbares Unterverzeichnis). Ohne ihn endete der Durchlauf still,
+        // und alle nicht mehr besuchten Indexeintraege galten faelschlich als
+        // geloescht. `true` laesst den Rest weiterlaufen, damit wenigstens
+        // alles Erreichbare aktualisiert wird — der Lauf gilt aber als
+        // unvollstaendig.
+        var enumerationError: String?
         let enumerator = fileManager.enumerator(
-            at: rootURL, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
+            at: rootURL, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles],
+            errorHandler: { url, error in
+                if enumerationError == nil {
+                    enumerationError =
+                        "Bibliotheks-Abgleich unvollständig — \(url.lastPathComponent): \(error.localizedDescription)"
+                }
+                return true
+            })
 
         while let fileURL = enumerator?.nextObject() as? URL {
             if isCancelled() { cancelled = true; break }
@@ -303,9 +328,10 @@ public final class MusicLibrary: @unchecked Sendable {
         }
 
         // Loeschungen darf nur ein vollstaendiger Durchlauf feststellen: nach
-        // einem Abbruch ist ueber die nicht besuchten Dateien nichts bekannt.
+        // einem Abbruch ODER Enumerationsfehler ist ueber die nicht besuchten
+        // Dateien nichts bekannt.
         var removed: [String] = []
-        if !cancelled {
+        if !cancelled, enumerationError == nil {
             removed = index.items.map(\.relativePath).filter { !seen.contains($0) }
             if !removed.isEmpty {
                 let gone = Set(removed)
@@ -317,7 +343,8 @@ public final class MusicLibrary: @unchecked Sendable {
         try save()
         return RescanReport(
             added: added, removed: removed, unchanged: unchanged, changed: changed,
-            archivesFound: archives, wasCancelled: cancelled)
+            archivesFound: archives, wasCancelled: cancelled,
+            enumerationError: enumerationError)
     }
 
     // Zeitstempel gelten als gleich, wenn sie weniger als eine Sekunde

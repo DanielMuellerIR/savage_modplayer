@@ -19,13 +19,16 @@ mkdir -p "$(dirname "$LOG")"
 
 # Zielgeraet bestimmen. `simctl list devices available` liefert Zeilen der Form
 # "    iPhone 17 Pro (UUID) (Shutdown)"; daraus fischen wir den ersten Namen.
+# Das `|| true` ist noetig: unter `set -euo pipefail` beendet ein leerer
+# grep-Treffer (oder ein scheiterndes simctl) sonst schon die Zuweisung —
+# die Diagnose mit Geraeteliste und Exit 2 unten waere unerreichbar.
 if [ -n "${SIMULATOR_NAME:-}" ]; then
     DEVICE_NAME="$SIMULATOR_NAME"
 else
-    DEVICE_NAME="$(xcrun simctl list devices available \
+    DEVICE_NAME="$( (xcrun simctl list devices available \
         | grep -oE '^ +iPhone [^(]+' \
         | head -1 \
-        | sed 's/^ *//; s/ *$//')"
+        | sed 's/^ *//; s/ *$//') || true)"
 fi
 
 if [ -z "$DEVICE_NAME" ]; then

@@ -80,18 +80,33 @@ struct LibraryView: View {
                         .foregroundStyle(.secondary)
                 }
             } else {
-                ContentUnavailableView {
-                    Label("library.empty.title", systemImage: "music.note.list")
-                } description: {
-                    Text("library.empty.hint")
-                } actions: {
-                    Button("import.title") { showImport = true }
-                        .buttonStyle(.borderedProminent)
-                    Text("import.filesharing.hint")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.top, 4)
+                VStack(spacing: 12) {
+                    // Fehler und offene Archive muessen auch im Leerzustand
+                    // sichtbar sein: Scheitert das Auspacken der einzigen
+                    // ZIP-Datei, gaebe es sonst weder die Meldung noch den
+                    // Wiederholen-Knopf (beide standen nur in der Baumliste).
+                    if let message = library.errorMessage {
+                        errorRow(message)
+                            .padding(.horizontal)
+                            .padding(.top, 8)
+                    }
+                    if !library.pendingArchives.isEmpty {
+                        pendingRow
+                            .padding(.horizontal)
+                    }
+                    ContentUnavailableView {
+                        Label("library.empty.title", systemImage: "music.note.list")
+                    } description: {
+                        Text("library.empty.hint")
+                    } actions: {
+                        Button("import.title") { showImport = true }
+                            .buttonStyle(.borderedProminent)
+                        Text("import.filesharing.hint")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.top, 4)
+                    }
                 }
             }
         }

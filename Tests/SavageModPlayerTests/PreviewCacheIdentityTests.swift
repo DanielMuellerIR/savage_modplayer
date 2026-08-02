@@ -2,43 +2,52 @@ import Foundation
 import XCTest
 @testable import SavageModPlayerCore
 
+// Der Quick-Look-Cache-Schlüssel hängt seit dem Wechsel auf Inhalts-Identität
+// an GENAU den eingelesenen Bytes: Ersetzungen mit gleicher Größe/Zeit oder
+// eine Änderung zwischen Lesen und Attributabfrage können keine alten
+// Audiodaten mehr unter neuer Identität liefern.
 final class PreviewCacheIdentityTests: XCTestCase {
-    func testSameBasenameSizeAndTimestampInDifferentDirectoriesDoNotCollide() {
-        let date = Date(timeIntervalSinceReferenceDate: 123_456.75)
-        let first = PreviewCacheIdentity.key(
-            sourceURL: URL(fileURLWithPath: "/tmp/album-a/song.xm"),
-            fileSize: 4096,
-            modificationDate: date
-        )
-        let second = PreviewCacheIdentity.key(
-            sourceURL: URL(fileURLWithPath: "/tmp/album-b/song.xm"),
-            fileSize: 4096,
-            modificationDate: date
-        )
+    func testDifferentContentsGetDifferentKeys() {
+        let first = PreviewCacheIdentity.key(forContents: Data("module-a".utf8))
+        let second = PreviewCacheIdentity.key(forContents: Data("module-b".utf8))
         XCTAssertNotEqual(first, second)
     }
 
-    func testReplacementWithinSameWholeSecondGetsNewKey() {
-        let url = URL(fileURLWithPath: "/tmp/song.xm")
-        let first = PreviewCacheIdentity.key(
-            sourceURL: url,
-            fileSize: 4096,
-            modificationDate: Date(timeIntervalSinceReferenceDate: 123_456.125)
+    func testReplacementWithSameLengthGetsNewKey() {
+        // Gleiche Länge, ein einziges geändertes Byte — genau der Fall, den
+        // Größe+Zeitstempel früher nicht unterscheiden konnten.
+        var original = [UInt8](repeating: 0x41, count: 4096)
+        var replacement = original
+        replacement[2048] = 0x42
+        XCTAssertNotEqual(
+            PreviewCacheIdentity.key(forContents: Data(original)),
+            PreviewCacheIdentity.key(forContents: Data(replacement))
         )
-        let replacement = PreviewCacheIdentity.key(
-            sourceURL: url,
-            fileSize: 4096,
-            modificationDate: Date(timeIntervalSinceReferenceDate: 123_456.875)
+        // Auch reine Umordnung derselben Bytes muss unterscheidbar sein.
+        original[0] = 0x43
+        var swapped = original
+        swapped.swapAt(0, 4095)
+        XCTAssertNotEqual(
+            PreviewCacheIdentity.key(forContents: Data(original)),
+            PreviewCacheIdentity.key(forContents: Data(swapped))
         )
-        XCTAssertNotEqual(first, replacement)
     }
 
-    func testIdenticalIdentityIsStable() {
-        let url = URL(fileURLWithPath: "/tmp/song.xm")
-        let date = Date(timeIntervalSinceReferenceDate: 123_456.5)
+    func testIdenticalContentIsStableAndPathIndependent() {
+        // Inhaltsgleiche Dateien teilen sich bewusst denselben Schlüssel —
+        // der Pfad gehört nicht mehr zur Identität.
+        let bytes = Data("same module bytes".utf8)
         XCTAssertEqual(
-            PreviewCacheIdentity.key(sourceURL: url, fileSize: 7, modificationDate: date),
-            PreviewCacheIdentity.key(sourceURL: url, fileSize: 7, modificationDate: date)
+            PreviewCacheIdentity.key(forContents: bytes),
+            PreviewCacheIdentity.key(forContents: bytes)
         )
+    }
+
+    func testEmptyAndPrefixContentsDiffer() {
+        let empty = PreviewCacheIdentity.key(forContents: Data())
+        let zero = PreviewCacheIdentity.key(forContents: Data([0]))
+        let zeroZero = PreviewCacheIdentity.key(forContents: Data([0, 0]))
+        XCTAssertNotEqual(empty, zero)
+        XCTAssertNotEqual(zero, zeroZero)
     }
 }

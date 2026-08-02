@@ -27,6 +27,7 @@ public class XMParser {
         case noChannels
         case unsupportedDimensions(String)
         case resourceLimit(String)
+        case corruptPattern(String)
 
         public var errorDescription: String? {
             switch self {
@@ -42,6 +43,8 @@ public class XMParser {
                 return "Nicht unterstützte XM-Abmessungen: \(detail)."
             case .resourceLimit(let detail):
                 return "XM-Modul überschreitet das sichere Ressourcenlimit: \(detail)."
+            case .corruptPattern(let detail):
+                return "Beschädigtes XM-Pattern: \(detail)."
             }
         }
     }
@@ -120,6 +123,20 @@ public class XMParser {
             throw ParserError.unsupportedDimensions("\(numInstruments) Instrumente (Maximum \(maxInstruments))")
         }
 
+        // Struktur-Guards gegen abgeschnittene Header: Die Reader liefern
+        // außerhalb der Datei stillschweigend 0 — ohne diese Prüfungen würde
+        // ein passend gekürzter Dateirest als künstliches leeres XM
+        // akzeptiert statt als strukturell defekt abgelehnt. headerSize muss
+        // die festen Felder (20 Byte ab 0x3C) plus die genutzten
+        // Order-Einträge abdecken (gestrippte XMs kürzen die Order-Table auf
+        // songLength — deshalb nicht pauschal 276 verlangen), und der ganze
+        // deklarierte Header muss in der Datei liegen.
+        guard headerSize >= 20 + songLength else {
+            throw ParserError.unsupportedDimensions(
+                "headerSize \(headerSize) deckt \(songLength) Songpositionen nicht ab")
+        }
+        guard 0x3C + headerSize <= data.count else { throw ParserError.fileTooSmall }
+
         // Order-Table (256 Byte ab 0x50), nur die ersten songLength Einträge gültig.
         var patternTable = (0..<songLength).map { byte(0x50 + $0) }
 
@@ -167,6 +184,23 @@ public class XMParser {
                 while cell < cellCount && cursor < dataEnd {
                     let b = byte(cursor); cursor += 1
                     var patternNote = 0, instr = 0, vol = 0, fxType = 0, fxParam = 0
+                    // Benötigte Feldbytes VOR dem Lesen gegen die deklarierte
+                    // Pattern-Grenze prüfen: eine Zelle, deren Felder dataEnd
+                    // überschreiten würden, läse sonst Bytes der folgenden
+                    // Struktur (nächster Pattern-Header, Instrumente) als
+                    // Note/Instrument/Effekt ein.
+                    let needed: Int
+                    if b & 0x80 != 0 {
+                        needed = (b & 0x01 != 0 ? 1 : 0) + (b & 0x02 != 0 ? 1 : 0)
+                            + (b & 0x04 != 0 ? 1 : 0) + (b & 0x08 != 0 ? 1 : 0)
+                            + (b & 0x10 != 0 ? 1 : 0)
+                    } else {
+                        needed = 4
+                    }
+                    guard cursor + needed <= dataEnd else {
+                        throw ParserError.corruptPattern(
+                            "Zelle \(cell) überschreitet die deklarierten Pattern-Daten")
+                    }
                     if b & 0x80 != 0 {
                         // Komprimiert: nur die per Bit markierten Felder folgen.
                         if b & 0x01 != 0 { patternNote = byte(cursor); cursor += 1 }

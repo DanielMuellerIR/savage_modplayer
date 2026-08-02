@@ -293,7 +293,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.useInterpolation = self.useInterpolation
         state.palClock = self.palClock
         state.globalVolume = Float(mod.initialGlobalVolume)
-        state.clockRateOverride = (mod.format == .s3m || mod.format == .it) ? 14317056.0 : 0
+        state.clockRateOverride = RenderEngine.clockRateOverride(for: mod)
         state.elapsedFrames = 0
 
         // Wurde im gestoppten Zustand per Slider eine Startposition gewaehlt,
@@ -553,13 +553,26 @@ public final class ModPlayerCoordinator: ObservableObject {
 
         let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
         SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
-        state.elapsedFrames = UInt64(
-            Double(RenderEngine.cumulativeRows(mod, upTo: position, row: row) * state.ticksPerRow)
-                * state.outputsPerTick
-        )
+        state.elapsedFrames = RenderEngine.elapsedFrames(
+            for: mod, position: position, row: row,
+            ticksPerRow: state.ticksPerRow, outputsPerTick: state.outputsPerTick)
 
         self.currentPosition = position
         self.currentRow = max(0, row)
+    }
+
+    // Setzt NUR die Anzeige-/Sperrbildschirm-Uhr auf den Loop-Neustartpunkt
+    // zurueck, ohne die laufende Wiedergabe anzufassen. Gedacht fuer den
+    // Track-Loop: Der Renderblock springt am Songende von selbst zum
+    // restartPosition, `elapsedFrames` zaehlte aber weiter — UI- und
+    // Sperrbildschirm-Spielzeit ueberholten ab der zweiten Runde die
+    // Titeldauer.
+    public func resetElapsedToLoopStart() {
+        guard let state = playbackState, let mod = activeMod else { return }
+        let restart = max(0, min(mod.length - 1, state.restartPosition))
+        state.elapsedFrames = RenderEngine.elapsedFrames(
+            for: mod, position: restart,
+            ticksPerRow: state.ticksPerRow, outputsPerTick: state.outputsPerTick)
     }
     
     public func toggleMute(channelIndex: Int) {

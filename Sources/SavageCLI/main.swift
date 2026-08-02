@@ -23,6 +23,7 @@ struct Options {
     var output: String?
     var seconds: Double = 0        // 0 = ganzer Song (bis endReached, Kappung 600 s)
     var rate: Double = 44100
+    var rateExplicit = false       // wurde --rate ausdruecklich angegeben?
     var normalize = false
     var interpolation = true
     var infoOnly = false
@@ -90,7 +91,7 @@ func parseArgs(_ argv: [String]) throws -> Options {
                     expected: "\(Int(cliMinSampleRate))...\(Int(ModuleRenderer.maxSampleRate)) Hz"
                 )
             }
-            o.rate = rate; i += 1
+            o.rate = rate; o.rateExplicit = true; i += 1
         case "--normalize":      o.normalize = true
         case "--no-interp":      o.interpolation = false
         case "--info":           o.infoOnly = true
@@ -117,6 +118,18 @@ func parseArgs(_ argv: [String]) throws -> Options {
     }
     if o.toStdout, o.output != nil {
         throw CLIError.incompatibleOptions("--stdout und --out")
+    }
+    // --play ist Echtzeit ueber die Plattform-Audioausgabe: Render-Optionen
+    // wuerden dort still ignoriert. Lieber sofort ablehnen, als dass ein
+    // gueltig aussehender Aufruf Ausgabepfad, Stream, Normalisierung oder
+    // Samplerate verwirft.
+    if o.play {
+        if o.output != nil { throw CLIError.incompatibleOptions("--play und --out") }
+        if o.toStdout { throw CLIError.incompatibleOptions("--play und --stdout") }
+        if o.normalize { throw CLIError.incompatibleOptions("--play und --normalize") }
+        if o.rateExplicit {
+            throw CLIError.incompatibleOptions("--play und --rate (Echtzeit nutzt die Geraete-Samplerate)")
+        }
     }
     return o
 }
@@ -443,12 +456,13 @@ if opts.play {
     let format = PCMSinkFactory.preferredFormat(channels: 2)
     let frameLimit: UInt64?
     do {
-        frameLimit = opts.seconds > 0
-            ? try ModuleRenderer.validatedFrameLimit(
-                sampleRate: format.sampleRate,
-                maxDurationSeconds: opts.seconds
-            )
-            : nil
+        // Wie im Offline-Pfad gilt der dokumentierte Vertrag von --seconds
+        // auch hier: 0 = ganzer Song, aber hoechstens 600 s. Ohne dieses
+        // Limit spielte ein Modul ohne erreichbares Endsignal unbegrenzt.
+        frameLimit = try ModuleRenderer.validatedFrameLimit(
+            sampleRate: format.sampleRate,
+            maxDurationSeconds: opts.seconds > 0 ? opts.seconds : 600.0
+        )
     } catch {
         FileHandle.standardError.write(Data("Wiedergabe-Fehler: \(error.localizedDescription)\n".utf8))
         exit(1)

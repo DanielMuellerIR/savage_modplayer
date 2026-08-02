@@ -25,8 +25,29 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IOS_DIR="$(dirname "$SCRIPT_DIR")"
 
+usage() {
+    cat <<EOF
+Usage: ios/scripts/build-device.sh [--install]
+
+  --install   Archiv zusaetzlich auf ein angeschlossenes iPhone installieren.
+  -h, --help  Diese Hilfe anzeigen.
+
+Umgebung: SAVAGE_DEVICE (Ziel bei mehreren iPhones), SAVAGE_DEVELOPMENT_TEAM.
+EOF
+}
+
+# ALLE Argumente parsen, Unbekanntes ablehnen: frueher wurde nur das erste
+# Argument mit --install verglichen — "build-device.sh typo --install"
+# archivierte erfolgreich, installierte aber nichts und meldete keinen
+# Bedienfehler.
 INSTALL=0
-if [ "${1:-}" = "--install" ]; then INSTALL=1; fi
+for arg in "$@"; do
+    case "$arg" in
+        --install) INSTALL=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "FEHLER: Unbekannte Option: $arg" >&2; usage >&2; exit 2 ;;
+    esac
+done
 
 REPO_DIR="$(dirname "$IOS_DIR")"
 DERIVED_DATA="${DERIVED_DATA:-$IOS_DIR/build/DerivedData}"
@@ -85,12 +106,15 @@ if [ "$INSTALL" -eq 1 ]; then
         TARGET_DEVICE="$SAVAGE_DEVICE"
     else
         DEVICE_LIST_JSON="$(mktemp "${TMPDIR:-/tmp}/savage-devices.XXXXXX")"
+        # Cleanup-Trap direkt nach mktemp: auch Signal oder Abbruch zwischen
+        # Anlegen und Loeschen laesst keine Geraetekennungen im Temp-Verzeichnis
+        # liegen. Nach dem regulaeren Loeschen wird der Trap zurueckgenommen.
+        trap 'rm -f "$DEVICE_LIST_JSON"' EXIT
         set +e
         xcrun devicectl list devices --json-output "$DEVICE_LIST_JSON" --quiet
         DEVICE_LIST_STATUS=$?
         set -e
         if [ "$DEVICE_LIST_STATUS" -ne 0 ]; then
-            unlink "$DEVICE_LIST_JSON"
             exit "$DEVICE_LIST_STATUS"
         fi
 
@@ -119,7 +143,8 @@ PY
         )
         DEVICE_STATUS=$?
         set -e
-        unlink "$DEVICE_LIST_JSON"
+        rm -f "$DEVICE_LIST_JSON"
+        trap - EXIT
         if [ "$DEVICE_STATUS" -ne 0 ]; then exit "$DEVICE_STATUS"; fi
     fi
 

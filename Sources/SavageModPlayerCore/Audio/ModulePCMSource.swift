@@ -146,8 +146,9 @@ public final class ModulePCMSource: @unchecked Sendable {
                 )
                 block(UInt32(want), left, right)
 
+                // `want` ist oben bereits auf das Budget begrenzt; hier greift
+                // nur noch die unabhaengige Endsignal-Begrenzung.
                 var valid = want
-                valid = min(valid, Int(min(UInt64(want), budgetRemaining)))
                 if state.endReachedFrame != .max {
                     let remaining = Int(min(
                         UInt64(want),

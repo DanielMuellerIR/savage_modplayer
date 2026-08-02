@@ -72,7 +72,6 @@ final class LibraryStore: ObservableObject {
     private let cancellation = LibraryFlag()
 
     private var library: MusicLibrary?
-    private var currentTask: Task<Void, Never>?
     private var hasStarted = false
 
     // Schneller Zugriff auf einen Titel ueber seinen relativen Pfad.
@@ -117,7 +116,9 @@ final class LibraryStore: ObservableObject {
     private func runScan(loadCachedFirst: Bool) {
         beginOperation(.scanning)
 
-        currentTask = Task { [weak self] in
+        // Der Task laeuft unabhaengig weiter; Abbruch geht ueber das
+        // Cancellation-Flag, nicht ueber ein Task-Handle.
+        Task { [weak self] in
             guard let self else { return }
             guard let library = await self.resolveLibrary() else {
                 self.endOperation()
@@ -137,12 +138,14 @@ final class LibraryStore: ObservableObject {
                     let report = try library.rescan(isCancelled: { flag.isSet })
                     return ScanOutcome(
                         archives: report.archivesFound,
-                        // Ein abgebrochener Durchlauf hat nur einen Teil des
-                        // Ordners gesehen — seine Archivliste ist unvollstaendig
-                        // und darf die bisherige nicht ersetzen.
-                        archivesComplete: !report.wasCancelled,
+                        // Ein abgebrochener ODER wegen Enumerationsfehlern
+                        // unvollstaendiger Durchlauf hat nur einen Teil des
+                        // Ordners gesehen — seine Archivliste darf die
+                        // bisherige nicht ersetzen. Ein Enumerationsfehler
+                        // wird zusaetzlich als Meldung angezeigt.
+                        archivesComplete: report.isComplete,
                         snapshot: LibrarySnapshot.make(from: library),
-                        errorMessage: nil)
+                        errorMessage: report.enumerationError)
                 } catch {
                     return ScanOutcome(
                         archives: [],
@@ -185,7 +188,7 @@ final class LibraryStore: ObservableObject {
         beginOperation(.importing)
         lastReport = nil
 
-        currentTask = Task { [weak self] in
+        Task { [weak self] in
             guard let self else {
                 access.close()
                 return
@@ -220,7 +223,7 @@ final class LibraryStore: ObservableObject {
             }
 
             self.apply(outcome.snapshot)
-            self.lastReport = outcome.report.map(LibraryStore.sanitized)
+            self.lastReport = outcome.report
             self.errorMessage = outcome.errorMessage ?? self.errorMessage
             self.endOperation()
         }
@@ -235,7 +238,7 @@ final class LibraryStore: ObservableObject {
         guard !pendingArchives.isEmpty, !isBusy else { return }
         beginOperation(.unpacking)
 
-        currentTask = Task { [weak self] in
+        Task { [weak self] in
             guard let self else { return }
             guard let library = await self.resolveLibrary() else {
                 self.endOperation()
@@ -265,14 +268,15 @@ final class LibraryStore: ObservableObject {
                     isCancelled: { flag.isSet })
                 // Der Abgleich danach sagt, was uebrig blieb: ausgepackte
                 // Archive sind weg, gescheiterte liegen noch da. Nach einem
-                // Abbruch liefert er nur einen Teil und wird ignoriert.
+                // Abbruch oder Enumerationsfehler liefert er nur einen Teil
+                // und wird ignoriert.
                 let rescan = try? library.rescan(isCancelled: { flag.isSet })
                 return UnpackOutcome(
                     report: report,
                     archives: rescan?.archivesFound ?? [],
-                    archivesComplete: rescan.map { !$0.wasCancelled } ?? false,
+                    archivesComplete: rescan.map(\.isComplete) ?? false,
                     snapshot: LibrarySnapshot.make(from: library),
-                    errorMessage: nil)
+                    errorMessage: rescan?.enumerationError)
             } catch {
                 return UnpackOutcome(
                     report: nil,
@@ -284,7 +288,7 @@ final class LibraryStore: ObservableObject {
         }
 
         apply(outcome.snapshot)
-        lastReport = outcome.report.map(LibraryStore.sanitized)
+        lastReport = outcome.report
         if outcome.archivesComplete { pendingArchives = outcome.archives }
         errorMessage = outcome.errorMessage ?? errorMessage
     }
@@ -314,7 +318,7 @@ final class LibraryStore: ObservableObject {
         // sobald feststeht, dass der Core den Haken wirklich gezogen hat.
         let favoritesCleared = LibraryFlag()
 
-        currentTask = Task { [weak self] in
+        Task { [weak self] in
             guard let self else { return }
             guard let library = await self.resolveLibrary() else {
                 self.endOperation()
@@ -330,18 +334,23 @@ final class LibraryStore: ObservableObject {
                         favoritesCleaner: { favoritesCleared.set() })
                     return ResetOutcome(
                         failures: report.failures,
+                        remainingArchives: report.remainingArchives,
                         snapshot: LibrarySnapshot.make(from: library),
                         errorMessage: nil)
                 } catch {
                     return ResetOutcome(
                         failures: [],
+                        remainingArchives: [],
                         snapshot: LibrarySnapshot.make(from: library),
                         errorMessage: LibraryStore.describe(error))
                 }
             }
 
             self.apply(outcome.snapshot)
-            self.pendingArchives = []
+            // Nach Teilfehlern bleiben Dateien real liegen; der Core hat den
+            // Index dann aus dem Restbestand neu aufgebaut und meldet die
+            // noch offenen Archive. Nur ein voller Erfolg endet leer.
+            self.pendingArchives = outcome.remainingArchives
             if favoritesCleared.isSet { self.clearFavorites() }
             if let first = outcome.failures.first {
                 self.errorMessage = first.reason
@@ -474,7 +483,6 @@ final class LibraryStore: ObservableObject {
         isBusy = false
         activity = nil
         progress = nil
-        currentTask = nil
         cancellation.clear()
     }
 
@@ -544,22 +552,9 @@ final class LibraryStore: ObservableObject {
         return (error as NSError).localizedDescription
     }
 
-    // Ein Abbruch waehrend des Wartens auf eine Cloud-Datei erzeugt im Core
-    // einen Fehleintrag. Fuer den Nutzer ist das kein Fehlschlag, sondern
-    // schlicht das, worum er gebeten hat — deshalb fliegen diese Eintraege aus
-    // dem Bericht.
-    nonisolated static func sanitized(_ report: ImportReport) -> ImportReport {
-        guard report.wasCancelled else { return report }
-        let failures = report.failures.filter {
-            !$0.reason.hasSuffix(FileProviderReader.cancellationReason)
-        }
-        guard failures.count != report.failures.count else { return report }
-        return ImportReport(
-            imported: report.imported,
-            duplicates: report.duplicates,
-            failures: failures,
-            wasCancelled: report.wasCancelled)
-    }
+    // (Die fruehere String-Filterung von Abbruch-"Fehlern" entfaellt: Der
+    // Importer erkennt Abbrueche jetzt typisiert ueber das Markerprotokoll
+    // `ImportCancellationError` und erzeugt gar keine Fehleintraege mehr.)
 
     nonisolated static func normalized(_ text: String) -> String {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
@@ -601,6 +596,7 @@ final class LibraryStore: ObservableObject {
 
     private struct ResetOutcome: Sendable {
         let failures: [ImportFailure]
+        let remainingArchives: [String]
         let snapshot: LibrarySnapshot
         let errorMessage: String?
     }

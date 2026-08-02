@@ -295,6 +295,115 @@ final class LibraryImporterTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(report.failures.first?.reason).isEmpty)
     }
 
+    // Ein als Abbruch markierter Fehler des koordinierten Lesers (z.B. Warten
+    // auf eine Cloud-Datei) ist KEIN Fehlschlag der Datei: er setzt
+    // wasCancelled und erzeugt keinen Failure-Eintrag.
+    func testCancellationFromCoordinatedReadIsNotAFailure() throws {
+        struct ReaderCancelled: ImportCancellationError {}
+        try writeSource("cloud.mod", marker: 0x90)
+
+        let importer = LibraryImporter(library: library) { _, _ in
+            throw ReaderCancelled()
+        }
+        let report = try importer.importContents(of: [sourceDir])
+
+        XCTAssertTrue(report.wasCancelled)
+        XCTAssertTrue(report.failures.isEmpty)
+        XCTAssertTrue(report.imported.isEmpty)
+    }
+
+    // Ein Archiv ohne spielbaren Inhalt bleibt nach unpackPendingArchives
+    // liegen (fail-closed): Frueher wurde die Quelle geloescht, obwohl nichts
+    // uebernommen worden war.
+    func testPendingArchiveWithoutPlayableContentIsKept() throws {
+        try XCTSkipIf(
+            PlaylistScanner.bsdtarURL == nil,
+            "bsdtar nicht installiert — Archiv-Import nicht pruefbar (Linux: libarchive-tools)")
+
+        let packDir = workDir.appendingPathComponent("Rohmaterial/NurText", isDirectory: true)
+        try write(packDir.appendingPathComponent("liesmich.txt"), marker: 0x91)
+        _ = try makeZip(from: packDir, named: "leer.zip", at: rootURL.appendingPathComponent("Manuell", isDirectory: true))
+
+        let importer = LibraryImporter(library: library)
+        let report = try importer.unpackPendingArchives()
+
+        XCTAssertTrue(report.imported.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: rootURL.appendingPathComponent("Manuell/leer.zip").path),
+            "Quellarchiv ohne uebernommene Dateien darf nicht verschwinden")
+    }
+
+    // Ein Abbruch waehrend des Auspackens laesst das Quellarchiv liegen.
+    func testCancelDuringUnpackKeepsSourceArchive() throws {
+        try XCTSkipIf(
+            PlaylistScanner.bsdtarURL == nil,
+            "bsdtar nicht installiert — Archiv-Import nicht pruefbar (Linux: libarchive-tools)")
+
+        let packDir = workDir.appendingPathComponent("Rohmaterial/Coolpack", isDirectory: true)
+        try write(packDir.appendingPathComponent("alpha.mod"), marker: 0x92)
+        _ = try makeZip(from: packDir, named: "pack.zip", at: rootURL.appendingPathComponent("Manuell", isDirectory: true))
+
+        let importer = LibraryImporter(library: library)
+        // Der erste Haken-Aufruf (Schleifenkopf) laeuft durch, danach gilt
+        // der Abbruch — also mitten im Archiv-Vorgang.
+        var calls = 0
+        let report = try importer.unpackPendingArchives(isCancelled: {
+            calls += 1
+            return calls > 1
+        })
+
+        XCTAssertTrue(report.wasCancelled)
+        XCTAssertTrue(report.failures.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: rootURL.appendingPathComponent("Manuell/pack.zip").path),
+            "Nach Abbruch muss das Quellarchiv erhalten bleiben")
+    }
+
+    // `mod.collection.zip` ist ein Archiv, keine Amiga-Moduldatei: Die
+    // Archiv-Klassifikation gewinnt gegen das `mod.`-Namenspraefix.
+    func testArchiveNamedWithModPrefixIsUnpackedNotCopied() throws {
+        try XCTSkipIf(
+            PlaylistScanner.bsdtarURL == nil,
+            "bsdtar nicht installiert — Archiv-Import nicht pruefbar (Linux: libarchive-tools)")
+
+        let packDir = workDir.appendingPathComponent("Rohmaterial/Coolpack", isDirectory: true)
+        try write(packDir.appendingPathComponent("alpha.mod"), marker: 0x93)
+        _ = try makeZip(from: packDir, named: "mod.collection.zip", at: sourceDir)
+
+        let importer = LibraryImporter(library: library)
+        let report = try importer.importContents(of: [sourceDir])
+
+        XCTAssertEqual(report.imported, ["Sammlung/mod.collection/Coolpack/alpha.mod"])
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: rootURL.appendingPathComponent("Sammlung/mod.collection.zip").path),
+            "Das ZIP darf nicht als Moduldatei in die Bibliothek kopiert werden")
+    }
+
+    // Ein unlesbarer Quellordner erscheint als Fehler im Bericht statt still
+    // ausgelassen zu werden.
+    func testUnreadableSourceDirectoryIsReported() throws {
+        let locked = sourceDir.appendingPathComponent("Gesperrt", isDirectory: true)
+        try write(locked.appendingPathComponent("drin.mod"), marker: 0x94)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: locked.path)
+        }
+        // Als root (z.B. CI-Container) greifen Dateirechte nicht — dann ist
+        // dieser Fall hier nicht pruefbar.
+        if (try? FileManager.default.contentsOfDirectory(atPath: locked.path)) != nil {
+            throw XCTSkip("Dateirechte greifen in dieser Umgebung nicht (root?)")
+        }
+
+        let importer = LibraryImporter(library: library)
+        let report = try importer.importContents(of: [sourceDir])
+
+        XCTAssertFalse(report.wasCancelled)
+        XCTAssertEqual(report.failures.count, 1)
+        XCTAssertTrue(try XCTUnwrap(report.failures.first?.path).contains("Gesperrt"))
+    }
+
     // Per Finder abgelegtes Archiv: rescan meldet es, unpackPendingArchives
     // packt es aus und raeumt es weg.
     func testPendingArchiveFromFinderIsUnpackedAndRemoved() throws {

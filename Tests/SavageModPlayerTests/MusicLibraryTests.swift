@@ -180,6 +180,38 @@ final class MusicLibraryTests: XCTestCase {
         XCTAssertEqual(library.index.items.count, 2)
     }
 
+    // Ein Enumerationsfehler (unlesbares Unterverzeichnis) macht den Lauf
+    // unvollstaendig: keine Loeschungen, Fehlertext im Bericht. Frueher
+    // verschwanden dann alle nicht mehr besuchten Indexeintraege.
+    func testEnumerationErrorKeepsKnownItemsAndIsReported() throws {
+        try writeFile("frei.mod", marker: 0x42)
+        try writeFile("Gesperrt/drin.mod", marker: 0x43)
+
+        let library = makeLibrary()
+        try library.load()
+        _ = try library.rescan()
+        XCTAssertEqual(library.index.items.count, 2)
+
+        let locked = rootURL.appendingPathComponent("Gesperrt", isDirectory: true)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: locked.path)
+        }
+        // Als root (z.B. CI-Container) greifen Dateirechte nicht.
+        if (try? FileManager.default.contentsOfDirectory(atPath: locked.path)) != nil {
+            throw XCTSkip("Dateirechte greifen in dieser Umgebung nicht (root?)")
+        }
+
+        let report = try library.rescan()
+        XCTAssertNotNil(report.enumerationError)
+        XCTAssertFalse(report.isComplete)
+        XCTAssertTrue(report.removed.isEmpty, "Teil-Scan darf keine Loeschungen ableiten")
+        XCTAssertNotNil(library.item(withRelativePath: "Gesperrt/drin.mod"))
+        XCTAssertEqual(library.index.items.count, 2)
+    }
+
     // MARK: - Anzeigebaum
 
     func testFolderTreeMatchesPlaylistOrder() throws {
@@ -287,6 +319,43 @@ final class MusicLibraryTests: XCTestCase {
         let importReport = try importer.importContents(of: [source])
         XCTAssertEqual(importReport.imported, ["Sammlung/frisch.mod"])
         XCTAssertEqual(modulesOnDisk(), ["Sammlung/frisch.mod"])
+    }
+
+    // Scheitert das Loeschen teilweise, wird der Index aus dem verbliebenen
+    // Bestand neu aufgebaut statt geleert — die Oberflaeche zeigte sonst eine
+    // leere Bibliothek, obwohl Dateien real erhalten blieben.
+    func testResetWithUndeletableContentRebuildsIndexFromRemainder() throws {
+        try writeFile("Ordner/a.mod", marker: 0x85)
+
+        let library = makeLibrary()
+        try library.load()
+        _ = try library.rescan()
+        XCTAssertEqual(library.index.items.count, 1)
+
+        // Den Unterordner schreibschuetzen: sein Inhalt (a.mod) laesst sich
+        // dann nicht loeschen, und damit auch der Ordner selbst nicht.
+        let locked = rootURL.appendingPathComponent("Ordner", isDirectory: true)
+        let probe = locked.appendingPathComponent("__probe__.tmp")
+        try Data([0x01]).write(to: probe)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o555], ofItemAtPath: locked.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: locked.path)
+        }
+        // Als root (z.B. CI-Container) greifen Dateirechte nicht: laesst sich
+        // die Probe trotz Schreibschutz loeschen, ist der Fall nicht pruefbar.
+        if (try? FileManager.default.removeItem(at: probe)) != nil {
+            throw XCTSkip("Dateirechte greifen in dieser Umgebung nicht (root?)")
+        }
+
+        let report = try LibraryReset.reset(library: library)
+
+        XCTAssertFalse(report.failures.isEmpty)
+        // Der Index spiegelt den realen Restbestand, nicht eine leere Bibliothek.
+        XCTAssertNotNil(library.item(withRelativePath: "Ordner/a.mod"))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: rootURL.appendingPathComponent("Ordner/a.mod").path))
     }
 
     // MARK: - Fingerabdruck

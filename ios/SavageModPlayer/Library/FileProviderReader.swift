@@ -43,9 +43,8 @@ struct FileProviderReader: Sendable {
     // anfuehlt, lang genug, dass das Warten selbst nichts kostet.
     static let pollInterval: TimeInterval = 0.25
 
-    // Wortlaut, mit dem ein Abbruch gemeldet wird. Der Store erkennt daran die
-    // Fehler, die nur durch das Abbrechen selbst entstanden sind, und zeigt sie
-    // nicht als echte Fehlschlaege.
+    // Wortlaut, mit dem ein Abbruch gemeldet wird (nur noch Anzeige-Text —
+    // erkannt wird der Abbruch typisiert ueber das Markerprotokoll unten).
     static let cancellationReason = "Der Vorgang wurde abgebrochen."
 
     let isCancelled: @Sendable () -> Bool
@@ -60,15 +59,21 @@ struct FileProviderReader: Sendable {
 
     // MARK: - Fehler
 
+    // Der Abbruch ist bewusst ein EIGENER Typ mit dem Markerprotokoll des
+    // Core-Importers: `LibraryImporter` erkennt ihn typisiert, setzt
+    // `wasCancelled` und erzeugt keinen Fehlschlag-Eintrag. Frueher war er
+    // ein ReadError-Fall und musste im Store per String-Vergleich aus dem
+    // Bericht gefiltert werden.
+    struct ReadCancelled: ImportCancellationError, LocalizedError {
+        var errorDescription: String? { FileProviderReader.cancellationReason }
+    }
+
     enum ReadError: Error, LocalizedError {
-        case cancelled
         case stalled
         case coordinationFailed(String)
 
         var errorDescription: String? {
             switch self {
-            case .cancelled:
-                return FileProviderReader.cancellationReason
             case .stalled:
                 return "Die Datei wurde nicht aus der Cloud geladen (Zeitlimit erreicht)."
             case .coordinationFailed(let description):
@@ -85,7 +90,7 @@ struct FileProviderReader: Sendable {
         body: (URL) throws -> Void
     ) throws {
         try awaitLocalCopy(of: url, isCancelled: isCancelled)
-        if isCancelled() { throw ReadError.cancelled }
+        if isCancelled() { throw ReadCancelled() }
 
         var coordinationError: NSError?
         var thrownInside: Error?
@@ -127,7 +132,7 @@ struct FileProviderReader: Sendable {
         var lastSize = downloadedSize(of: url)
 
         while isPlaceholder(url) {
-            if isCancelled() { throw ReadError.cancelled }
+            if isCancelled() { throw ReadCancelled() }
             if Date() >= deadline { throw ReadError.stalled }
             Thread.sleep(forTimeInterval: pollInterval)
 

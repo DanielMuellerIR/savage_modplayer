@@ -28,11 +28,20 @@ public enum LibraryReset {
         public let removedFiles: Int
         public let removedDirectories: Int
         public let failures: [ImportFailure]
+        // Nach Teilfehlern: Archive, die im verbliebenen Bestand liegen (aus
+        // dem Wiederaufbau-Rescan). Bei vollstaendigem Erfolg leer.
+        public let remainingArchives: [String]
 
-        public init(removedFiles: Int, removedDirectories: Int, failures: [ImportFailure]) {
+        public init(
+            removedFiles: Int,
+            removedDirectories: Int,
+            failures: [ImportFailure],
+            remainingArchives: [String] = []
+        ) {
             self.removedFiles = removedFiles
             self.removedDirectories = removedDirectories
             self.failures = failures
+            self.remainingArchives = remainingArchives
         }
     }
 
@@ -79,6 +88,19 @@ public enum LibraryReset {
 
         try library.clearIndex(removeFile: options.removeIndex)
 
+        // Teilfehler: Es liegen noch Dateien in der Bibliothek. Ein leerer
+        // Index waere eine Luege — die Oberflaeche zeigte eine leere
+        // Bibliothek, obwohl Dateien (und offene Archive) real erhalten
+        // blieben. Deshalb den verbliebenen Bestand neu einlesen und offene
+        // Archive daraus ableiten; nur ein vollstaendig erfolgreicher Reset
+        // endet leer.
+        var remainingArchives: [String] = []
+        if !failures.isEmpty {
+            if let rescan = try? library.rescan() {
+                remainingArchives = rescan.archivesFound
+            }
+        }
+
         if options.clearFavorites {
             favoritesCleaner?()
         }
@@ -86,7 +108,8 @@ public enum LibraryReset {
         return ResetReport(
             removedFiles: removedFiles,
             removedDirectories: removedDirectories,
-            failures: failures)
+            failures: failures,
+            remainingArchives: remainingArchives)
     }
 
     // Zaehlt, was hinter einem Eintrag steckt: eine Datei zaehlt als eine

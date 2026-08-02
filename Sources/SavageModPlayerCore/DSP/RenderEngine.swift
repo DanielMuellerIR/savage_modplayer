@@ -59,8 +59,9 @@ public final class RealtimePlaybackState: Sendable {
     // Globale Lautstärke: 0...64 für MOD/S3M/XM, 0...128 für IT.
     nonisolated(unsafe) public var globalVolume: Float = 64
 
-    // S3M rechnet Perioden gegen die feste ST3-Clock (14317056 Hz) statt
-    // gegen die Amiga-Paula-Clock. 0 = kein Override (PAL/NTSC-Schalter gilt).
+    // S3M/IT rechnen Perioden gegen die feste ST3-Clock, XM-Amiga-Perioden
+    // gegen den FastTracker-II-Takt (siehe RenderEngine.clockRateOverride(for:)).
+    // 0 = kein Override (PAL/NTSC-Schalter gilt).
     nonisolated(unsafe) public var clockRateOverride: Double = 0
     
     // Elapsed frames for timing calculation
@@ -202,6 +203,21 @@ public enum RenderEngine {
 
     nonisolated public static let itVoiceCapacity = ITPlaybackVoicePool.voiceCapacity
 
+    // Fester Format-Takt für die Periodenformel `hz = clock / periode`:
+    // - S3M/IT: ST3-Clock 14.317056 MHz.
+    // - XM mit Amiga-Perioden: FastTracker-II-Takt 8363 × 1712 (C-4 hat in der
+    //   FT2-Amiga-Tabelle die Periode 1712 und muss laut XM-Spezifikation mit
+    //   8363 Hz spielen; gegen die Paula-Clock gerechnet läge C-4 rund zwei
+    //   Oktaven zu tief). XM-linear ignoriert den Takt ohnehin (Exponentialformel).
+    // - MOD-Varianten: 0 = kein Override, der PAL/NTSC-Schalter gilt.
+    nonisolated static func clockRateOverride(for mod: Mod) -> Double {
+        switch mod.format {
+        case .s3m, .it: return 14_317_056.0
+        case .xm: return 8363.0 * 1712.0
+        default: return 0
+        }
+    }
+
     // Format-abhängige Kanal-Konfiguration: Panning aus dem Modul, bei S3M
     // zusätzlich das ScreamTracker-Periodenmodell (feinere Perioden, weitere
     // Klemmgrenzen, Effekt-Memory). Muss nach jedem DSPChannel.reset() erneut
@@ -228,6 +244,16 @@ public enum RenderEngine {
                 ch.periodMin = 1
                 ch.periodMax = mod.linearFrequency ? 7680 : 32768
             }
+        }
+        // Statische Periodentabellen JETZT anfassen, nicht erst im Renderblock:
+        // ein Swift `static let`-Array initialisiert lazy beim ersten Zugriff
+        // (swift_once + Heap-Allokation). Der erste Zugriff passiert sonst beim
+        // ersten Notenereignis im Echtzeit-Audiothread und verletzt die
+        // Renderblock-Invariante (keine Allokationen/Locks).
+        if mod.format == .s3m {
+            _ = DSPChannel.s3mPeriod(key: 48, c2spd: 8363)
+        } else if mod.format == .xm, !mod.linearFrequency {
+            _ = DSPChannel.xmAmigaPeriod(realNote: 48, finetune: 0)
         }
     }
 
@@ -535,7 +561,7 @@ public enum RenderEngine {
         SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
         state.outputsUntilNextTick = 0.0
         state.globalVolume = Float(mod.initialGlobalVolume)
-        state.clockRateOverride = (mod.format == .s3m || mod.format == .it) ? 14317056.0 : 0
+        state.clockRateOverride = clockRateOverride(for: mod)
         return state
     }
 
@@ -581,6 +607,21 @@ public enum RenderEngine {
     // (nur Array-Index-Zugriffe), damit im Echtzeit-Render-Block nutzbar.
     nonisolated static func patternRowCount(_ mod: Mod, at position: Int) -> Int {
         SequencerCore.patternRowCount(mod, at: position)
+    }
+
+    // Anzeige-Uhr (elapsedFrames) fuer einen Positions-/Zeilenpunkt: dieselbe
+    // Naeherung wie beim Seek — globale Zeilenzahl mal aktueller Tick-Dauer.
+    // Bei Tempo-Wechseln im Song ist das bewusst nur eine Naeherung.
+    nonisolated static func elapsedFrames(
+        for mod: Mod,
+        position: Int,
+        row: Int = 0,
+        ticksPerRow: Int,
+        outputsPerTick: Double
+    ) -> UInt64 {
+        let frames = Double(cumulativeRows(mod, upTo: position, row: row) * max(1, ticksPerRow))
+            * max(0, outputsPerTick)
+        return frames.isFinite && frames > 0 ? UInt64(frames) : 0
     }
 
     // Globaler Zeilen-Index: Summe der ECHTEN Pattern-Reihen aller Positionen vor

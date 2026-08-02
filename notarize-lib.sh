@@ -44,9 +44,9 @@ require_notary_profile() {
 # wenn jemand sie aus dem DMG herauszieht oder offline ist.
 notarize_app() {
     local app="$1"
-    local archive
-    archive="$(mktemp -d)/SavageModPlayer.zip"
 
+    # Signaturpruefungen VOR dem Anlegen des Temp-Verzeichnisses: die beiden
+    # Fehlerpfade hier brauchen gar keins.
     if ! codesign --verify --strict "$app" >/dev/null 2>&1; then
         echo "FEHLER: '$app' ist nicht gültig signiert — Notarisierung sinnlos." >&2
         return 1
@@ -57,11 +57,22 @@ notarize_app() {
         return 1
     fi
 
+    local tmpdir archive status=0
+    tmpdir="$(mktemp -d)"
+    archive="$tmpdir/SavageModPlayer.zip"
+
     echo "=== Notarisiere App (Profil: $NOTARY_PROFILE) ==="
-    ditto -c -k --keepParent "$app" "$archive"
-    xcrun notarytool submit "$archive" --keychain-profile "$NOTARY_PROFILE" --wait
-    xcrun stapler staple "$app"
-    xcrun stapler validate "$app"
-    spctl -a -t exec -vv "$app" 2>&1 | tail -2
-    rm -rf "$(dirname "$archive")"
+    # Die Kette laeuft mit ||-Fänger, damit das Temp-Verzeichnis auf JEDEM
+    # Rueckweg verschwindet — unter `set -e` des Aufrufers wuerde ein Fehler
+    # mitten in der Kette das rm sonst nie erreichen (frueher blieb dann bei
+    # jedem gescheiterten Versuch ein ZIP-Verzeichnis unter \$TMPDIR liegen).
+    { ditto -c -k --keepParent "$app" "$archive" \
+        && xcrun notarytool submit "$archive" --keychain-profile "$NOTARY_PROFILE" --wait \
+        && xcrun stapler staple "$app" \
+        && xcrun stapler validate "$app"; } || status=$?
+    if [[ $status -eq 0 ]]; then
+        spctl -a -t exec -vv "$app" 2>&1 | tail -2 || status=$?
+    fi
+    rm -rf "$tmpdir"
+    return $status
 }

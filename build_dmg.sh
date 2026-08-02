@@ -82,7 +82,6 @@ else
 fi
 
 cp -R "${APP_NAME}" "${BUILD_DIR}/dmg_temp/"
-ln -s /Applications "${BUILD_DIR}/dmg_temp/Applications"
 
 sips -s format png -s dpiWidth 72 -s dpiHeight 72 -z 600 600 src/DmgBackground.png --out "${BUILD_DIR}/DmgBg_1x.png"
 sips -s format png -s dpiWidth 144 -s dpiHeight 144 -z 1200 1200 src/DmgBackground.png --out "${BUILD_DIR}/DmgBg_2x.png"

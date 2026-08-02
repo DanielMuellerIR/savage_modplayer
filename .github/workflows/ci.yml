@@ -19,11 +19,29 @@ jobs:
       - name: Kontext- und Doku-Regeln
         run: python3 Tests/context_hygiene_tests.py
 
+      # Die UI-Quelltests kodieren die Pflichtbedienelemente des kompakten
+      # Transports — ohne diesen Schritt koennten sie verschwinden, ohne dass
+      # CI rot wird.
+      - name: UI-Quelltests
+        run: python3 Tests/ui_source_tests.py
+
       - name: Swift Version
         run: swift --version
 
       - name: Swift build (release)
         run: swift build -c release
+
+      # Quick-Look-Appex und App-Bundle entstehen NUR in build_app.sh (eigener
+      # swiftc-Aufruf) — swift build allein wuerde Build- oder Plist-Fehler der
+      # ausgelieferten Extension nicht bemerken. SIGN_APP=0: unsignierter Lauf,
+      # auf dem Runner gibt es keine Developer-ID.
+      - name: App-Bundle samt Quick-Look-Appex (unsigniert)
+        run: |
+          SIGN_APP=0 bash build_app.sh
+          plutil -lint "Savage Mod Player.app/Contents/Info.plist"
+          plutil -lint "Savage Mod Player.app/Contents/PlugIns/SavageModPlayerQuickLook.appex/Contents/Info.plist"
+          test -x "Savage Mod Player.app/Contents/MacOS/SavageModPlayerApp"
+          test -x "Savage Mod Player.app/Contents/PlugIns/SavageModPlayerQuickLook.appex/Contents/MacOS/SavageModPlayerQuickLook"
 
       # In CI ist der gitignorierte audio/-Ordner nicht vorhanden, daher skippen
       # die Audio-/Hardware-abhaengigen Tests von selbst; die synthetischen
@@ -48,6 +66,24 @@ jobs:
             echo "::error::savage-mod-player.html ist veraltet. 'python3 build.py' ausfuehren und committen."
             exit 1
           fi
+
+  ios-build-test:
+    # Baut die iPhone-App fuers Simulator-SDK und laeuft ihre Xcode-Tests —
+    # sonst koennte das komplette iOS-Target brechen, waehrend die uebrigen
+    # Jobs gruen bleiben. Eigener Job, damit macOS-Paket- und iOS-Pfad
+    # parallel laufen.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Xcode Version
+        run: xcodebuild -version
+
+      - name: Simulator-Build
+        run: bash ios/scripts/build-simulator.sh
+
+      - name: Simulator-Tests
+        run: bash ios/scripts/run-tests.sh
 
   linux-build-test:
     runs-on: ubuntu-latest

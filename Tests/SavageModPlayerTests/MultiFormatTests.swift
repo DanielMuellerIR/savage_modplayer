@@ -115,7 +115,7 @@ final class MultiFormatTests: XCTestCase {
     // Baut ein minimales, gueltiges S3M: 2 aktive Kanaele (L/R), 1 Instrument
     // (4 Samples, unsigned), 1 Pattern mit Note+Volume+Effekt, Orders [0, --].
     private func makeS3M() -> Data {
-        var data = Data(repeating: 0, count: 0x104)
+        var data = Data(repeating: 0, count: 0x124)
         data.replaceSubrange(0..<8, with: Data("S3M TEST".utf8))
         data[0x1C] = 0x1A
         data[0x1D] = 16          // Typ: Modul
@@ -139,9 +139,9 @@ final class MultiFormatTests: XCTestCase {
         data[0x62] = 0x07
         data[0x64] = 0x0D
 
-        // Instrument bei 0x70: Typ 1, Sample bei 0x100 (memseg 0x10), 4 Bytes
+        // Instrument bei 0x70: Typ 1, Sample bei 0x120 (memseg 0x12), 4 Bytes
         data[0x70] = 1
-        data[0x7E] = 0x10        // memseg low word -> 0x10 * 16 = 0x100
+        data[0x7E] = 0x12        // memseg low word -> 0x12 * 16 = 0x120
         data[0x80] = 4           // Laenge
         data[0x8C] = 64          // Volume
         data[0x90] = 0xAB        // c2spd = 0x20AB = 8363
@@ -150,9 +150,12 @@ final class MultiFormatTests: XCTestCase {
 
         // Pattern bei 0xD0: Row 0 mit Note C-4/Inst 1/Vol 32/Effekt A03 auf
         // Kanal 0. Row 1 enthält D00 (präsent trotz Nullparameter), Row 2
-        // eine Note ohne Effekt; danach bleiben die Rows leer.
+        // eine Note ohne Effekt; danach bleiben die Rows leer. Ein volles
+        // Pattern hat 64 Zeilen: 17 Event-/Terminator-Bytes fuer Rows 0-2
+        // plus 61 Null-Terminatoren fuer Rows 3-63 plus das Laengenfeld
+        // selbst = deklarierte Laenge 80 (der Parser validiert diese Grenze).
         var p = 0xD0
-        data[p] = 0x30; p += 1   // gepackte Laenge (unbenutzt beim Lesen)
+        data[p] = 0x50; p += 1   // gepackte Laenge inkl. der 2 Laengenbytes
         data[p] = 0x00; p += 1
         data[p] = 0xE0; p += 1   // what: Kanal 0 + Note/Inst + Vol + Cmd
         data[p] = 0x40; p += 1   // Note: Oktave 4, C -> Key 48
@@ -171,13 +174,13 @@ final class MultiFormatTests: XCTestCase {
         data[p] = 0x40; p += 1
         data[p] = 0x01; p += 1
         data[p] = 0x00; p += 1   // Ende Row 2
-        // Rows 3..63 leer (Nullbytes reichen)
+        // Rows 3..63 leer: 61 Null-Terminatoren bis 0xD0 + 0x50 = 0x120.
 
-        // Sampledaten bei 0x100 (unsigned)
-        data[0x100] = 0x80
-        data[0x101] = 0xFF
-        data[0x102] = 0x80
-        data[0x103] = 0x00
+        // Sampledaten bei 0x120 (unsigned)
+        data[0x120] = 0x80
+        data[0x121] = 0xFF
+        data[0x122] = 0x80
+        data[0x123] = 0x00
         return data
     }
 
@@ -250,7 +253,101 @@ final class MultiFormatTests: XCTestCase {
         XCTAssertEqual(try ModuleLoader.parse(data: modData).format, .protracker)
     }
 
+    // MARK: - S3M-Pattern-Grenzen
+
+    func testS3MRejectsPatternWithTruncatedRowCount() {
+        // Deklarierte Laenge auf 32 druecken: die 64 Zeilen passen dann nicht
+        // mehr in das Pattern-Fenster -> strukturelle Korruption, kein stilles
+        // "Rest bleibt leer" (und erst recht kein Weiterlesen in Sampledaten).
+        var data = makeS3M()
+        data[0xD0] = 0x20
+        XCTAssertThrowsError(try S3MParser.parse(data: data)) { error in
+            guard case .corruptPattern? = error as? S3MParser.ParserError else {
+                return XCTFail("erwartet corruptPattern, war \(error)")
+            }
+        }
+    }
+
+    func testS3MRejectsEventCrossingDeclaredPatternEnd() {
+        // Ein Event mit allen drei Feldgruppen direkt vor der deklarierten
+        // Grenze: die 5 Folgebytes wuerden dataEnd ueberschreiten.
+        var data = makeS3M()
+        // Pattern auf minimal schrumpfen: Laenge 2+64+1: 63 Terminatoren, dann
+        // ein Event-Byte als letztes Byte im Fenster.
+        var p = 0xD0
+        data[p] = 67; p += 1     // deklarierte Laenge 2 + 64 + 1 = 67
+        data[p] = 0; p += 1
+        for _ in 0..<63 { data[p] = 0; p += 1 }   // Rows 0..62 leer
+        data[p] = 0xE0; p += 1   // Row 63: Event verlangt 5 Bytes hinter dataEnd
+        XCTAssertThrowsError(try S3MParser.parse(data: data)) { error in
+            guard case .corruptPattern? = error as? S3MParser.ParserError else {
+                return XCTFail("erwartet corruptPattern, war \(error)")
+            }
+        }
+    }
+
+    func testS3MRejectsPatternWindowBeyondFileEnd() {
+        // Deklarierte Laenge zeigt hinter das Dateiende -> abgeschnittenes
+        // Pattern wird abgelehnt statt Nullbytes/Nachbardaten zu lesen.
+        var data = makeS3M()
+        data[0xD0] = 0xFF
+        data[0xD1] = 0x00
+        XCTAssertThrowsError(try S3MParser.parse(data: data)) { error in
+            guard case .corruptPattern? = error as? S3MParser.ParserError else {
+                return XCTFail("erwartet corruptPattern, war \(error)")
+            }
+        }
+    }
+
+    // MARK: - S3M-Global-Volume
+
+    func testS3MGlobalVolumeZeroIsHonoredForModernTrackers() throws {
+        // gv=0 ist ein gueltiger Headerwert (bewusst stummer Start) — ausser
+        // bei Scream Tracker vor 3.20, wo 0 dokumentiert "nicht gesetzt"
+        // bedeutet (siehe normalizedGlobalVolume).
+        var data = makeS3M()
+        data[0x30] = 0           // Global Volume 0
+        data[0x28] = 0x20        // cwtv = 0x1320 (ST 3.20)
+        data[0x29] = 0x13
+        XCTAssertEqual(try S3MParser.parse(data: data).initialGlobalVolume, 0)
+
+        data[0x28] = 0x00        // cwtv = 0x1300 (ST 3.00) -> 0 heisst "unset"
+        data[0x29] = 0x13
+        XCTAssertEqual(try S3MParser.parse(data: data).initialGlobalVolume, 64)
+    }
+
+    func testS3MGlobalVolumeClampsAboveRange() throws {
+        var data = makeS3M()
+        data[0x30] = 100         // ueber der Spezifikationsgrenze 64
+        XCTAssertEqual(try S3MParser.parse(data: data).initialGlobalVolume, 64)
+        data[0x30] = 64
+        XCTAssertEqual(try S3MParser.parse(data: data).initialGlobalVolume, 64)
+    }
+
     // MARK: - S3M-DSP
+
+    func testClockRateOverridePerFormat() throws {
+        // S3M/IT: fester ST3-Takt. MOD: 0 = PAL/NTSC-Schalter gilt.
+        // (XM: FT2-Takt, getestet in XMParserTests.)
+        let s3m = try S3MParser.parse(data: makeS3M())
+        XCTAssertEqual(RenderEngine.clockRateOverride(for: s3m), 14_317_056.0)
+        let mod = try ModParser.parse(data: makeMultichannelMod(signature: "M.K.", channels: 4))
+        XCTAssertEqual(RenderEngine.clockRateOverride(for: mod), 0)
+    }
+
+    // Anzeige-Uhr fuer Seek/Loop-Neustart: globale Zeilen mal Tick-Dauer.
+    func testElapsedFramesApproximation() throws {
+        let mod = try S3MParser.parse(data: makeS3M()) // 1 Position à 64 Zeilen
+        XCTAssertEqual(
+            RenderEngine.elapsedFrames(for: mod, position: 0, ticksPerRow: 6, outputsPerTick: 100),
+            0)
+        XCTAssertEqual(
+            RenderEngine.elapsedFrames(for: mod, position: 0, row: 32, ticksPerRow: 6, outputsPerTick: 100),
+            UInt64(32 * 6 * 100))
+        XCTAssertEqual(
+            RenderEngine.elapsedFrames(for: mod, position: 1, ticksPerRow: 6, outputsPerTick: 100),
+            UInt64(64 * 6 * 100))
+    }
 
     func testS3MPeriodFormula() {
         // C-4 bei Standard-C2Spd 8363 ist die ST3-Referenzperiode 1712.

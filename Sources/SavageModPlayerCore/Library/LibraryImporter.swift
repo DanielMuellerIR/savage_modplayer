@@ -27,6 +27,14 @@ public struct ImportProgress: Sendable {
     }
 }
 
+// Markiert Fehler, die AUSSCHLIESSLICH durch einen Nutzerabbruch entstehen.
+// Plattformspezifische Leser (z.B. der koordinierte Cloud-Leser der iOS-App)
+// konformieren ihren Abbruchfehler, damit der Importer einen Abbruch typisiert
+// von echten Fehlschlaegen unterscheiden kann, ohne die konkreten App-Typen zu
+// kennen. Frueher landete ein Abbruch als normale ImportFailure im Bericht und
+// musste im Store per String-Vergleich wieder herausgefiltert werden.
+public protocol ImportCancellationError: Error {}
+
 // Eine einzelne gescheiterte Datei bzw. ein gescheitertes Archiv. Ein Fehler
 // bricht den Import nie ab — ein kaputtes Archiv darf 500 gute Dateien nicht
 // verhindern.
@@ -177,10 +185,21 @@ public final class LibraryImporter: @unchecked Sendable {
             folder.removeLast()
 
             let failuresBefore = session.failures.count
+            let takenBefore = session.imported.count + session.duplicates.count
             unpackArchive(
                 archive, targetFolder: folder,
                 session: session, progress: progress, isCancelled: isCancelled)
-            if session.failures.count == failuresBefore {
+            // Das Quellarchiv wird NUR nach vollstaendig erfolgreicher
+            // Uebernahme geloescht: kein Abbruch (auch nicht mitten im
+            // Einsortieren), keine neuen Fehler UND mindestens eine
+            // uebernommene oder als Duplikat bestaetigte Datei. Ein Archiv
+            // ohne spielbaren Inhalt bleibt bewusst liegen und damit als
+            // offenes Archiv sichtbar, statt unwiederbringlich zu
+            // verschwinden.
+            let takenDelta = session.imported.count + session.duplicates.count - takenBefore
+            if !session.cancelled,
+               session.failures.count == failuresBefore,
+               takenDelta > 0 {
                 try? fileManager.removeItem(at: archive)
             }
         }
@@ -198,9 +217,19 @@ public final class LibraryImporter: @unchecked Sendable {
         progress: @escaping (ImportProgress) -> Void,
         isCancelled: @escaping () -> Bool
     ) {
-        guard let children = try? fileManager.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
-        else { return }
+        let children: [URL]
+        do {
+            children = try fileManager.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+        } catch {
+            // Ein unlesbarer (oder von einem File Provider noch nicht
+            // materialisierter) Ordner darf nicht still uebersprungen werden —
+            // sonst saehe der Import erfolgreich aus, obwohl Teile fehlen.
+            session.failures.append(ImportFailure(
+                path: Self.joined(targetFolder.isEmpty ? [directory.lastPathComponent] : targetFolder),
+                reason: "Ordner konnte nicht gelesen werden: \(Self.reason(for: error))"))
+            return
+        }
         // Feste Reihenfolge: dasselbe Quellverzeichnis ergibt immer denselben
         // Ablauf — wichtig fuer nachvollziehbare Berichte und Tests.
         let sorted = children.sorted {
@@ -228,12 +257,16 @@ public final class LibraryImporter: @unchecked Sendable {
         progress: @escaping (ImportProgress) -> Void,
         isCancelled: @escaping () -> Bool
     ) {
-        if PlaylistScanner.isModFile(fileURL) {
-            ingestModule(fileURL, targetFolder: targetFolder, session: session,
-                         progress: progress, isCancelled: isCancelled)
-        } else if PlaylistScanner.isArchive(fileURL) {
+        // Archive ZUERST klassifizieren — wie `MusicLibrary.rescan` und der
+        // Playlist-Scanner: `mod.collection.zip` matcht sonst die Amiga-
+        // Namenskonvention `mod.<name>` und landet als unspielbare
+        // "Moduldatei" im Index statt entpackt zu werden.
+        if PlaylistScanner.isArchive(fileURL) {
             unpackArchive(fileURL, targetFolder: targetFolder, session: session,
                           progress: progress, isCancelled: isCancelled)
+        } else if PlaylistScanner.isModFile(fileURL) {
+            ingestModule(fileURL, targetFolder: targetFolder, session: session,
+                         progress: progress, isCancelled: isCancelled)
         }
         // Alles andere ist kein Fehler, sondern schlicht nichts fuer uns.
     }
@@ -256,6 +289,12 @@ public final class LibraryImporter: @unchecked Sendable {
                                consume: false, session: session)
             }
         } catch {
+            // Ein Nutzerabbruch (z.B. waehrend des Wartens auf eine
+            // Cloud-Datei) ist kein Fehlschlag dieser Datei.
+            guard !Self.isCancellation(error) else {
+                session.cancelled = true
+                return
+            }
             session.failures.append(ImportFailure(
                 path: Self.joined(targetFolder + [name]),
                 reason: "Datei konnte nicht uebernommen werden: \(Self.reason(for: error))"))
@@ -284,15 +323,35 @@ public final class LibraryImporter: @unchecked Sendable {
             .appendingPathComponent("savage-import-\(UUID().uuidString)", isDirectory: true)
         defer { try? fileManager.removeItem(at: staging) }
 
+        var unsupportedEntries = 0
         do {
             try coordinatedRead(archive) { readable in
-                try PlaylistScanner.unpackArchive(readable, into: staging, isCancelled: isCancelled)
+                unsupportedEntries = try PlaylistScanner.unpackArchive(
+                    readable, into: staging, isCancelled: isCancelled)
             }
         } catch {
+            // Abbruch typisiert erkennen (ZipArchiveError.cancelled,
+            // ArchiveError.cancelled, ImportCancellationError des Lesers):
+            // er ist gewollt und darf weder als Archivfehler erscheinen noch
+            // in `wasCancelled == false` enden.
+            guard !Self.isCancellation(error) else {
+                session.cancelled = true
+                return
+            }
             session.failures.append(ImportFailure(
                 path: Self.joined(targetFolder + [name]),
                 reason: "Archiv konnte nicht entpackt werden: \(Self.reason(for: error))"))
             return
+        }
+        // Uebersprungene Kompressionsmethoden sichtbar machen: Der Nutzer
+        // erfaehrt, dass Dateien fehlen, und `runUnpackPending` loescht das
+        // nur teilweise uebernommene Quellarchiv nicht.
+        if unsupportedEntries > 0 {
+            session.failures.append(ImportFailure(
+                path: Self.joined(targetFolder + [name]),
+                reason: unsupportedEntries == 1
+                    ? "Ein Eintrag mit nicht unterstuetzter Kompressionsmethode wurde uebersprungen."
+                    : "\(unsupportedEntries) Eintraege mit nicht unterstuetzter Kompressionsmethode wurden uebersprungen."))
         }
         if isCancelled() { session.cancelled = true; return }
 
@@ -310,9 +369,18 @@ public final class LibraryImporter: @unchecked Sendable {
         progress: @escaping (ImportProgress) -> Void,
         isCancelled: @escaping () -> Bool
     ) {
-        guard let children = try? fileManager.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
-        else { return }
+        let children: [URL]
+        do {
+            children = try fileManager.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+        } catch {
+            // Auch im Zwischenlager gilt: still ausgelassene Ordner wuerden
+            // einen unvollstaendigen Import als Erfolg tarnen.
+            session.failures.append(ImportFailure(
+                path: Self.joined(targetFolder),
+                reason: "Entpackter Ordner konnte nicht gelesen werden: \(Self.reason(for: error))"))
+            return
+        }
         let sorted = children.sorted {
             $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
         }
@@ -331,6 +399,10 @@ public final class LibraryImporter: @unchecked Sendable {
                     try place(child, name: name, targetFolder: targetFolder,
                               consume: true, session: session)
                 } catch {
+                    guard !Self.isCancellation(error) else {
+                        session.cancelled = true
+                        return
+                    }
                     session.failures.append(ImportFailure(
                         path: Self.joined(targetFolder + [name]),
                         reason: "Datei aus dem Archiv konnte nicht uebernommen werden: \(Self.reason(for: error))"))
@@ -494,6 +566,18 @@ public final class LibraryImporter: @unchecked Sendable {
             return description
         }
         return (error as NSError).localizedDescription
+    }
+
+    // Ist dieser Fehler NUR die Folge eines Nutzerabbruchs? Neben dem
+    // Marker-Protokoll (fuer plattformspezifische Leser) werden die beiden
+    // Core-eigenen Abbruchfaelle direkt erkannt.
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is ImportCancellationError { return true }
+        if case PlaylistScanner.ArchiveError.cancelled = error { return true }
+        #if canImport(Compression)
+        if case ZipArchiveError.cancelled = error { return true }
+        #endif
+        return false
     }
 
     // Laufender Stand eines Imports. Bewusst eine Klasse: der Stand wird auch

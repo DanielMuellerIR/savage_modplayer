@@ -22,6 +22,29 @@
 # Letzte Zeile bei Erfolg: RELEASE OK: <pfad-zum-dmg> (<version>)
 set -euo pipefail
 cd "$(dirname "$0")"
+
+usage() {
+    cat <<EOF
+Usage: ./release.sh [--no-finder-layout]
+
+  --no-finder-layout  Finder-/AppleScript-Layout ueberspringen (headless).
+  -h, --help          Diese Hilfe anzeigen.
+EOF
+}
+
+# Argumente VOR jeder Wirkung vollstaendig parsen: ./release.sh --help darf
+# weder Profilpruefung noch Build oder Notarisierung anstossen, und ein
+# Tippfehler bricht sofort ab, statt kostenpflichtige bzw. zustandsaendernde
+# Release-Arbeit zu starten.
+DMG_ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --no-finder-layout) DMG_ARGS+=("$arg") ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unbekannte Option: $arg" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
 source ./notarize-lib.sh
 
 require_notary_profile
@@ -37,7 +60,11 @@ echo "=== 2/3 App notarisieren ==="
 notarize_app "$APP"
 
 echo "=== 3/3 DMG bauen und notarisieren ==="
-bash build_dmg.sh --notarize "$@"
+# Ein DMG aus einem frueheren Lauf koennte einen Fehlschlag als Erfolg tarnen —
+# vorher entfernen, damit der Existenztest unten das Ergebnis DIESES Laufs
+# prueft. (Das leere Array braucht unter Bash 3 + set -u die +-Expansion.)
+rm -f "$DMG"
+bash build_dmg.sh --notarize ${DMG_ARGS[@]+"${DMG_ARGS[@]}"}
 
 if [[ ! -f "$DMG" ]]; then
     echo "FEHLER: Erwartetes DMG fehlt: $DMG" >&2

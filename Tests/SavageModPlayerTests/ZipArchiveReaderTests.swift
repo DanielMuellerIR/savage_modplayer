@@ -532,6 +532,121 @@ final class ZipArchiveReaderTests: XCTestCase {
         }
     }
 
+    func testInspectEnforcesEntryCountLimit() throws {
+        // Auch der reine Inhaltsverzeichnis-Pfad (inspect) respektiert das
+        // Limit — frueher wurde es dort gar nicht geprueft.
+        let items = (0..<5).map { ZipItem(name: "song\($0).mod", payload: Data("x".utf8), method: 0) }
+        let archive = try writeArchive(items)
+        var limits = ZipArchiveReader.Limits.default
+        limits.maxEntryCount = 4
+
+        let error = zipError {
+            _ = try ZipArchiveReader.inspect(archive: archive, limits: limits)
+        }
+        guard case .some(.tooManyEntries) = error else {
+            return XCTFail("tooManyEntries erwartet, war: \(String(describing: error))")
+        }
+    }
+
+    // MARK: - Kollisionen auf dieselbe Zieldatei
+
+    func testDuplicateEntryNameIsRejected() throws {
+        let archive = try writeArchive([
+            ZipItem(name: "twice.mod", payload: Data("erste".utf8), method: 0),
+            ZipItem(name: "twice.mod", payload: Data("zweite".utf8), method: 0)
+        ])
+        let error = zipError {
+            try ZipArchiveReader.extract(archive: archive, to: destination, shouldExtract: acceptAll)
+        }
+        guard case .some(.duplicateEntryPath) = error else {
+            return XCTFail("duplicateEntryPath erwartet, war: \(String(describing: error))")
+        }
+    }
+
+    func testCaseVariantCollisionIsRejected() throws {
+        // Auf case-insensitivem APFS traefen beide Schreibweisen dieselbe
+        // Datei; der spaetere Eintrag wuerde den frueheren ueberschreiben.
+        let archive = try writeArchive([
+            ZipItem(name: "collection/Song.MOD", payload: Data("gross".utf8), method: 0),
+            ZipItem(name: "collection/song.mod", payload: Data("klein".utf8), method: 0)
+        ])
+        let error = zipError {
+            try ZipArchiveReader.extract(archive: archive, to: destination, shouldExtract: acceptAll)
+        }
+        guard case .some(.duplicateEntryPath) = error else {
+            return XCTFail("duplicateEntryPath erwartet, war: \(String(describing: error))")
+        }
+    }
+
+    func testUnicodeNormalizationCollisionIsRejected() throws {
+        // NFC "ö" und NFD "o + Kombinationstrema" sind fuer APFS derselbe
+        // Name. Beide Eintraege sind als UTF-8 geflaggt (Bit 11).
+        let nfc = Array("m\u{00F6}dul.mod".utf8)
+        let nfd = Array("mo\u{0308}dul.mod".utf8)
+        let archive = try writeArchive([
+            ZipItem(name: "nfc", payload: Data("eins".utf8), method: 0, flags: 0x0800, rawNameBytes: nfc),
+            ZipItem(name: "nfd", payload: Data("zwei".utf8), method: 0, flags: 0x0800, rawNameBytes: nfd)
+        ])
+        let error = zipError {
+            try ZipArchiveReader.extract(archive: archive, to: destination, shouldExtract: acceptAll)
+        }
+        guard case .some(.duplicateEntryPath) = error else {
+            return XCTFail("duplicateEntryPath erwartet, war: \(String(describing: error))")
+        }
+    }
+
+    // MARK: - EOCD-Abgleich
+
+    func testEntryCountMismatchWithEOCDIsRejected() throws {
+        // EOCD behauptet einen Eintrag mehr, als das Central Directory
+        // enthaelt -> kaputtes/praepariertes Archiv.
+        var bytes = try makeArchive([
+            ZipItem(name: "one.mod", payload: Data("a".utf8), method: 0)
+        ])
+        let eocdStart = bytes.count - 22
+        bytes[eocdStart + 8] = 2       // Eintraege auf dieser Diskette
+        bytes[eocdStart + 10] = 2      // Eintraege gesamt
+        let url = workDir.appendingPathComponent("count-mismatch.zip")
+        try bytes.write(to: url)
+
+        let error = zipError {
+            try ZipArchiveReader.extract(archive: url, to: destination, shouldExtract: acceptAll)
+        }
+        guard case .some(.corruptArchive) = error else {
+            return XCTFail("corruptArchive erwartet, war: \(String(describing: error))")
+        }
+    }
+
+    func testTrailingBytesInCentralDirectoryAreRejected() throws {
+        // 5 Muellbytes zwischen letztem Record und EOCD, directorySize zaehlt
+        // sie mit: Das Verzeichnis geht nicht restlos auf -> Ablehnung.
+        var bytes = try makeArchive([
+            ZipItem(name: "one.mod", payload: Data("a".utf8), method: 0)
+        ])
+        let eocdStart = bytes.count - 22
+        bytes.insert(contentsOf: [0, 0, 0, 0, 0], at: eocdStart)
+        let newEocdStart = eocdStart + 5
+        // directorySize (Offset +12 im EOCD) um die 5 Byte erhoehen.
+        let oldSize = UInt32(bytes[newEocdStart + 12])
+            | (UInt32(bytes[newEocdStart + 13]) << 8)
+            | (UInt32(bytes[newEocdStart + 14]) << 16)
+            | (UInt32(bytes[newEocdStart + 15]) << 24)
+        let newSize = oldSize + 5
+        bytes[newEocdStart + 12] = UInt8(newSize & 0xFF)
+        bytes[newEocdStart + 13] = UInt8((newSize >> 8) & 0xFF)
+        bytes[newEocdStart + 14] = UInt8((newSize >> 16) & 0xFF)
+        bytes[newEocdStart + 15] = UInt8((newSize >> 24) & 0xFF)
+        let url = workDir.appendingPathComponent("trailing-bytes.zip")
+        try bytes.write(to: url)
+
+        let error = zipError {
+            try ZipArchiveReader.extract(archive: url, to: destination, shouldExtract: acceptAll)
+        }
+        guard case .some(.corruptArchive) = error else {
+            return XCTFail("corruptArchive erwartet, war: \(String(describing: error))")
+        }
+    }
+
     // MARK: - Integritaet und Sonderfaelle
 
     func testChecksumMismatchIsRejectedAndFileRemoved() throws {

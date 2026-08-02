@@ -48,6 +48,10 @@ public enum ZipArchiveError: Error, LocalizedError {
     case encryptedEntry(String)
     /// Eintragsname fuehrt aus dem Zielordner heraus (Zip-Slip).
     case unsafeEntryPath(String)
+    /// Zwei zu entpackende Eintraege treffen dieselbe Zieldatei — exakt
+    /// gleicher Name oder nur auf case-/normalisierungs-insensitiven
+    /// Dateisystemen (APFS auf iOS/macOS) kollidierende Schreibweisen.
+    case duplicateEntryPath(String)
     /// Eintrag ist ein symbolischer Link — wird nie angelegt.
     case symbolicLinkEntry(String)
     /// Mehr Eintraege als erlaubt.
@@ -81,6 +85,8 @@ public enum ZipArchiveError: Error, LocalizedError {
             return "Eintrag „\(name)“ ist passwortgeschützt und kann nicht entpackt werden."
         case .unsafeEntryPath(let name):
             return "Eintrag „\(name)“ hat einen unsicheren Pfad und wurde abgelehnt."
+        case .duplicateEntryPath(let name):
+            return "Eintrag „\(name)“ trifft dieselbe Zieldatei wie ein früherer Eintrag und wurde abgelehnt."
         case .symbolicLinkEntry(let name):
             return "Eintrag „\(name)“ ist ein symbolischer Link und wurde abgelehnt."
         case .tooManyEntries(let count):
@@ -163,6 +169,11 @@ public enum ZipArchiveReader {
         /// Eintraege, die der Vorfilter aussortiert hat oder die nicht
         /// unterstuetzt sind (inklusive Verzeichniseintraege).
         public let skippedEntries: Int
+        /// Teilmenge von `skippedEntries`: GEWOLLTE Eintraege, die nur wegen
+        /// einer nicht unterstuetzten Kompressionsmethode (weder stored noch
+        /// deflate) uebersprungen wurden. Der Aufrufer kann damit erkennen,
+        /// dass das Archiv nicht vollstaendig uebernommen wurde.
+        public let unsupportedEntries: Int
         /// Summe der geschriebenen Bytes.
         public let totalUncompressedBytes: Int64
     }
@@ -202,10 +213,14 @@ public enum ZipArchiveReader {
 
     /// Liest nur das Inhaltsverzeichnis. Es wird nichts entpackt und nichts
     /// geschrieben.
-    public static func inspect(archive: URL) throws -> [Entry] {
+    public static func inspect(archive: URL, limits: Limits = .default) throws -> [Entry] {
         let handle = try openForReading(archive)
         defer { try? handle.close() }
-        return try readCentralDirectory(handle: handle, archiveName: archive.lastPathComponent)
+        return try readCentralDirectory(
+            handle: handle,
+            archiveName: archive.lastPathComponent,
+            maxEntryCount: limits.maxEntryCount
+        )
             .map { record in
                 Entry(
                     path: record.name,
@@ -241,10 +256,14 @@ public enum ZipArchiveReader {
         let handle = try openForReading(archive)
         defer { try? handle.close() }
 
-        let records = try readCentralDirectory(handle: handle, archiveName: archive.lastPathComponent)
-        guard records.count <= limits.maxEntryCount else {
-            throw ZipArchiveError.tooManyEntries(records.count)
-        }
+        // Das Entry-Limit wird bereits BEIM Parsen des Central Directory
+        // erzwungen — nicht erst danach, wenn alle Records samt Namen schon
+        // im Speicher stehen.
+        let records = try readCentralDirectory(
+            handle: handle,
+            archiveName: archive.lastPathComponent,
+            maxEntryCount: limits.maxEntryCount
+        )
 
         try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
         // Die Wurzel EINMAL aufloesen und danach nur noch diese Fassung
@@ -254,7 +273,13 @@ public enum ZipArchiveReader {
 
         var extractedFiles: [URL] = []
         var skippedEntries = 0
+        var unsupportedEntries = 0
         var totalBytes: Int64 = 0
+        // Kanonisch reservierte Zielpfade dieses Archivs. APFS auf iOS/macOS
+        // ist case-insensitiv und normalisierungs-insensitiv — "Song.MOD" und
+        // "song.mod" (oder NFC-/NFD-Varianten eines Umlauts) traefen dieselbe
+        // Datei, und der spaetere Eintrag wuerde den frueheren ueberschreiben.
+        var reservedTargets = Set<String>()
 
         for record in records {
             if isCancelled() { throw ZipArchiveError.cancelled }
@@ -285,8 +310,11 @@ public enum ZipArchiveReader {
             if record.isEncrypted { throw ZipArchiveError.encryptedEntry(record.name) }
             guard record.isSupportedMethod else {
                 // Andere Verfahren (bzip2, LZMA, …) kommen in Modul-Sammlungen
-                // praktisch nicht vor und gelten hier als "uebersprungen".
+                // praktisch nicht vor und gelten hier als "uebersprungen" —
+                // aber gesondert gezaehlt, damit der Aufrufer das Archiv nicht
+                // fuer vollstaendig uebernommen haelt.
                 skippedEntries += 1
+                unsupportedEntries += 1
                 continue
             }
 
@@ -299,6 +327,15 @@ public enum ZipArchiveReader {
             }
             guard totalBytes + declaredSize <= limits.maxTotalUncompressedBytes else {
                 throw ZipArchiveError.archiveTooLarge
+            }
+
+            // Zielpfad exklusiv reservieren: Kollisionen werden abgelehnt,
+            // nicht stillschweigend ueberschrieben.
+            let canonicalTarget = components
+                .map { $0.precomposedStringWithCanonicalMapping.lowercased() }
+                .joined(separator: "/")
+            guard reservedTargets.insert(canonicalTarget).inserted else {
+                throw ZipArchiveError.duplicateEntryPath(record.name)
             }
 
             let dataOffset = try dataOffsetForEntry(handle: handle, record: record)
@@ -320,6 +357,7 @@ public enum ZipArchiveReader {
         return ExtractionResult(
             extractedFiles: extractedFiles,
             skippedEntries: skippedEntries,
+            unsupportedEntries: unsupportedEntries,
             totalUncompressedBytes: totalBytes
         )
     }
@@ -339,13 +377,10 @@ public enum ZipArchiveReader {
         let versionMadeBy: UInt16
 
         /// Bit 0 des General-Purpose-Flags: Eintrag ist verschluesselt.
+        /// (Bit 11 = UTF-8-Name wird direkt beim Parsen ausgewertet, Bit 3 =
+        /// Data Descriptor ist folgenlos, weil ohnehin die Werte des Central
+        /// Directory gelten — siehe Kommentar in `writeEntry`.)
         var isEncrypted: Bool { flags & 0x0001 != 0 }
-        /// Bit 11: Name ist UTF-8 statt CP437.
-        var isUTF8Name: Bool { flags & 0x0800 != 0 }
-        /// Bit 3: Groessen/CRC stehen erst hinter den Daten im Data Descriptor.
-        /// Fuer uns folgenlos, weil ohnehin die Werte des Central Directory
-        /// gelten — der Local File Header enthaelt in diesem Fall nur Nullen.
-        var hasDataDescriptor: Bool { flags & 0x0008 != 0 }
         var isDirectory: Bool { name.hasSuffix("/") }
         var isSupportedMethod: Bool { method == 0 || method == 8 }
 
@@ -372,7 +407,14 @@ public enum ZipArchiveReader {
     }
 
     /// Sucht das EOCD, liest das Central Directory am Stueck und zerlegt es.
-    private static func readCentralDirectory(handle: FileHandle, archiveName: String) throws -> [CentralRecord] {
+    /// `maxEntryCount` wird waehrend der Parse-Schleife erzwungen, damit ein
+    /// praeparierter 64-MiB-Katalog nicht erst Hunderttausende Records samt
+    /// Namens-Strings alloziert, bevor irgendwer das Limit prueft.
+    private static func readCentralDirectory(
+        handle: FileHandle,
+        archiveName: String,
+        maxEntryCount: Int
+    ) throws -> [CentralRecord] {
         let fileSize = Int64(try handle.seekToEnd())
         guard fileSize >= 22 else { throw ZipArchiveError.notAZipArchive }
 
@@ -426,9 +468,13 @@ public enum ZipArchiveReader {
         )
 
         var records: [CentralRecord] = []
-        records.reserveCapacity(Int(entryCount))
+        records.reserveCapacity(min(Int(entryCount), maxEntryCount))
         var cursor = 0
         while cursor + 46 <= directory.count {
+            // Limit VOR dem naechsten Record erzwingen (siehe Funktionskommentar).
+            guard records.count < maxEntryCount else {
+                throw ZipArchiveError.tooManyEntries(max(Int(entryCount), records.count + 1))
+            }
             let signature = readUInt32(directory, cursor)
             if signature == signatureZip64EOCD { throw ZipArchiveError.unsupportedZip64 }
             guard signature == signatureCentralDirectory else {
@@ -468,8 +514,17 @@ public enum ZipArchiveReader {
             cursor = headerEnd
         }
 
-        guard !records.isEmpty || entryCount == 0 else {
-            throw ZipArchiveError.corruptArchive("Inhaltsverzeichnis von \(archiveName) ist leer")
+        // Struktur-Abgleich mit dem EOCD: Das Central Directory muss exakt
+        // aufgehen (kein Byterest unter 46 Bytes) und genau die deklarierte
+        // Eintragszahl enthalten. Abweichungen bedeuten ein kaputtes oder
+        // praepariertes Archiv.
+        guard cursor == directory.count else {
+            throw ZipArchiveError.corruptArchive(
+                "Inhaltsverzeichnis von \(archiveName) hat \(directory.count - cursor) Byte Rest")
+        }
+        guard records.count == Int(entryCount) else {
+            throw ZipArchiveError.corruptArchive(
+                "Inhaltsverzeichnis von \(archiveName) enthält \(records.count) statt \(entryCount) Einträge")
         }
         return records
     }
@@ -569,13 +624,17 @@ public enum ZipArchiveReader {
         isCancelled: () -> Bool
     ) throws -> Int64 {
         let fileManager = FileManager.default
-        guard fileManager.createFile(atPath: target.path, contents: nil) else {
-            throw ZipArchiveError.writeFailed(target.lastPathComponent)
+        // O_EXCL: Die Zieldatei wird exklusiv NEU angelegt statt eine
+        // vorhandene zu ueberschreiben. Zusammen mit der Pfad-Reservierung im
+        // Aufrufer faengt das auch Kollisionen ab, die erst das Dateisystem
+        // sieht (Case-/Normalisierungs-Varianten).
+        let descriptor = open(target.path, O_WRONLY | O_CREAT | O_EXCL, 0o644)
+        guard descriptor >= 0 else {
+            throw errno == EEXIST
+                ? ZipArchiveError.duplicateEntryPath(record.name)
+                : ZipArchiveError.writeFailed(target.lastPathComponent)
         }
-        guard let output = try? FileHandle(forWritingTo: target) else {
-            try? fileManager.removeItem(at: target)
-            throw ZipArchiveError.writeFailed(target.lastPathComponent)
-        }
+        let output = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
 
         var completed = false
         defer {

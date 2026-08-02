@@ -79,7 +79,17 @@ public enum PlaylistScanner {
         // und deren Inhalt als Unterordner scannen. `archiveDepth` begrenzt
         // Archiv-in-Archiv-Rekursion.
         func handleFile(_ fileURL: URL, folderPath: [String], archiveDepth: Int) {
-            if isModFile(fileURL) {
+            // Archive ZUERST klassifizieren: `mod.collection.zip` matcht sonst
+            // die Amiga-Namenskonvention `mod.<name>` und wuerde als
+            // unspielbare "Moduldatei" kopiert statt entpackt.
+            if isArchive(fileURL), archiveDepth < 3 {
+                if let extractedDir = extractArchive(fileURL, tempDir: tempDir) {
+                    // Archivname ohne Endung als Ordner-Name — dass es ein
+                    // Archiv war, soll man in der Playlist nicht merken.
+                    let nodeName = (fileURL.lastPathComponent as NSString).deletingPathExtension
+                    scanDirectory(extractedDir, folderPath: folderPath + [nodeName], archiveDepth: archiveDepth + 1)
+                }
+            } else if isModFile(fileURL) {
                 // UUID-Praefix vermeidet Namens-Kollisionen im flachen Temp-Ziel;
                 // die UI blendet ihn beim Anzeigen wieder aus (cleanFilename).
                 let destURL = tempDir.appendingPathComponent("\(UUID().uuidString)_\(fileURL.lastPathComponent)")
@@ -88,13 +98,6 @@ public enum PlaylistScanner {
                     entries.append(Entry(url: destURL, displayName: fileURL.lastPathComponent, folderPath: folderPath))
                 } catch {
                     print("Fehler beim Kopieren: \(error)")
-                }
-            } else if isArchive(fileURL), archiveDepth < 3 {
-                if let extractedDir = extractArchive(fileURL, tempDir: tempDir) {
-                    // Archivname ohne Endung als Ordner-Name — dass es ein
-                    // Archiv war, soll man in der Playlist nicht merken.
-                    let nodeName = (fileURL.lastPathComponent as NSString).deletingPathExtension
-                    scanDirectory(extractedDir, folderPath: folderPath + [nodeName], archiveDepth: archiveDepth + 1)
                 }
             }
         }
@@ -164,26 +167,37 @@ public enum PlaylistScanner {
     // Oeffentlicher Einstieg fuers Entpacken: legt `destination` an und schreibt
     // die spielbaren Eintraege des Archivs dorthin. Wirft bei Fehlern, damit der
     // Aufrufer (z.B. der Bibliotheks-Import) dem Nutzer einen Grund nennen kann.
-    // `isCancelled` wird waehrend laengerer Archive regelmaessig abgefragt.
+    // `isCancelled` wird waehrend laengerer Archive regelmaessig abgefragt; ein
+    // Abbruch wirft `ArchiveError.cancelled` bzw. `ZipArchiveError.cancelled`.
+    //
+    // Rueckgabe: Anzahl GEWOLLTER Eintraege, die wegen einer nicht
+    // unterstuetzten Kompressionsmethode uebersprungen wurden. Der Aufrufer
+    // kann damit ein nur teilweise entpacktes Archiv von einem vollstaendig
+    // uebernommenen unterscheiden (und z.B. das Quellarchiv behalten). Auf dem
+    // bsdtar-Pfad immer 0 — dort scheitert ein nicht lesbarer Eintrag als
+    // ganzer Lauf.
+    @discardableResult
     public static func unpackArchive(
         _ archive: URL,
         into destination: URL,
         isCancelled: () -> Bool = { false }
-    ) throws {
+    ) throws -> Int {
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true, attributes: nil)
         #if os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
-        try unpackUsingZipReader(archive, into: destination, isCancelled: isCancelled)
+        return try unpackUsingZipReader(archive, into: destination, isCancelled: isCancelled)
         #else
-        try unpackUsingBsdtar(archive, into: destination)
+        return try unpackUsingBsdtar(archive, into: destination, isCancelled: isCancelled)
         #endif
     }
 
     // Fehler, die beim Entpacken ausserhalb des eigentlichen ZIP-Lesers
-    // entstehen koennen (fehlendes Werkzeug, nicht unterstuetztes Format).
+    // entstehen koennen (fehlendes Werkzeug, nicht unterstuetztes Format,
+    // Nutzerabbruch waehrend des bsdtar-Laufs).
     public enum ArchiveError: Error, LocalizedError {
         case unsupportedFormat(String)
         case toolMissing
         case toolFailed(String, Int32)
+        case cancelled
 
         public var errorDescription: String? {
             switch self {
@@ -193,6 +207,8 @@ public enum PlaylistScanner {
                 return "Zum Entpacken fehlt das Systemwerkzeug bsdtar (libarchive)."
             case .toolFailed(let name, let status):
                 return "Archiv nicht lesbar (bsdtar Exit \(status)): \(name)"
+            case .cancelled:
+                return "Entpacken abgebrochen."
             }
         }
     }
@@ -204,24 +220,30 @@ public enum PlaylistScanner {
         _ archive: URL,
         into destination: URL,
         isCancelled: () -> Bool
-    ) throws {
+    ) throws -> Int {
         guard archive.pathExtension.lowercased() == "zip" else {
             throw ArchiveError.unsupportedFormat(archive.lastPathComponent)
         }
         // Vorfilter: nur Moduldateien landen auf der Platte. Bei den grossen
         // Sammlungsarchiven spart das den Loewenanteil an Zeit und Platz.
-        _ = try ZipArchiveReader.extract(
+        let result = try ZipArchiveReader.extract(
             archive: archive,
             to: destination,
             shouldExtract: isModFile,
             isCancelled: isCancelled
         )
+        return result.unsupportedEntries
     }
     #else
     // bsdtar liegt auf macOS und den meisten Linux-Distributionen unter
     // /usr/bin (dort aus dem Paket libarchive-tools).
-    private static func unpackUsingBsdtar(_ archive: URL, into destination: URL) throws {
+    private static func unpackUsingBsdtar(
+        _ archive: URL,
+        into destination: URL,
+        isCancelled: () -> Bool
+    ) throws -> Int {
         guard let bsdtar = bsdtarURL else { throw ArchiveError.toolMissing }
+        if isCancelled() { throw ArchiveError.cancelled }
         let process = Process()
         process.executableURL = bsdtar
         process.arguments = ["-x", "-f", archive.path, "-C", destination.path]
@@ -229,10 +251,25 @@ public enum PlaylistScanner {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
+        // Abbruchfaehig warten statt `waitUntilExit` allein: Das blockierte
+        // frueher den Import-Worker bis zum Prozessende, ein grosses oder
+        // haengendes Archiv liess sich nicht abbrechen. Der 50-ms-Takt haelt
+        // "Abbrechen" fuehlbar sofort, ohne messbare Kosten im Normallauf.
+        while process.isRunning {
+            if isCancelled() {
+                process.terminate()
+                process.waitUntilExit()
+                throw ArchiveError.cancelled
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        // `isRunning` kann kurz vor dem endgueltigen Exit schon false sein —
+        // erst waitUntilExit garantiert einen gueltigen terminationStatus.
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             throw ArchiveError.toolFailed(archive.lastPathComponent, process.terminationStatus)
         }
+        return 0
     }
 
     // Vorhandenes System-bsdtar (libarchive), oder nil. Frueher lief der ganze
