@@ -1,6 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 
+# Fest ins Projektverzeichnis wechseln, BEVOR irgendetwas gebaut oder geloescht
+# wird. Alle Pfade unten sind relativ, insbesondere das Bauziel
+# "Savage Mod Player.app", das weiter unten mit `rm -rf` geleert wird. Ohne
+# diesen Wechsel waere das Bauverzeichnis schlicht das Arbeitsverzeichnis des
+# Aufrufers: `cd /Applications && bash .../build_app.sh` haette dort die
+# installierte, notarisierte App als Bauziel gehabt. Fleet-Regel: ad-hoc
+# signierte Builds entstehen ausschliesslich im Projektordner; nach
+# /Applications installiert allein ./install.sh, und nur mit angeheftetem
+# Notary-Ticket.
+cd "$(dirname "$0")"
+
 echo "=== Building Savage Mod Player App in Release Mode ==="
 swift build -c release
 APP_VERSION="$(cat VERSION)"

@@ -1,6 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
+# Wie in build_app.sh: erst ins Projektverzeichnis, dann arbeiten. Die
+# Quell-App ("$APP_NAME") und das Ausgabeverzeichnis ("build/") sind relative
+# Pfade, und `rm -rf "${BUILD_DIR}/dmg_temp"` loescht darin. Ohne den Wechsel
+# haengen beide am Arbeitsverzeichnis des Aufrufers; ausserdem findet
+# `git config --local` das Notary-Profil nur innerhalb des Repos.
+cd "$(dirname "$0")"
+
 DMG_NAME="Savage Mod Player"
 APP_NAME="Savage Mod Player.app"
 VOL_NAME="Savage Mod Player"

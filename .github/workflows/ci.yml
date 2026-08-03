@@ -25,6 +25,13 @@ jobs:
       - name: UI-Quelltests
         run: python3 Tests/ui_source_tests.py
 
+      # Liest nur den Quelltext der Bau-/Installationsskripte: Ad-hoc-Builds
+      # bleiben im Projektordner, nach /Applications greift allein install.sh —
+      # und nur mit angeheftetem Notary-Ticket. Der Test baut und installiert
+      # bewusst nichts.
+      - name: Bau- und Installationsskripte (Quelltest)
+        run: python3 Tests/build_script_tests.py
+
       - name: Swift Version
         run: swift --version
 
