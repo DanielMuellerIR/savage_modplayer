@@ -268,6 +268,23 @@ EOF
 
 QL_ENTITLEMENTS="quicklook/SavageModPlayerQuickLook.entitlements"
 
+# Debug-Symbole entfernen, BEVOR signiert wird (strip macht eine vorhandene
+# Signatur ungueltig). `swift build -c release` legt eine Debug-Map in jede
+# Binaerdatei: fuer jede uebersetzte Quelldatei einen Eintrag mit dem vollen
+# Pfad ihrer .o-Datei auf DIESEM Mac. Die App braucht das nicht, es verraet nur
+# Benutzernamen und Projektaufbau (gefunden am 2026-08-04). `strip -S` nimmt
+# genau diese Debug-Symbole und laesst die normale Symboltabelle stehen, damit
+# Absturzberichte lesbar bleiben. Xcode tut das bei Release-Builds von sich aus
+# (STRIP_STYLE=debugging), SwiftPM nicht.
+#
+# Die Schleife erfasst auch den Quick-Look-Appex unter Contents/PlugIns.
+echo "=== Debug-Symbole entfernen ==="
+while IFS= read -r macho; do
+    case "$(file -b "$macho")" in
+        Mach-O*) strip -S "$macho" ;;
+    esac
+done < <(find "$APP_DIR" -type f \( -name '*.dylib' -o -name '*.so' -o -perm +111 \))
+
 if [[ "$SIGN_APP" != "0" ]]; then
     echo "=== Checking code signing identity ==="
     if security find-identity -v -p codesigning | grep -Fq "$CODESIGN_IDENTITY"; then
