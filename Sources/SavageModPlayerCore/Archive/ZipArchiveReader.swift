@@ -70,6 +70,8 @@ public enum ZipArchiveError: Error, LocalizedError {
     case writeFailed(String)
     /// Der Aufrufer hat abgebrochen.
     case cancelled
+    /// Eine uebergebene Obergrenze aus `Limits` ist unbrauchbar (z.B. negativ).
+    case invalidLimit(String)
 
     public var errorDescription: String? {
         switch self {
@@ -105,6 +107,8 @@ public enum ZipArchiveError: Error, LocalizedError {
             return "Zieldatei „\(path)“ lässt sich nicht schreiben."
         case .cancelled:
             return "Entpacken abgebrochen."
+        case .invalidLimit(let detail):
+            return "Ungültige Obergrenze für das Entpacken: \(detail)"
         }
     }
 }
@@ -146,6 +150,28 @@ public enum ZipArchiveReader {
         }
 
         public static let `default` = Limits()
+
+        /// Prueft die Grenzen, bevor mit ihnen gerechnet wird. Alle Felder sind
+        /// oeffentlich schreibbar; ein negativer `maxEntryCount` fuehrte zuvor
+        /// zu einer negativen Reservierung und damit zu einem Abbruch des
+        /// ganzen Prozesses statt zu einem normalen Fehler.
+        func validated() throws {
+            guard maxEntryCount >= 1 else {
+                throw ZipArchiveError.invalidLimit("maxEntryCount \(maxEntryCount) (mindestens 1)")
+            }
+            guard maxEntryUncompressedBytes >= 1 else {
+                throw ZipArchiveError.invalidLimit(
+                    "maxEntryUncompressedBytes \(maxEntryUncompressedBytes) (mindestens 1)")
+            }
+            guard maxTotalUncompressedBytes >= 1 else {
+                throw ZipArchiveError.invalidLimit(
+                    "maxTotalUncompressedBytes \(maxTotalUncompressedBytes) (mindestens 1)")
+            }
+            guard maxCompressionRatio.isFinite, maxCompressionRatio >= 1 else {
+                throw ZipArchiveError.invalidLimit(
+                    "maxCompressionRatio \(maxCompressionRatio) (mindestens 1)")
+            }
+        }
     }
 
     // MARK: Ergebnistypen
@@ -208,12 +234,16 @@ public enum ZipArchiveReader {
     private static let signatureEOCD: UInt32 = 0x0605_4B50
     private static let signatureZip64Locator: UInt32 = 0x0706_4B50
     private static let signatureZip64EOCD: UInt32 = 0x0606_4B50
+    /// Optionaler Digital-Signature-Record am Ende des Inhaltsverzeichnisses
+    /// (ZIP APPNOTE 6.3.10, Abschnitt 4.3.13). Kein Dateieintrag.
+    private static let signatureDigitalSignature: UInt32 = 0x0505_4B50
 
     // MARK: - Oeffentliche API
 
     /// Liest nur das Inhaltsverzeichnis. Es wird nichts entpackt und nichts
     /// geschrieben.
     public static func inspect(archive: URL, limits: Limits = .default) throws -> [Entry] {
+        try limits.validated()
         let handle = try openForReading(archive)
         defer { try? handle.close() }
         return try readCentralDirectory(
@@ -252,6 +282,7 @@ public enum ZipArchiveReader {
         limits: Limits = .default,
         isCancelled: () -> Bool = { false }
     ) throws -> ExtractionResult {
+        try limits.validated()
         let fileManager = FileManager.default
         let handle = try openForReading(archive)
         defer { try? handle.close() }
@@ -468,17 +499,46 @@ public enum ZipArchiveReader {
         )
 
         var records: [CentralRecord] = []
-        records.reserveCapacity(min(Int(entryCount), maxEntryCount))
+        // `max(0, …)` ist Absicht: `maxEntryCount` kommt aus dem oeffentlichen
+        // `Limits` und wird am API-Einstieg geprueft — eine negative Kapazitaet
+        // waere hier aber keine Ausnahme, sondern ein sofortiger Prozessabbruch.
+        records.reserveCapacity(max(0, min(Int(entryCount), maxEntryCount)))
         var cursor = 0
-        while cursor + 46 <= directory.count {
+        // Vier Byte genuegen, um die naechste Struktur zu erkennen; wie lang sie
+        // ist, entscheidet erst ihre Signatur.
+        while cursor + 4 <= directory.count {
+            let signature = readUInt32(directory, cursor)
+            if signature == signatureZip64EOCD { throw ZipArchiveError.unsupportedZip64 }
+            if signature == signatureDigitalSignature {
+                // Optionaler Digital-Signature-Record (ZIP APPNOTE 6.3.10,
+                // Abschnitt 4.3.13): 4 Byte Signatur, 2 Byte Datenlaenge, dann
+                // die Daten. Er steht als letzte Struktur hinter den
+                // Dateieintraegen und ist selbst kein Eintrag. Streng
+                // laengengefuehrt uebersprungen — er muss exakt bis zum Ende des
+                // Inhaltsverzeichnisses reichen, sonst gilt das Archiv weiter
+                // als beschaedigt.
+                guard cursor + 6 <= directory.count else {
+                    throw ZipArchiveError.corruptArchive(
+                        "Digital-Signature-Record von \(archiveName) ist abgeschnitten")
+                }
+                let signatureDataLength = Int(readUInt16(directory, cursor + 4))
+                guard cursor + 6 + signatureDataLength == directory.count else {
+                    throw ZipArchiveError.corruptArchive(
+                        "Digital-Signature-Record von \(archiveName) passt nicht ans Ende "
+                        + "des Inhaltsverzeichnisses")
+                }
+                cursor = directory.count
+                break
+            }
+            guard signature == signatureCentralDirectory else {
+                throw ZipArchiveError.corruptArchive("unerwartete Signatur im Inhaltsverzeichnis")
+            }
             // Limit VOR dem naechsten Record erzwingen (siehe Funktionskommentar).
             guard records.count < maxEntryCount else {
                 throw ZipArchiveError.tooManyEntries(max(Int(entryCount), records.count + 1))
             }
-            let signature = readUInt32(directory, cursor)
-            if signature == signatureZip64EOCD { throw ZipArchiveError.unsupportedZip64 }
-            guard signature == signatureCentralDirectory else {
-                throw ZipArchiveError.corruptArchive("unerwartete Signatur im Inhaltsverzeichnis")
+            guard cursor + 46 <= directory.count else {
+                throw ZipArchiveError.corruptArchive("Eintrag im Inhaltsverzeichnis abgeschnitten")
             }
             let nameLength = Int(readUInt16(directory, cursor + 28))
             let extraLength = Int(readUInt16(directory, cursor + 30))

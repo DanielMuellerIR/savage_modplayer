@@ -276,6 +276,16 @@ public final class MusicLibrary: @unchecked Sendable {
                 }
                 return true
             })
+        // `enumerator(at:…)` liefert ein Optional: Laesst sich die Wurzel gar
+        // nicht durchlaufen, kaeme unten kein einziger Treffer an — und der
+        // Loeschabgleich haette JEDEN bekannten Eintrag als verschwunden
+        // gewertet und den Index geleert, obwohl der Bestand unveraendert ist.
+        // Ein fehlender Enumerator zaehlt deshalb wie ein Enumerationsfehler.
+        if enumerator == nil {
+            enumerationError =
+                "Bibliotheks-Abgleich unvollständig — \(rootURL.lastPathComponent): "
+                + "Verzeichnis konnte nicht durchlaufen werden."
+        }
 
         while let fileURL = enumerator?.nextObject() as? URL {
             if isCancelled() { cancelled = true; break }

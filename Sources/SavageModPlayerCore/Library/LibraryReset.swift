@@ -57,16 +57,35 @@ public enum LibraryReset {
         let fileManager = FileManager.default
         var removedFiles = 0
         var removedDirectories = 0
-        var failures: [ImportFailure] = []
+        // Fehler der Bibliothekswurzel und der Temp-/Cache-Verzeichnisse werden
+        // GETRENNT gesammelt. Nur ein Rest in der Bibliothek rechtfertigt, den
+        // Index wieder aufzubauen; ein sachfremder Temp-Fehler darf die Option
+        // „Indexdatei loeschen" nicht aushebeln.
+        var rootFailures: [ImportFailure] = []
+        var temporaryFailures: [ImportFailure] = []
 
         // Inhalt eines Verzeichnisses loeschen, das Verzeichnis selbst behalten.
         // Ohne `.skipsHiddenFiles`, damit auch unsichtbarer Beifang (z.B.
         // `.DS_Store`) verschwindet.
-        func wipeContents(of directory: URL) {
+        func wipeContents(of directory: URL, isLibraryRoot: Bool) {
             guard fileManager.fileExists(atPath: directory.path) else { return }
-            guard let children = try? fileManager.contentsOfDirectory(
-                at: directory, includingPropertiesForKeys: nil, options: [])
-            else { return }
+            let children: [URL]
+            do {
+                children = try fileManager.contentsOfDirectory(
+                    at: directory, includingPropertiesForKeys: nil, options: [])
+            } catch {
+                // Ein nicht auflistbares Verzeichnis ist kein leeres
+                // Verzeichnis. Ohne diesen Fehler blieb `failures` leer, der
+                // Index wurde geleert und der Wiederaufbau unterblieb — Bericht
+                // und Oberflaeche meldeten einen vollstaendigen Reset, waehrend
+                // real jede Datei liegen blieb.
+                let failure = ImportFailure(
+                    path: directory.lastPathComponent,
+                    reason: "Inhalt konnte nicht aufgelistet werden: "
+                        + "\((error as NSError).localizedDescription)")
+                if isLibraryRoot { rootFailures.append(failure) } else { temporaryFailures.append(failure) }
+                return
+            }
             for child in children {
                 let counted = count(child)
                 do {
@@ -74,31 +93,32 @@ public enum LibraryReset {
                     removedFiles += counted.files
                     removedDirectories += counted.directories
                 } catch {
-                    failures.append(ImportFailure(
+                    let failure = ImportFailure(
                         path: child.lastPathComponent,
-                        reason: "Konnte nicht geloescht werden: \((error as NSError).localizedDescription)"))
+                        reason: "Konnte nicht geloescht werden: \((error as NSError).localizedDescription)")
+                    if isLibraryRoot { rootFailures.append(failure) } else { temporaryFailures.append(failure) }
                 }
             }
         }
 
-        wipeContents(of: library.rootURL)
+        wipeContents(of: library.rootURL, isLibraryRoot: true)
         for temporary in temporaryDirectories {
-            wipeContents(of: temporary)
+            wipeContents(of: temporary, isLibraryRoot: false)
         }
 
-        try library.clearIndex(removeFile: options.removeIndex)
-
-        // Teilfehler: Es liegen noch Dateien in der Bibliothek. Ein leerer
+        // Teilfehler in der Bibliothek: Es liegen noch Dateien dort. Ein leerer
         // Index waere eine Luege — die Oberflaeche zeigte eine leere
         // Bibliothek, obwohl Dateien (und offene Archive) real erhalten
-        // blieben. Deshalb den verbliebenen Bestand neu einlesen und offene
-        // Archive daraus ableiten; nur ein vollstaendig erfolgreicher Reset
-        // endet leer.
+        // blieben. Deshalb wird der bisherige Index NICHT geleert, sondern der
+        // verbliebene Bestand daruebergelegt: `rescan` traegt Gefundenes nach
+        // und entfernt Verschwundenes nur nach einem nachweislich
+        // vollstaendigen Durchlauf. Bei einem Teilscan bleiben die Eintraege
+        // nicht besuchter Teilbaeume erhalten, statt still zu verschwinden.
         var remainingArchives: [String] = []
-        if !failures.isEmpty {
-            if let rescan = try? library.rescan() {
-                remainingArchives = rescan.archivesFound
-            }
+        if rootFailures.isEmpty {
+            try library.clearIndex(removeFile: options.removeIndex)
+        } else if let rescan = try? library.rescan() {
+            remainingArchives = rescan.archivesFound
         }
 
         if options.clearFavorites {
@@ -108,7 +128,7 @@ public enum LibraryReset {
         return ResetReport(
             removedFiles: removedFiles,
             removedDirectories: removedDirectories,
-            failures: failures,
+            failures: rootFailures + temporaryFailures,
             remainingArchives: remainingArchives)
     }
 

@@ -1,8 +1,8 @@
 """Quelltest für die Schutzregel „/Applications nur notarisiert".
 
-Fleet-Regel (Daniel, 2026-08-03): Ad-hoc signierte Builds entstehen
-ausschließlich im Projektordner, und nach `/Applications` wandert nur ein
-Bundle mit angeheftetem Notary-Ticket.
+Projektinvariante: Ad-hoc signierte Builds entstehen ausschließlich im
+Projektordner, und nach `/Applications` wandert nur ein Bundle mit
+angeheftetem Notary-Ticket.
 
 Diese Prüfungen lesen ausschließlich den Quelltext der Skripte. Sie starten
 weder einen Build noch eine Installation — ein Testlauf, der `build_app.sh`

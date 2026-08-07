@@ -66,6 +66,14 @@ public final class RealtimePlaybackState: Sendable {
     
     // Elapsed frames for timing calculation
     nonisolated(unsafe) public var elapsedFrames: UInt64 = 0
+    // Auftrag an den Renderblock, `elapsedFrames` neu zu setzen; `.max` heisst
+    // "kein Auftrag". Waehrend der Wiedergabe erhoeht ausschliesslich der
+    // Renderblock den Zaehler (`+= 1` pro Frame). Schriebe der Hauptthread den
+    // Zaehler direkt, koennte sein Wert zwischen dem Lesen und dem
+    // Zurueckschreiben des Renderblocks verlorengehen — der Reset waere dann
+    // wirkungslos. Deshalb legt der Hauptthread nur diesen Wunsch ab, und der
+    // Renderblock uebernimmt ihn am Frame-Anfang genau einmal.
+    nonisolated(unsafe) public var pendingElapsedFrames: UInt64 = .max
     nonisolated(unsafe) public var waveWriteIndex: Int = 0
     // Eigener, ueber Callback-Grenzen rollender Index fuer das Master-Oszilloskop.
     // (Frueher mit dem Callback-lokalen frame & 127 indiziert — bei Buffern < 128
@@ -78,6 +86,15 @@ public final class RealtimePlaybackState: Sendable {
     // Exakter Frame der ersten Endtransition. Offline-Renderer koennen damit
     // den letzten 1024er Block auf die musikalische Songlaenge kuerzen.
     nonisolated(unsafe) public var endReachedFrame: UInt64 = .max
+    // Position und Zeile, auf denen die Wiedergabe nach der ersten
+    // Endtransition tatsaechlich weiterlaeuft; -1 = noch keine Endtransition.
+    // Das ist NICHT immer `restartPosition`: Ein rueckwaerts gerichteter
+    // Bxx-Sprung (Subsong-Loop) gilt ebenfalls als Songende, landet aber auf
+    // seinem eigenen Ziel — und ein zusaetzliches Dxx setzt dort noch eine
+    // Zielzeile. Die Anzeige-Uhr muss auf genau diesen Punkt zurueckgesetzt
+    // werden, sonst zeigt sie ab der zweiten Runde eine falsche Spielzeit.
+    nonisolated(unsafe) public var endReachedPosition: Int = -1
+    nonisolated(unsafe) public var endReachedRow: Int = 0
 
     public init() {}
 }
@@ -355,6 +372,13 @@ public enum RenderEngine {
                 )
 
                 state.outputsUntilNextTick -= 1.0
+                // Offenen Uhr-Auftrag des Hauptthreads uebernehmen (Track-Loop).
+                // Nur ein Vergleich und ggf. zwei Zuweisungen — keine
+                // Allokation, kein Lock, damit die Renderblock-Invariante gilt.
+                if state.pendingElapsedFrames != .max {
+                    state.elapsedFrames = state.pendingElapsedFrames
+                    state.pendingElapsedFrames = .max
+                }
                 state.elapsedFrames += 1
 
                 // Mischen der Kanäle
@@ -496,6 +520,46 @@ public enum RenderEngine {
         }
         let period = DSPChannel.itAmigaPeriod(key: targetNote, c5Speed: c5Speed)
         return period > 0 ? 14_317_056.0 / Double(period) / sampleRate : 0
+    }
+
+    // XM-Vorschauperiode in derselben Rechnung wie die Song-Engine
+    // (`DSPChannel.playNote`): gespielte Note plus Sample-`relativeNote`, dazu
+    // der signed Finetune; das Header-Flag waehlt lineare oder Amiga-Perioden.
+    // Der Halbtonbereich wird wie in den Periodentabellen auf 0...119 begrenzt,
+    // damit ein extremer `relativeNote` keine unsinnige Periode liefert.
+    nonisolated static func xmPreviewPeriod(
+        sample: Sample,
+        targetNote: Int,
+        linearFrequency: Bool
+    ) -> Float {
+        let realNote = max(0, min(119, targetNote + sample.relativeNote))
+        return linearFrequency
+            ? DSPChannel.xmLinearPeriod(realNote: realNote, finetune: sample.finetune)
+            : DSPChannel.xmAmigaPeriod(realNote: realNote, finetune: sample.finetune)
+    }
+
+    // XM-Samplevorschau in derselben Stimmung wie die Song-Engine. Frueher lief
+    // XM im MOD-Zweig der Vorschau (Periode 214 - Finetune gegen die
+    // Paula-Clock) und klang gegenueber derselben Note im Modul deutlich
+    // verstimmt. Wie bei IT macht der getrennte Helfer das hardwarefrei
+    // testbar, obwohl `previewInstrument` selbst eine AVAudioEngine startet.
+    nonisolated static func xmPreviewSampleSpeed(
+        sample: Sample,
+        targetNote: Int,
+        linearFrequency: Bool,
+        sampleRate: Double
+    ) -> Double {
+        guard sampleRate > 0 else { return 0 }
+        let period = xmPreviewPeriod(
+            sample: sample, targetNote: targetNote, linearFrequency: linearFrequency)
+        if linearFrequency {
+            // Dieselbe Exponentialformel wie im Renderblock: C-4 (Periode 4608)
+            // spielt mit 8363 Hz.
+            return 8363.0 * pow(2.0, (4608.0 - Double(period)) / 768.0) / sampleRate
+        }
+        // Amiga-Perioden gegen den FastTracker-II-Takt, nicht gegen Paula.
+        guard period > 0 else { return 0 }
+        return 8363.0 * 1712.0 / Double(period) / sampleRate
     }
 
     // Minimaler Render-Block der Vorschau: genau EIN Kanal, mittig gepannt, ohne

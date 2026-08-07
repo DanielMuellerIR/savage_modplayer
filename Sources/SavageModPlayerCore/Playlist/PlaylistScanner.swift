@@ -224,12 +224,15 @@ public enum PlaylistScanner {
         guard archive.pathExtension.lowercased() == "zip" else {
             throw ArchiveError.unsupportedFormat(archive.lastPathComponent)
         }
-        // Vorfilter: nur Moduldateien landen auf der Platte. Bei den grossen
-        // Sammlungsarchiven spart das den Loewenanteil an Zeit und Platz.
+        // Vorfilter: nur Moduldateien und Archive landen auf der Platte. Bei den
+        // grossen Sammlungsarchiven spart das den Loewenanteil an Zeit und
+        // Platz. Verschachtelte Archive muessen mit heraus, sonst waere ihr
+        // Inhalt auf iOS unerreichbar — und der Bibliotheks-Import haette das
+        // aeussere Quellarchiv geloescht, obwohl ein Teil nie ankam.
         let result = try ZipArchiveReader.extract(
             archive: archive,
             to: destination,
-            shouldExtract: isModFile,
+            shouldExtract: { isModFile($0) || isArchive($0) },
             isCancelled: isCancelled
         )
         return result.unsupportedEntries

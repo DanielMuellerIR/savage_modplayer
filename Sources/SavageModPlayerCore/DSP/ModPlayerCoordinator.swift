@@ -281,6 +281,8 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.rowTickDelay = 0
         state.endReached = false
         state.endReachedFrame = .max
+        state.endReachedPosition = -1
+        state.pendingElapsedFrames = .max
         if let states = channels.first?.itVoicePool?.patternChannels {
             for patternState in states {
                 patternState.patternLoopCount = -1
@@ -542,6 +544,8 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.rowTickDelay = 0
         state.endReached = false
         state.endReachedFrame = .max
+        state.endReachedPosition = -1
+        state.pendingElapsedFrames = .max
         if let states = channels.first?.itVoicePool?.patternChannels {
             for patternState in states {
                 patternState.patternLoopCount = -1
@@ -569,10 +573,33 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Titeldauer.
     public func resetElapsedToLoopStart() {
         guard let state = playbackState, let mod = activeMod else { return }
-        let restart = max(0, min(mod.length - 1, state.restartPosition))
-        state.elapsedFrames = RenderEngine.elapsedFrames(
-            for: mod, position: restart,
+        // Ziel der Endtransition bevorzugen: Ein rueckwaerts gerichteter
+        // Bxx-Sprung landet nicht auf `restartPosition`, und ein zusaetzliches
+        // Dxx setzt dort noch eine Zielzeile. Nur wenn (noch) kein Ziel erfasst
+        // wurde, gilt der Neustartpunkt aus dem Modulkopf.
+        let position: Int
+        let row: Int
+        if state.endReachedPosition >= 0 {
+            position = max(0, min(mod.length - 1, state.endReachedPosition))
+            row = max(0, state.endReachedRow)
+        } else {
+            position = max(0, min(mod.length - 1, state.restartPosition))
+            row = 0
+        }
+        let frames = RenderEngine.elapsedFrames(
+            for: mod, position: position, row: row,
             ticksPerRow: state.ticksPerRow, outputsPerTick: state.outputsPerTick)
+        // Den Zaehler NICHT selbst schreiben: Er gehoert dem Renderblock, der
+        // ihn pro Frame erhoeht. Ein direkter Schreibzugriff von hier koennte
+        // zwischen dessen Lesen und Zurueckschreiben verlorengehen.
+        state.pendingElapsedFrames = frames
+        // Die veroeffentlichte Spielzeit sofort mitziehen. Der Aufrufer
+        // aktualisiert direkt danach Sperrbildschirm und Oberflaeche aus
+        // `visualizerState.elapsedTime`; ohne diese Zeile zeigte er dort noch
+        // einmal die alte, zu lange Zeit und korrigierte sich erst beim
+        // naechsten VU-Takt.
+        let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
+        visualizerState.elapsedTime = Double(frames) / sampleRate
     }
     
     public func toggleMute(channelIndex: Int) {
@@ -689,7 +716,13 @@ public final class ModPlayerCoordinator: ObservableObject {
             if self.speed != sp { self.speed = sp }
             
             let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
-            vis.elapsedTime = Double(state.elapsedFrames) / sampleRate
+            // Liegt ein Uhr-Auftrag an (Track-Loop), zaehlt bereits dieser Wert.
+            // Sonst zeigte die Anzeige bis zum naechsten Audio-Callback noch
+            // einmal die alte, zu lange Spielzeit.
+            let elapsed = state.pendingElapsedFrames != .max
+                ? state.pendingElapsedFrames
+                : state.elapsedFrames
+            vis.elapsedTime = Double(elapsed) / sampleRate
 
         }
     }
@@ -782,6 +815,16 @@ public final class ModPlayerCoordinator: ObservableObject {
                     key: selection.targetNote,
                     c5Speed: smp.itProperties?.c5Speed ?? smp.c2spd
                 )
+        } else if mod.format == .xm {
+            // XM stimmt ueber (Note + relativeNote) und Finetune; das
+            // Header-Flag waehlt lineare oder Amiga-Perioden. Frueher lief XM
+            // im MOD-Zweig darunter und war gegenueber derselben Note im Modul
+            // deutlich verstimmt.
+            ch.period = RenderEngine.xmPreviewPeriod(
+                sample: smp,
+                targetNote: selection.targetNote,
+                linearFrequency: mod.linearFrequency
+            )
         } else {
             // C-3 note period = 214
             ch.period = 214.0 - Float(smp.finetune)
@@ -804,6 +847,15 @@ public final class ModPlayerCoordinator: ObservableObject {
             : (self.palClock ? 3546894.6 : 3579545.25)
         if mod.format == .it {
             ch.sampleSpeed = RenderEngine.itPreviewSampleSpeed(
+                sample: smp,
+                targetNote: selection.targetNote,
+                linearFrequency: mod.linearFrequency,
+                sampleRate: sampleRate
+            )
+        } else if mod.format == .xm {
+            // XM-linear rechnet exponentiell, XM-Amiga gegen den
+            // FastTracker-II-Takt — beides nicht die Paula-Clock von oben.
+            ch.sampleSpeed = RenderEngine.xmPreviewSampleSpeed(
                 sample: smp,
                 targetNote: selection.targetNote,
                 linearFrequency: mod.linearFrequency,

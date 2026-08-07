@@ -117,12 +117,16 @@ class ContextHygieneTests(unittest.TestCase):
         self.assertIn("Pxy-Effekt-Memory", backlog)
         self.assertIn("XM unterstützt lineare und Amiga-Perioden", backlog)
 
-    def test_no_markdown_file_leaks_private_infrastructure(self):
-        """Alle getrackten Markdown-Dateien, nicht nur eine feste Handvoll.
+    def test_no_tracked_text_file_leaks_private_infrastructure(self):
+        """Alle getrackten Text-Quellen, nicht nur eine feste Handvoll.
 
         Vorher standen hier fuenf Pfade fest verdrahtet. Am 2026-07-27 fiel auf,
         dass `tasks/2026-07-05-linux-port/plan.md` nie geprueft wurde und deshalb
         zweimal den Kurznamen eines privaten Rechners veroeffentlicht hat.
+
+        Geprueft werden ausserdem Shell- und Python-Quellen: Ein interner
+        Hinweis wandert genauso leicht in einen Skriptkommentar wie in eine
+        Markdown-Datei, und beide werden mit veroeffentlicht.
 
         Zwei Pruefungen: private IPv4-Bereiche direkt hier, und private Namen
         gegen die `gate:`-Zeilen der Liste ausserhalb dieses Repos (siehe
@@ -134,9 +138,9 @@ class ContextHygieneTests(unittest.TestCase):
         duerfen einen echten Desktop-Pfad zeigen.
         """
         tracked = subprocess.run(
-            ["git", "ls-files", "*.md"], cwd=ROOT,
+            ["git", "ls-files", "*.md", "*.sh", "*.py"], cwd=ROOT,
             check=True, capture_output=True, text=True).stdout.splitlines()
-        self.assertGreater(len(tracked), 5, "keine Markdown-Dateien gefunden")
+        self.assertGreater(len(tracked), 5, "keine Text-Quellen gefunden")
 
         # Private IPv4-Bereiche nach RFC 1918 plus der link-local-Bereich.
         # Dokumentationsadressen (192.0.2.x, 198.51.100.x, 203.0.113.x) und

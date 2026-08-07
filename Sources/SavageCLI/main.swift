@@ -459,7 +459,10 @@ if opts.play {
         // Wie im Offline-Pfad gilt der dokumentierte Vertrag von --seconds
         // auch hier: 0 = ganzer Song, aber hoechstens 600 s. Ohne dieses
         // Limit spielte ein Modul ohne erreichbares Endsignal unbegrenzt.
-        frameLimit = try ModuleRenderer.validatedFrameLimit(
+        // Aber: Die Live-Ausgabe streamt, also gilt hier bewusst das
+        // Live-Budget ohne die Offline-Sampleraten-Obergrenze — sonst wuerde
+        // ein Ausgabegeraet mit mehr als 192 kHz die Wiedergabe verhindern.
+        frameLimit = try ModuleRenderer.liveFrameLimit(
             sampleRate: format.sampleRate,
             maxDurationSeconds: opts.seconds > 0 ? opts.seconds : 600.0
         )

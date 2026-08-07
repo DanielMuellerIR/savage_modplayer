@@ -281,6 +281,67 @@ final class LibraryImporterTests: XCTestCase {
             atPath: rootURL.appendingPathComponent("Sammlung/A/pack.zip").path))
     }
 
+    // Ein Archiv IM Archiv wird mit ausgepackt. Frueher sah `ingestStaged` nur
+    // Moduldateien: Der Inhalt des inneren Archivs kam nie an, und weil das
+    // direkte Modul trotzdem als uebernommen zaehlte, loeschte
+    // `unpackPendingArchives` das aeussere Quellarchiv — die letzte Kopie des
+    // inneren Inhalts war damit weg.
+    func testNestedArchiveInsideArchiveIsUnpackedToo() throws {
+        try XCTSkipIf(
+            PlaylistScanner.bsdtarURL == nil,
+            "bsdtar nicht installiert — Archiv-Import nicht pruefbar (Linux: libarchive-tools)")
+
+        // Inneres Archiv bauen und in den Ordner legen, aus dem das aeussere
+        // Archiv entsteht — zusaetzlich zu einem direkten Modul.
+        let innerDir = workDir.appendingPathComponent("Rohmaterial/Innen", isDirectory: true)
+        try write(innerDir.appendingPathComponent("innen.mod"), marker: 0x40)
+        let outerDir = workDir.appendingPathComponent("Rohmaterial/Aussen", isDirectory: true)
+        try write(outerDir.appendingPathComponent("direkt.mod"), marker: 0x41)
+        _ = try makeZip(from: innerDir, named: "innen.zip", at: outerDir)
+        _ = try makeZip(from: outerDir, named: "aussen.zip", at: sourceDir)
+
+        let importer = LibraryImporter(library: library)
+        let report = try importer.importContents(of: [sourceDir])
+
+        XCTAssertTrue(report.failures.isEmpty, "unerwartete Fehler: \(report.failures)")
+        XCTAssertEqual(
+            Set(report.imported),
+            ["Sammlung/aussen/Aussen/direkt.mod",
+             "Sammlung/aussen/Aussen/innen/Innen/innen.mod"])
+        XCTAssertEqual(modulesOnDisk(), Set(report.imported))
+        // Das innere Archiv landet nicht als "Moduldatei" in der Bibliothek.
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: rootURL.appendingPathComponent("Sammlung/aussen/Aussen/innen.zip").path))
+    }
+
+    // Dasselbe fuer ein per Finder abgelegtes Archiv: Erst wenn auch das innere
+    // Archiv uebernommen ist, darf die Quelle verschwinden.
+    func testPendingArchiveWithNestedArchiveKeepsAllContentBeforeDeletingSource() throws {
+        try XCTSkipIf(
+            PlaylistScanner.bsdtarURL == nil,
+            "bsdtar nicht installiert — Archiv-Import nicht pruefbar (Linux: libarchive-tools)")
+
+        let innerDir = workDir.appendingPathComponent("Rohmaterial/Innen", isDirectory: true)
+        try write(innerDir.appendingPathComponent("innen.mod"), marker: 0x42)
+        let outerDir = workDir.appendingPathComponent("Rohmaterial/Aussen", isDirectory: true)
+        try write(outerDir.appendingPathComponent("direkt.mod"), marker: 0x43)
+        _ = try makeZip(from: innerDir, named: "innen.zip", at: outerDir)
+        _ = try makeZip(from: outerDir, named: "aussen.zip",
+                        at: rootURL.appendingPathComponent("Manuell", isDirectory: true))
+
+        let importer = LibraryImporter(library: library)
+        let report = try importer.unpackPendingArchives()
+
+        XCTAssertTrue(report.failures.isEmpty, "unerwartete Fehler: \(report.failures)")
+        XCTAssertEqual(
+            Set(report.imported),
+            ["Manuell/aussen/Aussen/direkt.mod",
+             "Manuell/aussen/Aussen/innen/Innen/innen.mod"])
+        // Erst jetzt darf die Quelle weg sein.
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: rootURL.appendingPathComponent("Manuell/aussen.zip").path))
+    }
+
     // Ein kaputtes Archiv meldet einen lesbaren Grund und stoppt den Import nicht.
     func testBrokenArchiveIsReportedAndImportContinues() throws {
         try write(sourceDir.appendingPathComponent("kaputt.zip"), marker: 0x70)
@@ -333,8 +394,10 @@ final class LibraryImporterTests: XCTestCase {
             "Quellarchiv ohne uebernommene Dateien darf nicht verschwinden")
     }
 
-    // Ein Abbruch waehrend des Auspackens laesst das Quellarchiv liegen.
-    func testCancelDuringUnpackKeepsSourceArchive() throws {
+    // Ein Abbruch, BEVOR das Archiv ueberhaupt geoeffnet wird, laesst das
+    // Quellarchiv liegen. (Der Abbruch eines bereits laufenden bsdtar steht im
+    // Test darunter — hier kommt es nie so weit.)
+    func testCancelBeforeUnpackKeepsSourceArchive() throws {
         try XCTSkipIf(
             PlaylistScanner.bsdtarURL == nil,
             "bsdtar nicht installiert — Archiv-Import nicht pruefbar (Linux: libarchive-tools)")
@@ -344,8 +407,8 @@ final class LibraryImporterTests: XCTestCase {
         _ = try makeZip(from: packDir, named: "pack.zip", at: rootURL.appendingPathComponent("Manuell", isDirectory: true))
 
         let importer = LibraryImporter(library: library)
-        // Der erste Haken-Aufruf (Schleifenkopf) laeuft durch, danach gilt
-        // der Abbruch — also mitten im Archiv-Vorgang.
+        // Der erste Haken-Aufruf (Schleifenkopf) laeuft durch, der zweite
+        // (Einstieg in unpackArchive) bricht ab — bsdtar startet gar nicht.
         var calls = 0
         let report = try importer.unpackPendingArchives(isCancelled: {
             calls += 1
@@ -357,6 +420,45 @@ final class LibraryImporterTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: rootURL.appendingPathComponent("Manuell/pack.zip").path),
             "Nach Abbruch muss das Quellarchiv erhalten bleiben")
+    }
+
+    // Abbruch eines BEREITS LAUFENDEN bsdtar: `process.terminate()` und
+    // `waitUntilExit()` werden hier wirklich durchlaufen.
+    //
+    // Der Trick ist die "Archivdatei": eine benannte Pipe (FIFO). bsdtar
+    // blockiert beim Oeffnen, solange niemand hineinschreibt — der Prozess
+    // laeuft also garantiert noch, wenn der Abbruch kommt. Mit einem echten
+    // Mini-ZIP waere bsdtar oft schon fertig, und der Test waere ein
+    // Zufallstreffer.
+    //
+    // Dass dieser Test ueberhaupt zurueckkehrt, IST der Beleg: Ohne
+    // `terminate()` liefe bsdtar endlos weiter.
+    func testCancelTerminatesRunningBsdtar() throws {
+        try XCTSkipIf(
+            PlaylistScanner.bsdtarURL == nil,
+            "bsdtar nicht installiert — Archiv-Import nicht pruefbar (Linux: libarchive-tools)")
+
+        let manuell = rootURL.appendingPathComponent("Manuell", isDirectory: true)
+        try FileManager.default.createDirectory(at: manuell, withIntermediateDirectories: true)
+        let fifo = manuell.appendingPathComponent("haenger.zip")
+        try XCTSkipIf(mkfifo(fifo.path, 0o644) != 0, "FIFO liess sich nicht anlegen")
+
+        let importer = LibraryImporter(library: library)
+        // Aufrufe: 1 Schleifenkopf, 2 Einstieg unpackArchive, 3 Vorabpruefung in
+        // unpackUsingBsdtar (alle noch "weiterlaufen"), 4 erste Runde der
+        // Warteschleife — dort greift der Abbruch, waehrend bsdtar laeuft.
+        var calls = 0
+        let report = try importer.unpackPendingArchives(isCancelled: {
+            calls += 1
+            return calls > 3
+        })
+
+        XCTAssertTrue(report.wasCancelled)
+        XCTAssertTrue(report.failures.isEmpty, "ein Abbruch ist kein Archivfehler")
+        XCTAssertTrue(report.imported.isEmpty)
+        XCTAssertGreaterThan(calls, 3, "der Abbruch muss erst in der Warteschleife greifen")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fifo.path),
+                      "Nach Abbruch muss das Quellarchiv erhalten bleiben")
     }
 
     // `mod.collection.zip` ist ein Archiv, keine Amiga-Moduldatei: Die

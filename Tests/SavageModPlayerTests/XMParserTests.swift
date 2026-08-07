@@ -333,6 +333,51 @@ final class XMParserTests: XCTestCase {
         }
     }
 
+    // Die Datei endet mitten in den Pattern-Koepfen: Frueher trat an die Stelle
+    // jedes fehlenden Patterns ein leeres 64-Zeilen-Pattern, und ein sauber
+    // endendes Praefix galt als gueltiges, nur teilweise stummes Modul.
+    func testFileEndingBetweenPatternHeadersIsRejected() {
+        let full = makeXM()
+        let patternStart = 0x3C + 276               // headerSize des Fixtures
+        // Vier Byte hinter dem Beginn des ersten Pattern-Kopfes abschneiden —
+        // die neun Byte Kopf liegen damit nicht mehr vollstaendig in der Datei.
+        let truncated = full.prefix(patternStart + 4)
+        XCTAssertThrowsError(try XMParser.parse(data: Data(truncated))) { error in
+            XCTAssertEqual(error as? XMParser.ParserError, .fileTooSmall)
+        }
+    }
+
+    // Der Pattern-Kopf ist vollstaendig, seine deklarierten Daten reichen aber
+    // ueber das Dateiende hinaus. Ein `min(…, data.count)` haette das Fenster
+    // still gekuerzt (bestaetigte Falle, siehe AGENTS.md).
+    func testPatternDataReachingBeyondEndOfFileIsRejected() {
+        let full = makeXM()
+        let patternStart = 0x3C + 276
+        // Mitten in die Pattern-Daten von Pattern 0 schneiden.
+        let truncated = full.prefix(patternStart + 9 + 16)
+        XCTAssertThrowsError(try XMParser.parse(data: Data(truncated))) { error in
+            XCTAssertEqual(error as? XMParser.ParserError, .fileTooSmall)
+        }
+    }
+
+    // Die deklarierten Pattern-Daten liegen vollstaendig in der Datei, decken
+    // aber nicht alle Zellen ab. Das sind fehlende Noten, kein stummer Rest.
+    func testPatternDataCoveringOnlySomeCellsIsRejected() {
+        var data = makeXM()
+        let patternStart = 0x3C + 276
+        let declared = Int(data[patternStart + 7]) | (Int(data[patternStart + 8]) << 8)
+        // Vier Byte weniger: Die letzten Zellen fehlen, alles davor bleibt
+        // gueltig — die Zelle an der Grenze ragt nicht heraus.
+        let shortened = declared - 4
+        data[patternStart + 7] = UInt8(shortened & 0xFF)
+        data[patternStart + 8] = UInt8((shortened >> 8) & 0xFF)
+        XCTAssertThrowsError(try XMParser.parse(data: data)) { error in
+            guard case .corruptPattern? = error as? XMParser.ParserError else {
+                return XCTFail("erwartet corruptPattern, war \(error)")
+            }
+        }
+    }
+
     func testCellCrossingDeclaredPatternDataIsRejected() {
         // patternDataSize von Pattern 0 auf 2 Bytes druecken: die erste Zelle
         // (Maskenbyte + Note + Instrument) ragt dann ueber die deklarierten

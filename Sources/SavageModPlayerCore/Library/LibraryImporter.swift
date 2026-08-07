@@ -65,6 +65,13 @@ public struct ImportReport: Sendable {
 
 public final class LibraryImporter: @unchecked Sendable {
 
+    // Wie viele Archiv-Ebenen tief ausgepackt wird. Ein Archiv im Archiv ist
+    // in Modul-Sammlungen normal; unbegrenzte Rekursion waere dagegen ein
+    // Angriffspunkt (Archiv-Bombe). Derselbe Wert wie in
+    // `PlaylistScanner.collectEntries`, damit Playlist und Bibliothek gleich
+    // tief schauen.
+    static let maxArchiveDepth = 3
+
     // Wie eine Quelldatei geoeffnet wird. Voreinstellung: direkter Zugriff.
     // iOS ersetzt das durch koordiniertes Lesen (`NSFileCoordinator`), weil
     // Dateien aus einem File Provider (Nextcloud & Co.) erst geladen werden
@@ -303,12 +310,17 @@ public final class LibraryImporter: @unchecked Sendable {
 
     // Ein Archiv auspacken und seinen Inhalt einsortieren. Der Archivname ohne
     // Endung wird zum Ordnernamen: `A/sammlung.zip` landet unter `A/sammlung/`.
+    //
+    // `depth` zaehlt die bereits geoeffneten Archiv-Ebenen: 0 fuer ein Archiv
+    // aus der Quelle bzw. der Bibliothek, 1 fuer ein Archiv, das selbst in
+    // einem Archiv lag, und so weiter.
     private func unpackArchive(
         _ archive: URL,
         targetFolder: [String],
         session: Session,
         progress: @escaping (ImportProgress) -> Void,
-        isCancelled: @escaping () -> Bool
+        isCancelled: @escaping () -> Bool,
+        depth: Int = 0
     ) {
         if isCancelled() { session.cancelled = true; return }
         let name = archive.lastPathComponent
@@ -357,7 +369,8 @@ public final class LibraryImporter: @unchecked Sendable {
 
         let nodeName = (name as NSString).deletingPathExtension
         ingestStaged(staging, targetFolder: targetFolder + [nodeName],
-                     session: session, progress: progress, isCancelled: isCancelled)
+                     session: session, progress: progress, isCancelled: isCancelled,
+                     depth: depth)
     }
 
     // Ausgepackten Inhalt einsortieren. Dateien werden verschoben statt
@@ -367,7 +380,8 @@ public final class LibraryImporter: @unchecked Sendable {
         targetFolder: [String],
         session: Session,
         progress: @escaping (ImportProgress) -> Void,
-        isCancelled: @escaping () -> Bool
+        isCancelled: @escaping () -> Bool,
+        depth: Int
     ) {
         let children: [URL]
         do {
@@ -390,7 +404,26 @@ public final class LibraryImporter: @unchecked Sendable {
             let isDirectory = (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
             if isDirectory {
                 ingestStaged(child, targetFolder: targetFolder + [child.lastPathComponent],
-                             session: session, progress: progress, isCancelled: isCancelled)
+                             session: session, progress: progress, isCancelled: isCancelled,
+                             depth: depth)
+            } else if PlaylistScanner.isArchive(child) {
+                // Archive ZUERST klassifizieren — genau wie in `importFile`:
+                // `mod.collection.zip` matcht sonst die Amiga-Namenskonvention
+                // `mod.<name>` und laege als unspielbare "Moduldatei" in der
+                // Bibliothek. Ein Archiv im Archiv wird bis zur festen
+                // Tiefengrenze mit ausgepackt; darueber gilt es als NICHT
+                // uebernommen, damit `runUnpackPending` das aeussere
+                // Quellarchiv behaelt statt die letzte Kopie zu loeschen.
+                if depth + 1 < Self.maxArchiveDepth {
+                    unpackArchive(child, targetFolder: targetFolder, session: session,
+                                  progress: progress, isCancelled: isCancelled,
+                                  depth: depth + 1)
+                } else {
+                    session.failures.append(ImportFailure(
+                        path: Self.joined(targetFolder + [child.lastPathComponent]),
+                        reason: "Archiv liegt tiefer als \(Self.maxArchiveDepth) Archiv-Ebenen "
+                            + "und wurde nicht ausgepackt."))
+                }
             } else if PlaylistScanner.isModFile(child) {
                 let name = child.lastPathComponent
                 session.processedFiles += 1

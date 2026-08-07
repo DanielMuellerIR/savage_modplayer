@@ -116,6 +116,18 @@ enum SequencerCore {
         state.outputsUntilNextTick += state.outputsPerTick
     }
 
+    // Haelt Frame, Position und Zeile der ERSTEN Endtransition fest. Spaetere
+    // Durchlaeufe aendern nichts mehr: Der Offline-Renderer kuerzt an
+    // `endReachedFrame`, und die Anzeige-Uhr des Track-Loops springt immer auf
+    // denselben Punkt zurueck.
+    @inline(__always)
+    private static func recordEndTransition(state: RealtimePlaybackState) {
+        guard state.endReachedFrame == .max else { return }
+        state.endReachedFrame = state.elapsedFrames
+        state.endReachedPosition = state.position
+        state.endReachedRow = state.rowIndex
+    }
+
     @inline(__always)
     static func patternRowCount(_ mod: Mod, at position: Int) -> Int {
         let positionIndex = max(0, min(mod.patternTable.count - 1, position))
@@ -176,15 +188,21 @@ enum SequencerCore {
         // erhalten danach das einheitliche Endsignal.
         if followedBackwardJump {
             state.endReached = true
-            if state.endReachedFrame == .max { state.endReachedFrame = state.elapsedFrames }
+            // Ziel der Endtransition festhalten: Die Anzeige-Uhr im Track-Loop
+            // wird auf genau diesen Punkt zurueckgesetzt. Bei einem Bxx-Sprung
+            // ist das nicht `restartPosition`, sondern das Sprungziel — und ein
+            // zusaetzliches Dxx hat dort schon die Zielzeile gesetzt.
+            recordEndTransition(state: state)
         }
 
         // Live/Offline werten das Signal aus. Die Probe behaelt es lediglich im
         // Zustand und laeuft wie bisher bis zum festen Frame-Limit weiter.
         if state.position >= mod.length {
             state.endReached = true
-            if state.endReachedFrame == .max { state.endReachedFrame = state.elapsedFrames }
+            // Erst auf den Neustartpunkt setzen, dann festhalten — sonst
+            // merkte sich die Uhr die noch nicht umgebrochene Position.
             state.position = max(0, min(mod.length - 1, state.restartPosition))
+            recordEndTransition(state: state)
         }
 
         let positionIndex = max(0, min(mod.patternTable.count - 1, state.position))

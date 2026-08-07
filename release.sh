@@ -60,10 +60,11 @@ echo "=== 2/3 App notarisieren ==="
 notarize_app "$APP"
 
 echo "=== 3/3 DMG bauen und notarisieren ==="
-# Ein DMG aus einem frueheren Lauf koennte einen Fehlschlag als Erfolg tarnen —
-# vorher entfernen, damit der Existenztest unten das Ergebnis DIESES Laufs
-# prueft. (Das leere Array braucht unter Bash 3 + set -u die +-Expansion.)
-rm -f "$DMG"
+# Der Existenztest unten belegt das Ergebnis DIESES Laufs: build_dmg.sh loescht
+# ein altes DMG vor jeder Erzeugung selbst, und schlaegt es fehl, endet wegen
+# `set -e` auch dieser Lauf — der Test wird dann gar nicht erreicht. Eine
+# zusaetzliche Loeschung hier deckte keinen weiteren Fehlerpfad ab.
+# (Das leere Array braucht unter Bash 3 + set -u die +-Expansion.)
 bash build_dmg.sh --notarize ${DMG_ARGS[@]+"${DMG_ARGS[@]}"}
 
 if [[ ! -f "$DMG" ]]; then

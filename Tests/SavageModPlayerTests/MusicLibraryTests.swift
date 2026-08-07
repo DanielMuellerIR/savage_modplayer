@@ -358,6 +358,102 @@ final class MusicLibraryTests: XCTestCase {
             atPath: rootURL.appendingPathComponent("Ordner/a.mod").path))
     }
 
+    // Der Verzeichnis-Enumerator laesst sich gar nicht erst anlegen. Frueher
+    // besuchte die Schleife dann keine einzige Datei, der Lauf galt trotzdem
+    // als vollstaendig — und der Loeschabgleich entfernte JEDEN bekannten
+    // Eintrag, obwohl der Bestand unveraendert auf der Platte lag.
+    func testMissingEnumeratorKeepsIndexAndIsReportedAsIncomplete() throws {
+        try writeFile("a.mod", marker: 0x60)
+        try writeFile("b.mod", marker: 0x61)
+
+        let library = makeLibrary()
+        try library.load()
+        _ = try library.rescan()
+        XCTAssertEqual(library.index.items.count, 2)
+
+        // Zweite Bibliothek auf denselben Pfaden, aber mit einem FileManager,
+        // der keinen Enumerator herausgibt.
+        let blind = MusicLibrary(rootURL: rootURL, indexURL: indexURL, fileManager: EnumeratorlessFileManager())
+        try blind.load()
+        XCTAssertEqual(blind.index.items.count, 2)
+
+        let report = try blind.rescan()
+
+        XCTAssertNotNil(report.enumerationError)
+        XCTAssertFalse(report.isComplete)
+        XCTAssertTrue(report.removed.isEmpty, "ohne Enumerator darf nichts als geloescht gelten")
+        XCTAssertEqual(blind.index.items.count, 2)
+    }
+
+    // Laesst sich schon die Bibliothekswurzel nicht auflisten, ist der Reset
+    // nicht vollstaendig. Frueher blieb `failures` leer, der Index wurde
+    // geleert und der Wiederaufbau unterblieb — Bericht und Oberflaeche
+    // meldeten einen sauberen Reset, waehrend real jede Datei liegen blieb.
+    func testResetReportsUnlistableLibraryRootAndKeepsIndex() throws {
+        try writeFile("a.mod", marker: 0x86)
+
+        let library = makeLibrary()
+        try library.load()
+        _ = try library.rescan()
+        XCTAssertEqual(library.index.items.count, 1)
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000], ofItemAtPath: rootURL.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: rootURL.path)
+        }
+        // Als root (z.B. CI-Container) greifen Dateirechte nicht.
+        if (try? FileManager.default.contentsOfDirectory(atPath: rootURL.path)) != nil {
+            throw XCTSkip("Dateirechte greifen in dieser Umgebung nicht (root?)")
+        }
+
+        let report = try LibraryReset.reset(library: library)
+
+        XCTAssertFalse(report.failures.isEmpty, "unlesbare Wurzel muss im Bericht stehen")
+        XCTAssertEqual(report.removedFiles, 0)
+        XCTAssertNotNil(library.item(withRelativePath: "a.mod"),
+                        "der bekannte Bestand darf nicht verschwinden")
+    }
+
+    // Scheitert NUR eine Temp-/Cache-Bereinigung, ist die Bibliothek trotzdem
+    // leer: Dann gilt die Option „Indexdatei loeschen" unveraendert. Frueher
+    // baute ein sachfremder Temp-Fehler den Index neu auf und legte die gerade
+    // geloeschte Indexdatei wieder an.
+    func testTemporaryDirectoryFailureStillRemovesIndexFile() throws {
+        try writeFile("a.mod", marker: 0x87)
+
+        let cacheDir = workDir.appendingPathComponent("Caches", isDirectory: true)
+        let lockedCache = cacheDir.appendingPathComponent("fest", isDirectory: true)
+        try FileManager.default.createDirectory(at: lockedCache, withIntermediateDirectories: true)
+        try Data([0x02]).write(to: lockedCache.appendingPathComponent("drin.tmp"))
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o555], ofItemAtPath: lockedCache.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: lockedCache.path)
+        }
+        let probe = lockedCache.appendingPathComponent("drin.tmp")
+        if (try? FileManager.default.removeItem(at: probe)) != nil {
+            throw XCTSkip("Dateirechte greifen in dieser Umgebung nicht (root?)")
+        }
+
+        let library = makeLibrary()
+        try library.load()
+        _ = try library.rescan()
+
+        let report = try LibraryReset.reset(
+            library: library,
+            temporaryDirectories: [cacheDir],
+            options: LibraryReset.Options(removeIndex: true))
+
+        XCTAssertFalse(report.failures.isEmpty, "der Temp-Fehler gehoert in den Bericht")
+        XCTAssertTrue(library.index.items.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: indexURL.path),
+                       "die Indexdatei muss trotz Temp-Fehler geloescht bleiben")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: rootURL.path), [])
+    }
+
     // MARK: - Fingerabdruck
 
     func testFingerprintIsStableAndContentSensitive() throws {
@@ -388,4 +484,36 @@ final class MusicLibraryTests: XCTestCase {
         XCTAssertEqual(emptyPrint.size, 0)
         XCTAssertNotEqual(emptyPrint.hash, first.hash)
     }
+}
+
+// FileManager, der nie einen Verzeichnis-Enumerator herausgibt. Genau das kann
+// real passieren (fehlende Rechte, verschwundenes Verzeichnis); mit Rechten
+// allein laesst sich der Fall nicht zuverlaessig erzwingen.
+//
+// Auf Apple-Plattformen liegt die URL-Variante von `enumerator` in einer
+// Swift-Erweiterung und ist deshalb nicht ueberschreibbar. Die eigentliche
+// Methode ist die von Objective-C geerbte
+// `enumeratorAtURL:includingPropertiesForKeys:options:errorHandler:` — genau
+// die wird hier per Selektor ersetzt, und die Erweiterung ruft sie auf. Unter
+// Linux ist dieselbe Methode direkt ueberschreibbar.
+private final class EnumeratorlessFileManager: FileManager {
+    #if canImport(Darwin)
+    override func __enumerator(
+        at url: URL,
+        includingPropertiesForKeys keys: [URLResourceKey]?,
+        options mask: FileManager.DirectoryEnumerationOptions = [],
+        errorHandler handler: ((URL, any Error) -> Bool)? = nil
+    ) -> FileManager.DirectoryEnumerator? {
+        nil
+    }
+    #else
+    override func enumerator(
+        at url: URL,
+        includingPropertiesForKeys keys: [URLResourceKey]?,
+        options mask: FileManager.DirectoryEnumerationOptions = [],
+        errorHandler handler: ((URL, any Error) -> Bool)? = nil
+    ) -> FileManager.DirectoryEnumerator? {
+        nil
+    }
+    #endif
 }

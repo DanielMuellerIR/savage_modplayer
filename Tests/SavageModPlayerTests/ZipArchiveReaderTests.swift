@@ -79,10 +79,18 @@ final class ZipArchiveReaderTests: XCTestCase {
 
     // Baut ein vollstaendiges ZIP: je Eintrag ein Local File Header samt Daten,
     // danach das Central Directory und zum Schluss das EOCD.
+    //
+    // `digitalSignature` haengt den optionalen Digital-Signature-Record (ZIP
+    // APPNOTE 6.3.10, Abschnitt 4.3.13) hinter die Dateieintraege — er gehoert
+    // zum Inhaltsverzeichnis und zaehlt in dessen Groesse mit.
+    // `digitalSignatureLengthOverride` schreibt bewusst eine falsche Laenge, um
+    // den Ablehnungspfad zu pruefen.
     private func makeArchive(
         _ items: [ZipItem],
         comment: Data = Data(),
-        forceZip64Marker: Bool = false
+        forceZip64Marker: Bool = false,
+        digitalSignature: Data? = nil,
+        digitalSignatureLengthOverride: UInt16? = nil
     ) throws -> Data {
         var body = Data()
         var directory = Data()
@@ -140,6 +148,13 @@ final class ZipArchiveReaderTests: XCTestCase {
             directory.append(contentsOf: nameBytes)
         }
 
+        if let digitalSignature {
+            directory.appendUInt32(0x0505_4B50)
+            directory.appendUInt16(
+                digitalSignatureLengthOverride ?? UInt16(digitalSignature.count))
+            directory.append(digitalSignature)
+        }
+
         var archive = body
         let directoryOffset = UInt32(archive.count)
         archive.append(directory)
@@ -157,9 +172,20 @@ final class ZipArchiveReaderTests: XCTestCase {
         return archive
     }
 
-    private func writeArchive(_ items: [ZipItem], name: String = "test.zip", comment: Data = Data(), forceZip64Marker: Bool = false) throws -> URL {
+    private func writeArchive(
+        _ items: [ZipItem],
+        name: String = "test.zip",
+        comment: Data = Data(),
+        forceZip64Marker: Bool = false,
+        digitalSignature: Data? = nil,
+        digitalSignatureLengthOverride: UInt16? = nil
+    ) throws -> URL {
         let url = workDir.appendingPathComponent(name)
-        try makeArchive(items, comment: comment, forceZip64Marker: forceZip64Marker).write(to: url)
+        try makeArchive(
+            items, comment: comment, forceZip64Marker: forceZip64Marker,
+            digitalSignature: digitalSignature,
+            digitalSignatureLengthOverride: digitalSignatureLengthOverride
+        ).write(to: url)
         return url
     }
 
@@ -529,6 +555,72 @@ final class ZipArchiveReaderTests: XCTestCase {
 
         guard case .some(.tooManyEntries) = error else {
             return XCTFail("tooManyEntries erwartet, war: \(String(describing: error))")
+        }
+    }
+
+    // Ein ungueltiger, aber vom oeffentlichen `Limits`-Typ akzeptierter Wert
+    // muss einen typisierten Fehler liefern. Frueher landete ein negativer
+    // maxEntryCount in `reserveCapacity(negativ)` und beendete den Prozess.
+    func testInvalidLimitsAreRejectedInsteadOfCrashing() throws {
+        let archive = try writeArchive([ZipItem(name: "song.mod", payload: Data("x".utf8), method: 0)])
+        var limits = ZipArchiveReader.Limits.default
+        limits.maxEntryCount = -1
+
+        let aufrufe: [() throws -> Void] = [
+            {
+                try ZipArchiveReader.extract(
+                    archive: archive, to: self.destination,
+                    shouldExtract: self.acceptAll, limits: limits)
+            },
+            { _ = try ZipArchiveReader.inspect(archive: archive, limits: limits) }
+        ]
+        for aufruf in aufrufe {
+            guard case .some(.invalidLimit) = zipError(aufruf) else {
+                return XCTFail("invalidLimit erwartet")
+            }
+        }
+    }
+
+    // MARK: - Optionaler Digital-Signature-Record
+
+    // ZIP APPNOTE 6.3.10, Abschnitt 4.3.13 erlaubt hinter den Dateieintraegen
+    // einen Digital-Signature-Record. Er ist kein Dateieintrag; frueher galt
+    // ein standardkonformes signiertes Archiv deshalb als beschaedigt.
+    func testDigitalSignatureRecordIsSkippedInsteadOfRejected() throws {
+        let payload = Data("inhalt".utf8)
+        let archive = try writeArchive(
+            [ZipItem(name: "song.mod", payload: payload, method: 0)],
+            digitalSignature: Data(repeating: 0xA5, count: 40))
+
+        let entries = try ZipArchiveReader.inspect(archive: archive)
+        XCTAssertEqual(entries.map(\.path), ["song.mod"])
+
+        let result = try ZipArchiveReader.extract(
+            archive: archive, to: destination, shouldExtract: acceptAll)
+        XCTAssertEqual(result.extractedFiles.count, 1)
+        XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(result.extractedFiles.first)), payload)
+    }
+
+    // Auch ein sehr kurzer Record (unter 46 Byte) darf nicht als "Byterest"
+    // durchfallen — genau dort endete die fruehere Schleife.
+    func testShortDigitalSignatureRecordIsAccepted() throws {
+        let archive = try writeArchive(
+            [ZipItem(name: "song.mod", payload: Data("x".utf8), method: 0)],
+            digitalSignature: Data(repeating: 0x11, count: 4))
+        XCTAssertEqual(try ZipArchiveReader.inspect(archive: archive).map(\.path), ["song.mod"])
+    }
+
+    // Streng laengengefuehrt: Eine Laengenangabe, die nicht exakt bis zum Ende
+    // des Inhaltsverzeichnisses reicht, bleibt ein Strukturfehler.
+    func testDigitalSignatureRecordWithWrongLengthIsRejected() throws {
+        let archive = try writeArchive(
+            [ZipItem(name: "song.mod", payload: Data("x".utf8), method: 0)],
+            digitalSignature: Data(repeating: 0xA5, count: 40),
+            digitalSignatureLengthOverride: 8)
+
+        let error = zipError { _ = try ZipArchiveReader.inspect(archive: archive) }
+        guard case .some(.corruptArchive) = error else {
+            return XCTFail("corruptArchive erwartet, war: \(String(describing: error))")
         }
     }
 

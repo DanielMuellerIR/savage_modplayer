@@ -54,6 +54,34 @@ public enum ModuleRenderer {
         return UInt64(product.rounded(.down))
     }
 
+    /// Frame-Budget fuer die **Echtzeit**-Wiedergabe.
+    ///
+    /// Der Streamingpfad haelt nie den ganzen Song im Speicher; das
+    /// Offline-Speicherbudget (`maxRenderedFrames`) und die Offline-Obergrenze
+    /// fuer die Samplerate gelten hier deshalb nicht. Sie wuerden ein
+    /// Ausgabegeraet, das mehr als 192 kHz meldet, ohne Not von der Wiedergabe
+    /// ausschliessen — `PCMSinkFactory.preferredFormat()` uebernimmt auf macOS
+    /// die Hardwarerate unveraendert. Begrenzt wird nur die Dauer, damit ein
+    /// Modul ohne erreichbares Endsignal nicht endlos weiterspielt.
+    public static func liveFrameLimit(
+        sampleRate: Double,
+        maxDurationSeconds duration: Double
+    ) throws -> UInt64 {
+        guard sampleRate.isFinite, sampleRate >= minSampleRate else {
+            throw RenderError.invalidSampleRate(sampleRate)
+        }
+        guard duration.isFinite,
+              duration > 0,
+              duration <= maxDurationSeconds else {
+            throw RenderError.invalidDuration(duration)
+        }
+        let product = (sampleRate * duration).rounded(.down)
+        guard product.isFinite, product >= 1 else { throw RenderError.frameLimitExceeded }
+        // Extrem hohe Raten koennten UInt64 rechnerisch sprengen; dann gilt das
+        // groesstmoegliche Budget statt eines Ueberlaufs.
+        return product >= Double(UInt64.max) ? UInt64.max : UInt64(product)
+    }
+
     // Rendert bis zum Songende (endReached-Signal des Sequencers) oder
     // maximal maxDurationSeconds (Schutz gegen endlos geloopte Module).
     // normalize: Peak-Anhebung fürs Quick-Look (Standard). Für A/B-Vergleiche mit

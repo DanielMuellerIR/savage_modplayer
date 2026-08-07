@@ -531,6 +531,55 @@ final class MultiFormatTests: XCTestCase {
         )
     }
 
+    // XM-Vorschau in beiden Frequenzmodi. Frueher lief XM im MOD-Zweig der
+    // Vorschau (Periode 214 - Finetune gegen die Paula-Clock) und klang
+    // gegenueber derselben Note im abgespielten Modul deutlich verstimmt.
+    //
+    // Bezugspunkt beider Modi ist C-4 (realNote 48) mit 8363 Hz: linear ueber
+    // Periode 4608, Amiga ueber Periode 1712 gegen den FastTracker-II-Takt
+    // 8363 x 1712.
+    func testXMPreviewMatchesSongPitchInBothFrequencyModes() {
+        let sample = Sample(
+            pcm: [0.25], loopStart: 0, loopLength: 0, loopType: .none,
+            volume: 64, finetune: 0, relativeNote: 0)
+
+        for linear in [true, false] {
+            XCTAssertEqual(
+                RenderEngine.xmPreviewSampleSpeed(
+                    sample: sample, targetNote: 48,
+                    linearFrequency: linear, sampleRate: 8363),
+                1.0, accuracy: 0.000_1,
+                "C-4 muss mit 8363 Hz spielen (linear: \(linear))")
+            // Eine Oktave hoeher ist genau die doppelte Abspielrate.
+            XCTAssertEqual(
+                RenderEngine.xmPreviewSampleSpeed(
+                    sample: sample, targetNote: 60,
+                    linearFrequency: linear, sampleRate: 8363),
+                2.0, accuracy: 0.001,
+                "C-5 muss doppelt so schnell spielen (linear: \(linear))")
+        }
+
+        // `relativeNote` des Samples verschiebt die Vorschau genauso wie im
+        // Song-Pfad (DSPChannel.playNote): +12 Halbtoene = doppelte Rate.
+        let transposed = Sample(
+            pcm: [0.25], loopStart: 0, loopLength: 0, loopType: .none,
+            volume: 64, finetune: 0, relativeNote: 12)
+        for linear in [true, false] {
+            XCTAssertEqual(
+                RenderEngine.xmPreviewSampleSpeed(
+                    sample: transposed, targetNote: 48,
+                    linearFrequency: linear, sampleRate: 8363),
+                2.0, accuracy: 0.001,
+                "relativeNote 12 muss eine Oktave hoeher klingen (linear: \(linear))")
+        }
+
+        // Die fruehere MOD-Rechnung (Paula-Clock / Periode 214) lag fast eine
+        // Oktave daneben — das haelt die Regression fest.
+        let alteMODRechnung = 3_546_894.6 / 214.0 / 8363.0
+        XCTAssertGreaterThan(alteMODRechnung, 1.9,
+                             "der alte MOD-Zweig spielte C-4 fast eine Oktave zu hoch")
+    }
+
     // Der Preview-Render-Block muss (a) hoerbares Signal liefern, solange das
     // Frame-Budget laeuft, und (b) danach exakt Stille — sonst wuerde ein
     // gelooptes Instrument endlos droehnen. Laeuft rein rechnerisch ueber einen

@@ -149,11 +149,13 @@ public class XMParser {
         patterns.reserveCapacity(numPatterns)
         var totalPatternCells = 0
         for _ in 0..<numPatterns {
-            guard pos >= 0, pos < data.count else {
-                // Datei früher zu Ende als erwartet -> Rest als leere Patterns.
-                patterns.append(Pattern(rows: [Row](repeating: emptyRow, count: 64)))
-                continue
-            }
+            // Jeder Pattern-Kopf ist mindestens neun Byte lang (Header-Länge 4,
+            // Packing 1, Zeilenzahl 2, Datenlänge 2). Liegt er nicht mehr
+            // vollständig in der Datei, ist die Datei abgeschnitten. Früher
+            // trat an dieser Stelle ein leeres 64-Zeilen-Pattern an seine
+            // Stelle — damit galt ein sauber endendes Präfix als gültiges,
+            // teilweise stummes Modul.
+            guard pos >= 0, pos + 9 <= data.count else { throw ParserError.fileTooSmall }
             let patternHeaderLen = dword(pos)
             // let packingType = byte(pos + 4) // immer 0
             var numRows = word(pos + 5)
@@ -178,7 +180,15 @@ public class XMParser {
 
             if patternDataSize > 0 {
                 let dataStart = pos + max(patternHeaderLen, 9)
-                let dataEnd = min(dataStart + patternDataSize, data.count)
+                // Die deklarierten Pattern-Daten müssen VOLLSTÄNDIG in der Datei
+                // liegen. Ein `min(…, data.count)` würde das Fenster still am
+                // Dateiende kürzen und eine abgeschnittene Datei als gültig
+                // durchlassen (bestätigte Falle, siehe AGENTS.md).
+                guard dataStart >= 0, dataStart <= data.count,
+                      dataStart + patternDataSize <= data.count else {
+                    throw ParserError.fileTooSmall
+                }
+                let dataEnd = dataStart + patternDataSize
                 var cursor = dataStart
                 var cell = 0
                 while cell < cellCount && cursor < dataEnd {
@@ -222,6 +232,15 @@ public class XMParser {
                     grid[row][ch] = makeNote(patternNote: patternNote, instr: instr, vol: vol,
                                              fxType: fxType, fxParam: fxParam)
                     cell += 1
+                }
+                // Nicht-leere Pattern-Daten müssen ALLE deklarierten Zellen
+                // liefern. Endeten sie vorher, fehlen echte Noten — das ist
+                // Korruption und kein stummer Rest. (Überschüssige Füllbytes
+                // hinter der letzten Zelle bleiben dagegen erlaubt: die
+                // Schleife bricht dann über `cell == cellCount` ab.)
+                guard cell == cellCount else {
+                    throw ParserError.corruptPattern(
+                        "nur \(cell) von \(cellCount) Zellen in den deklarierten Pattern-Daten")
                 }
             }
 

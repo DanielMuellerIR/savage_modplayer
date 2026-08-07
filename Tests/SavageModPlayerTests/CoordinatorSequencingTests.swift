@@ -331,6 +331,35 @@ final class CoordinatorSequencingTests: XCTestCase {
     }
 #endif
 
+    // Braucht die AVAudioEngine-gebundene Live-Klasse — entfällt unter Linux.
+#if canImport(AVFoundation) && canImport(Combine)
+    /// Der Track-Loop setzt die Anzeige-Uhr zurueck. Die veroeffentlichte
+    /// Spielzeit muss SOFORT mitziehen: Der Aufrufer aktualisiert direkt danach
+    /// den Sperrbildschirm aus `visualizerState.elapsedTime` und zeigte dort
+    /// sonst noch einmal die alte, zu lange Zeit. Braucht ein Audio-Geraet —
+    /// ohne (z.B. CI) startet play() nicht und der Test endet still.
+    @MainActor
+    func testResetElapsedToLoopStartPublishesTheNewTimeImmediately() async throws {
+        let coordinator = ModPlayerCoordinator()
+        coordinator.setMod(ModParser.generateDemoMod())
+        coordinator.play()
+        guard coordinator.isPlaying else { return }
+        defer { coordinator.stop() }
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertGreaterThan(coordinator.visualizerState.elapsedTime, 0.1,
+                             "die Uhr muss vor dem Reset schon gelaufen sein")
+
+        coordinator.resetElapsedToLoopStart()
+
+        // Das Demo-Mod hat den Neustartpunkt 0, die Uhr steht danach also
+        // wieder am Songanfang — und zwar ohne auf den naechsten VU-Takt oder
+        // Audio-Callback zu warten.
+        XCTAssertLessThan(coordinator.visualizerState.elapsedTime, 0.05,
+                          "die veroeffentlichte Spielzeit muss sofort am Loop-Punkt stehen")
+    }
+#endif
+
     /// XM Hxy senkt (bzw. hebt) die globale Lautstärke auf jedem Folgetick der
     /// Zeile; H00 nutzt das Kanal-Memory. Läuft über den echten Render-Block,
     /// damit der SequencerCore-Pfad (Row-Reset + Per-Tick-Anwendung) geprüft ist.
@@ -364,5 +393,96 @@ final class CoordinatorSequencingTests: XCTestCase {
                        "H00 muss den gemerkten 04-Parameter weiterverwenden")
         XCTAssertEqual(try XCTUnwrap(traces.last).globalVolume, 24,
                        "ohne weiteren H-Befehl bleibt die globale Lautstärke stehen")
+    }
+
+    // MARK: - Anzeige-Uhr im Track-Loop
+
+    /// Baut einen Renderblock samt Zustand fuer die Uhr-Tests. Kein Audiogeraet,
+    /// keine Engine — derselbe Block wie App, WAV-Export und Quick Look.
+    private func makeBlockAndState(
+        mod: Mod,
+        sampleRate: Double = 44100.0
+    ) -> (block: ModuleRenderBlock, state: RealtimePlaybackState, hold: [AnyObject]) {
+        let channels = RenderEngine.makeRenderChannels(for: mod)
+        let state = RenderEngine.makeRenderState(for: mod, sampleRate: sampleRate)
+        let channelCount = channels.count
+        let peaks = UnsafeMutablePointer<Float>.allocate(capacity: channelCount)
+        peaks.initialize(repeating: 0, count: channelCount)
+        let waves = UnsafeMutablePointer<Float>.allocate(capacity: channelCount * 32)
+        waves.initialize(repeating: 0, count: channelCount * 32)
+        let masterWaves = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+        masterWaves.initialize(repeating: 0, count: 128)
+        let vu = RealtimeVUBuffer(pointer: peaks)
+        let wave = RealtimeWaveBuffer(channelWaves: waves, masterWaves: masterWaves)
+        let block = RenderEngine.createRenderBlock(
+            state: state, vuBuffer: vu, waveBuffer: wave,
+            dspChannels: channels, mod: mod, sampleRate: sampleRate)
+        // Puffer und Kanaele muessen den Block ueberleben; der Aufrufer haelt sie.
+        return (block, state, [vu, wave] + channels)
+    }
+
+    /// Der Hauptthread darf `elapsedFrames` nicht selbst schreiben — der
+    /// Renderblock erhoeht denselben Zaehler pro Frame, und ein direkter
+    /// Schreibzugriff koennte zwischen dessen Lesen und Zurueckschreiben
+    /// verlorengehen. Stattdessen legt er einen Auftrag ab, den der Block genau
+    /// einmal uebernimmt.
+    func testRenderBlockAppliesPendingElapsedFramesExactlyOnce() {
+        let mod = ModParser.generateDemoMod()
+        let (block, state, hold) = makeBlockAndState(mod: mod)
+        let buffer = StereoRenderBuffer(capacity: 256)
+
+        block(64, buffer.left, buffer.right)
+        XCTAssertEqual(state.elapsedFrames, 64)
+
+        state.pendingElapsedFrames = 5_000
+        block(10, buffer.left, buffer.right)
+        XCTAssertEqual(state.elapsedFrames, 5_010, "der Auftrag muss am Frame-Anfang greifen")
+        XCTAssertEqual(state.pendingElapsedFrames, .max, "der Auftrag gilt genau einmal")
+
+        block(10, buffer.left, buffer.right)
+        XCTAssertEqual(state.elapsedFrames, 5_020, "danach zaehlt der Block normal weiter")
+        withExtendedLifetime(hold) {}
+    }
+
+    /// Ein rueckwaerts gerichteter Bxx-Sprung gilt als Songende, landet aber auf
+    /// seinem eigenen Ziel — nicht auf `restartPosition`. Ein zusaetzliches Dxx
+    /// setzt dort noch die Zielzeile. Genau dieses Ziel muss der Renderzustand
+    /// festhalten, sonst setzt der Track-Loop die Anzeige-Uhr auf einen anderen
+    /// Punkt als den, an dem wirklich weitergespielt wird.
+    func testBackwardPositionJumpRecordsItsOwnTargetAsLoopPoint() {
+        let empty = Note(instrument: 0, period: 0, effectId: 0, effectData: 0)
+        func effect(_ id: Int, _ data: Int) -> Note {
+            Note(instrument: 0, period: 0, effectId: id, effectData: data)
+        }
+        func emptyRow() -> Row { Row(notes: [Note](repeating: empty, count: 4)) }
+
+        // Position 0: vier leere Zeilen. Position 1, Zeile 0: B00 (zurueck auf
+        // Position 0) zusammen mit D02 (dort Zeile 2).
+        let pattern0 = Pattern(rows: (0..<4).map { _ in emptyRow() })
+        let pattern1 = Pattern(rows: [
+            Row(notes: [effect(0x0B, 0), effect(0x0D, 2), empty, empty]),
+            emptyRow(), emptyRow(), emptyRow()
+        ])
+        let mod = Mod(
+            name: "bxx-loop",
+            length: 2,
+            patternTable: [0, 1],
+            instruments: [nil],
+            patterns: [pattern0, pattern1],
+            channelCount: 4
+        )
+
+        let (block, state, hold) = makeBlockAndState(mod: mod)
+        // Bewusst ein anderer Neustartpunkt: Nur so zeigt der Test, dass die Uhr
+        // wirklich das Sprungziel nimmt und nicht `restartPosition`.
+        state.restartPosition = 1
+        let buffer = StereoRenderBuffer(capacity: 256)
+        for _ in 0..<200 { block(256, buffer.left, buffer.right) }   // ~1,2 s
+
+        XCTAssertTrue(state.endReached || state.endReachedFrame != .max,
+                      "der rueckwaerts gerichtete Bxx-Sprung muss als Songende gelten")
+        XCTAssertEqual(state.endReachedPosition, 0, "Ziel des Bxx-Sprungs, nicht restartPosition")
+        XCTAssertEqual(state.endReachedRow, 2, "Dxx setzt die Zielzeile des Sprungs")
+        withExtendedLifetime(hold) {}
     }
 }
