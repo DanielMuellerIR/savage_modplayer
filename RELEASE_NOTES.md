@@ -105,3 +105,25 @@ scripts.
 - CI now also builds the app bundle including the Quick Look extension
   (unsigned), runs the UI source tests, and builds and tests the iPhone app
   against the simulator SDK.
+
+## Fixes from the 2026-08-06 code review
+
+All 16 findings of an in-depth review were verified against the code and
+fixed:
+
+- Importing an archive that contains another archive no longer loses the
+  nested one, and the source archive is only removed after everything inside
+  has been imported.
+- Loop handling: the elapsed-time clock follows the actual loop target
+  (including `Bxx`/`Dxx` jumps), a data race on the frame counter at the loop
+  point is gone, and the lock screen no longer shows the old elapsed time
+  after a loop restart.
+- The XM parser rejects truncated files instead of reading past the end, and
+  the instrument preview no longer runs MOD logic on XM instruments.
+- `--play` works at offline sample-rate limits, and a signature record at the
+  end of a module is no longer misread as corruption.
+- Library robustness: an unreadable library root, a failing directory
+  enumerator, or a temporary-file error can no longer silently empty the
+  index or disable the "delete index file" option; a reset rebuilds the
+  index before clearing the old one, and a negative entry limit no longer
+  terminates the process.

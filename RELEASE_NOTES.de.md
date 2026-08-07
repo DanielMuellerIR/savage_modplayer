@@ -112,3 +112,26 @@ der iPhone-App, im CLI und in den Build-Skripten.
 - CI baut zusätzlich das App-Bundle samt Quick-Look-Erweiterung (unsigniert),
   führt die UI-Quelltests aus und baut und testet die iPhone-App gegen das
   Simulator-SDK.
+
+## Korrekturen aus dem Code-Review vom 2026-08-06
+
+Alle 16 Funde eines gründlichen Reviews wurden am Code verifiziert und
+behoben:
+
+- Beim Import eines Archivs, das ein weiteres Archiv enthält, geht das innere
+  nicht mehr verloren; das Quellarchiv wird erst entfernt, wenn alles darin
+  importiert ist.
+- Loop-Verhalten: Die Spielzeit folgt dem tatsächlichen Sprungziel (auch bei
+  `Bxx`/`Dxx`), ein Datenrennen auf dem Frame-Zähler am Loop-Punkt ist
+  beseitigt, und der Sperrbildschirm zeigt nach einem Loop keine alte
+  Spielzeit mehr.
+- Der XM-Parser weist abgeschnittene Dateien ab, statt über das Dateiende zu
+  lesen; die Instrumentvorschau wendet keine MOD-Logik mehr auf
+  XM-Instrumente an.
+- `--play` funktioniert an den Grenzen der Offline-Samplerate, und ein
+  Signatur-Datensatz am Modulende gilt nicht mehr als Korruption.
+- Bibliotheks-Robustheit: Eine unlesbare Wurzel, ein scheiternder
+  Verzeichnis-Enumerator oder ein Temp-Dateifehler können den Index nicht
+  mehr still leeren oder das Löschen der Indexdatei aushebeln; ein Reset baut
+  den Index erst neu auf, bevor der alte geleert wird, und ein negatives
+  Eintragslimit beendet den Prozess nicht mehr.
