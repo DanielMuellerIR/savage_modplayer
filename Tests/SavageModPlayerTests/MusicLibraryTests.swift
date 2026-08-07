@@ -362,6 +362,12 @@ final class MusicLibraryTests: XCTestCase {
     // besuchte die Schleife dann keine einzige Datei, der Lauf galt trotzdem
     // als vollstaendig — und der Loeschabgleich entfernte JEDEN bekannten
     // Eintrag, obwohl der Bestand unveraendert auf der Platte lag.
+    //
+    // Nur auf Apple-Plattformen: Unter Linux (Swift 6) ist auch die
+    // URL-Variante von `enumerator` eine Extension-Methode und laesst sich
+    // nicht ueberschreiben — der Praeparat-FileManager ist dort nicht baubar
+    // (belegt: Compile-Fehler im Linux-CI-Lauf vom 2026-08-07).
+    #if canImport(Darwin)
     func testMissingEnumeratorKeepsIndexAndIsReportedAsIncomplete() throws {
         try writeFile("a.mod", marker: 0x60)
         try writeFile("b.mod", marker: 0x61)
@@ -384,6 +390,7 @@ final class MusicLibraryTests: XCTestCase {
         XCTAssertTrue(report.removed.isEmpty, "ohne Enumerator darf nichts als geloescht gelten")
         XCTAssertEqual(blind.index.items.count, 2)
     }
+    #endif
 
     // Laesst sich schon die Bibliothekswurzel nicht auflisten, ist der Reset
     // nicht vollstaendig. Frueher blieb `failures` leer, der Index wurde
@@ -490,14 +497,16 @@ final class MusicLibraryTests: XCTestCase {
 // real passieren (fehlende Rechte, verschwundenes Verzeichnis); mit Rechten
 // allein laesst sich der Fall nicht zuverlaessig erzwingen.
 //
-// Auf Apple-Plattformen liegt die URL-Variante von `enumerator` in einer
-// Swift-Erweiterung und ist deshalb nicht ueberschreibbar. Die eigentliche
-// Methode ist die von Objective-C geerbte
+// Die URL-Variante von `enumerator` liegt in einer Swift-Erweiterung und ist
+// deshalb nicht ueberschreibbar. Auf Apple-Plattformen ist die eigentliche
+// Methode die von Objective-C geerbte
 // `enumeratorAtURL:includingPropertiesForKeys:options:errorHandler:` — genau
 // die wird hier per Selektor ersetzt, und die Erweiterung ruft sie auf. Unter
-// Linux ist dieselbe Methode direkt ueberschreibbar.
+// Linux (Swift 6) gibt es keinen solchen Unterbau, dort ist der Praeparat-
+// FileManager nicht baubar; der zugehoerige Test ist auf Apple-Plattformen
+// begrenzt.
+#if canImport(Darwin)
 private final class EnumeratorlessFileManager: FileManager {
-    #if canImport(Darwin)
     override func __enumerator(
         at url: URL,
         includingPropertiesForKeys keys: [URLResourceKey]?,
@@ -506,14 +515,5 @@ private final class EnumeratorlessFileManager: FileManager {
     ) -> FileManager.DirectoryEnumerator? {
         nil
     }
-    #else
-    override func enumerator(
-        at url: URL,
-        includingPropertiesForKeys keys: [URLResourceKey]?,
-        options mask: FileManager.DirectoryEnumerationOptions = [],
-        errorHandler handler: ((URL, any Error) -> Bool)? = nil
-    ) -> FileManager.DirectoryEnumerator? {
-        nil
-    }
-    #endif
 }
+#endif
