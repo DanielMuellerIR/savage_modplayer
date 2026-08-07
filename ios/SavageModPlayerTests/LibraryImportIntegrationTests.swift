@@ -179,7 +179,11 @@ final class LibraryImportIntegrationTests: XCTestCase {
         let store = LibraryStore(defaults: defaults, library: library)
         store.start()
 
-        let deadline = Date().addingTimeInterval(5)
+        // 60 s statt 5 s: Der Wert ist eine Obergrenze, keine Wartezeit — die
+        // Schleife endet, sobald der Import fertig ist (lokal nach ~0,2 s).
+        // 5 s waren auf den langsamen GitHub-Runnern zweimal nacheinander zu
+        // knapp (CI-Läufe zu v1.6.5 am 2026-08-07), lokal aber nie.
+        let deadline = Date().addingTimeInterval(60)
         while store.isBusy, Date() < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
