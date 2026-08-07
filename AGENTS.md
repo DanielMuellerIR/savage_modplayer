@@ -129,6 +129,22 @@ Notary-, Quick-Look-, Release- und Gerätetestdetails. Dauerhafte iOS-Semantik:
   Tabwechsel oder Sperren verschwinden Views und Caches; der Core sinkt auf
   etwa 5 Hz. Höchstens 32 Kanal-Oszilloskope erscheinen im 4-/8-spaltigen Raster.
 
+Aus realen Fehlern bestätigte Fallen:
+
+- **Deklarierte Längen vollständig erzwingen.** Ein Binärparser darf ein
+  deklariertes Datenfenster nicht still am Dateiende kürzen; `min(…, data.count)`
+  ist kein Ersatz für eine Prüfung. Vor dem Parsen muss der vollständige Bereich
+  in der Eingabe liegen, sonst gilt das sauber endende Präfix einer
+  abgeschnittenen Datei — etwa eines XM — fälschlich als gültig.
+- **Ein fehlgeschlagener Dateisystem-Scan leert keinen Index.** Liefert ein
+  Verzeichnis-Enumerator `nil` oder unvollständige Ergebnisse, ist das kein
+  leerer Bestand. Den alten Index bis zum vollständigen Neuaufbau behalten oder
+  fehlgeschlagene Teilbäume mit dem bekannten Bestand zusammenführen.
+- **Ein Quellarchiv erst nach vollständiger Übernahme löschen.** Ein entpacktes
+  Archiv darf erst verschwinden, wenn alle unterstützten Inhalte einschließlich
+  verschachtelter Archive übernommen sind. Ein einzelner importierter
+  Direkteintrag belegt nicht, dass das gesamte Staging verarbeitet wurde.
+
 Die IT-Implementierung M0–M10 ist abgeschlossen. Dauerhafte Semantik und
 Capability-Grenzen sind projektextern dokumentiert. Historische
 Start-/Branch-Anweisungen aus dem IT-Support-Task sind
