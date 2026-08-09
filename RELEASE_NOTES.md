@@ -1,129 +1,46 @@
-Savage Mod Player 1.6.5 is a correctness and robustness release across all
-targets: an audible XM tuning fix, stricter parsers and ZIP handling, a safer
-library import, and small fixes in the iPhone app, the CLI, and the build
-scripts.
+Savage Mod Player 1.6.6 hardens recursive archive imports, removes two
+cross-thread playback races, and closes the remaining XM truncation paths.
+
+## Library and archives
+
+- Recursive imports now share one limit for uncompressed bytes, archive
+  entries, and archive count across the complete nesting tree. The limits apply
+  to both the native ZIP reader and the bsdtar path on macOS/Linux; inner
+  archives can no longer restart with a fresh 2 GiB/50,000-entry allowance.
+- bsdtar archives are measured in a streaming preflight before files are
+  written. Symbolic links are rejected before directory or extension
+  classification, so a staged `inner.zip` cannot point outside the extraction
+  directory.
+- Hidden supported modules and nested archives are processed instead of being
+  silently skipped. A source archive is still removed only after every
+  supported item has been handled successfully.
+- An incomplete rescan after a partially failed library reset is reported as
+  incomplete. The iPhone app merges its partial archive result with the known
+  pending list instead of replacing that list with missing data.
 
 ## Playback correctness
 
-- XM modules that use the Amiga frequency table now play at the pitch
-  FastTracker II defines (frequency = 8363 × 1712 / period). They were
-  previously computed against the Amiga PAL clock and sounded roughly two
-  octaves too low. Modules using the linear frequency table are unaffected.
-- An S3M header global volume of 0 is now honoured as a deliberately silent
-  start. The single documented real-world exception stays: files written by
-  Scream Tracker before 3.20 often store 0 for "unset" and keep full volume.
-- In the track-loop mode of the iPhone app, the elapsed time shown in the app
-  and on the lock screen resets at the loop point instead of overtaking the
-  track duration. It now resets to the point playback actually continues from —
-  for a backward Bxx jump that is the jump target, not the restart position
-  from the module header. The lock screen shows the new time immediately
-  instead of one display tick later.
-- The instrument preview of XM modules is now tuned exactly like the same note
-  in the played module. It previously used the MOD calculation (period 214
-  against the Amiga clock) and was noticeably out of tune; both XM frequency
-  modes are covered.
+- The pending elapsed-frame reset is a lock-free C11 atomic sentinel and is
+  consumed exactly once with an atomic exchange. This remains available on the
+  supported macOS 13 baseline and on Linux.
+- End-of-song frame, position, and row are published as a complete atomic
+  snapshot before the readiness signal. The UI cannot observe an old or
+  half-written loop target.
+- Track loop mode on macOS now resets the displayed elapsed time at the actual
+  loop point and immediately refreshes system Now Playing information, matching
+  the iPhone app.
+- XM song playback and instrument preview use the same clamped 0...119 note
+  rule before calculating either linear or Amiga periods, including extreme
+  signed sample transpositions.
 
-## Stricter parsing and ZIP handling
+## Parser and release hygiene
 
-- The S3M parser validates the declared length of every packed pattern and
-  rejects truncated patterns instead of silently reading sample data as note
-  events.
-- The XM parser rejects truncated headers and files, and treats pattern cells
-  that would cross the declared pattern data as corruption. Pattern headers and
-  pattern data must also lie completely inside the file, and non-empty pattern
-  data must contain every declared cell — a truncated file no longer passes as
-  a valid, partially silent module anywhere.
-- The ZIP reader enforces its entry limit while parsing the central directory,
-  cross-checks the directory against the end-of-central-directory record, and
-  rejects entries that would hit the same target file — including names that
-  collide only on case-insensitive file systems. Target files are created
-  exclusively, never overwritten.
-- The ZIP reader accepts the optional digital signature record at the end of
-  the central directory (ZIP APPNOTE 6.3.10, section 4.3.13); standards
-  compliant signed archives were previously rejected as corrupt. Invalid limits
-  (such as a negative entry count) now raise a regular error instead of
-  terminating the process.
-
-## Library import
-
-- A source archive is deleted only after a fully successful import: no
-  cancellation, no errors, and at least one file taken over. Archives without
-  playable content, partially imported archives, and entries skipped due to an
-  unsupported compression method no longer make the original disappear.
-- An archive inside an archive is now unpacked as well, up to three levels
-  deep. Its content used to be dropped while the outer source archive counted
-  as fully imported and was deleted — taking the last copy with it.
-- Cancelling is recognised as such throughout the pipeline (including waiting
-  for cloud files) and is no longer reported as file errors.
-- Unreadable source folders are reported instead of silently skipped, an
-  interrupted file-system scan no longer removes known entries from the index,
-  and a partially failed library reset rebuilds the index from what actually
-  remains on disk.
-- A directory scan that cannot even start now counts as incomplete; it used to
-  be read as an empty library and wiped the whole index. During a reset, a
-  library root that cannot be listed is reported, the existing index is kept
-  until a provably complete rebuild, and a failure in a temporary or cache
-  directory no longer overrides the "delete index file" option.
-- Unpacking archives on macOS and Linux (bsdtar) can now be cancelled.
-- Archives whose name matches the Amiga `mod.` prefix (such as
-  `mod.collection.zip`) are classified as archives everywhere and unpacked
-  instead of being imported as an unplayable "module".
-
-## Quick Look
-
-- The preview cache key is derived from the exact bytes that were read and
-  rendered. A file replaced in place — even with identical size and
-  timestamp — can no longer serve the previous file's audio from the cache.
-
-## CLI
-
-- `--play` with `--seconds 0` now honours the documented 600-second cap
-  instead of playing a loop forever.
-- `--play` rejects `--out`, `--stdout`, `--normalize`, and `--rate` instead of
-  silently ignoring them.
-- `--play` also works with output devices above 192 kHz. Real-time output is
-  streamed and needs no offline memory budget; the offline sample-rate ceiling
-  used to end playback before the first sample.
-
-## iPhone app
-
-- "Previous" over a broken file now searches backwards instead of jumping
-  forward to the current track again.
-- A paused track keeps its position across a media services restart followed by
-  an app relaunch.
-- Errors and pending archives are also shown when the library is empty, so a
-  failed unpack of the only ZIP is visible and can be retried.
-
-## Build scripts and CI
-
-- `release.sh`, `install.sh`, and `ios/scripts/build-device.sh` parse all
-  arguments before doing anything: `--help` answers immediately and unknown
-  options abort instead of triggering builds, notarisation, or installs.
-- The notarisation helper cleans up its temporary directory on every failure
-  path. A stale DMG is removed by `build_dmg.sh` before every build, so the
-  success check in `release.sh` really verifies the current run.
-- CI now also builds the app bundle including the Quick Look extension
-  (unsigned), runs the UI source tests, and builds and tests the iPhone app
-  against the simulator SDK.
-
-## Fixes from the 2026-08-06 code review
-
-All 16 findings of an in-depth review were verified against the code and
-fixed:
-
-- Importing an archive that contains another archive no longer loses the
-  nested one, and the source archive is only removed after everything inside
-  has been imported.
-- Loop handling: the elapsed-time clock follows the actual loop target
-  (including `Bxx`/`Dxx` jumps), a data race on the frame counter at the loop
-  point is gone, and the lock screen no longer shows the old elapsed time
-  after a loop restart.
-- The XM parser rejects truncated files instead of reading past the end, and
-  the instrument preview no longer runs MOD logic on XM instruments.
-- `--play` works at offline sample-rate limits, and a signature record at the
-  end of a module is no longer misread as corruption.
-- Library robustness: an unreadable library root, a failing directory
-  enumerator, or a temporary-file error can no longer silently empty the
-  index or disable the "delete index file" option; a reset rebuilds the
-  index before clearing the old one, and a negative entry limit no longer
-  terminates the process.
+- The XM parser requires the complete fixed 80-byte header, every declared
+  pattern header even when its data size is zero, every declared instrument
+  header, sample headers of at least 40 bytes, and the complete declared PCM
+  window. Odd byte lengths for 16-bit samples are rejected.
+- The publication hygiene gate inventories every tracked UTF-8 text file,
+  including Swift, JavaScript, HTML, JSON, and CI YAML, rather than only
+  Markdown, shell, and Python files.
+- The optional ZIP Digital Signature record is documented correctly as being
+  at the end of the ZIP central directory.

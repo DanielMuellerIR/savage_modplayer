@@ -21,6 +21,12 @@ public final class PreviewVoice: Sendable {
 }
 
 public final class RealtimePlaybackState: Sendable {
+    struct EndTransitionSnapshot: Sendable {
+        let frame: UInt64
+        let position: Int
+        let row: Int
+    }
+
     // Der neutrale Vorstart steht direkt vor Zeile 0 der ersten Position. Ein
     // festes rowIndex=63 funktionierte nur zufaellig mit klassischen
     // 64-Zeilen-Patterns und spielte bei OpenMPT-Patterns ab 65 Zeilen erst den
@@ -73,7 +79,11 @@ public final class RealtimePlaybackState: Sendable {
     // Zurueckschreiben des Renderblocks verlorengehen — der Reset waere dann
     // wirkungslos. Deshalb legt der Hauptthread nur diesen Wunsch ab, und der
     // Renderblock uebernimmt ihn am Frame-Anfang genau einmal.
-    nonisolated(unsafe) public var pendingElapsedFrames: UInt64 = .max
+    private let pendingElapsedFramesStorage = LockFreeAtomicUInt64(.max)
+    public var pendingElapsedFrames: UInt64 {
+        get { pendingElapsedFramesStorage.loadAcquire() }
+        set { pendingElapsedFramesStorage.storeRelease(newValue) }
+    }
     nonisolated(unsafe) public var waveWriteIndex: Int = 0
     // Eigener, ueber Callback-Grenzen rollender Index fuer das Master-Oszilloskop.
     // (Frueher mit dem Callback-lokalen frame & 127 indiziert — bei Buffern < 128
@@ -82,10 +92,12 @@ public final class RealtimePlaybackState: Sendable {
     // Wird im Renderblock gesetzt, wenn der Song hinter die letzte Position laeuft
     // (Wrap auf 0). Der MainActor-Poller liest das Flag und meldet das Songende,
     // damit die UI den loopMode (none/track/playlist) auswerten kann.
-    nonisolated(unsafe) public var endReached: Bool = false
+    private let endReachedStorage = LockFreeAtomicUInt64(0)
+    public var endReached: Bool { endReachedStorage.loadAcquire() != 0 }
     // Exakter Frame der ersten Endtransition. Offline-Renderer koennen damit
     // den letzten 1024er Block auf die musikalische Songlaenge kuerzen.
-    nonisolated(unsafe) public var endReachedFrame: UInt64 = .max
+    private let endReachedFrameStorage = LockFreeAtomicUInt64(.max)
+    public var endReachedFrame: UInt64 { endReachedFrameStorage.loadAcquire() }
     // Position und Zeile, auf denen die Wiedergabe nach der ersten
     // Endtransition tatsaechlich weiterlaeuft; -1 = noch keine Endtransition.
     // Das ist NICHT immer `restartPosition`: Ein rueckwaerts gerichteter
@@ -93,10 +105,68 @@ public final class RealtimePlaybackState: Sendable {
     // seinem eigenen Ziel — und ein zusaetzliches Dxx setzt dort noch eine
     // Zielzeile. Die Anzeige-Uhr muss auf genau diesen Punkt zurueckgesetzt
     // werden, sonst zeigt sie ab der zweiten Runde eine falsche Spielzeit.
-    nonisolated(unsafe) public var endReachedPosition: Int = -1
-    nonisolated(unsafe) public var endReachedRow: Int = 0
+    private let endReachedPositionStorage = LockFreeAtomicUInt64(UInt64.max)
+    private let endReachedRowStorage = LockFreeAtomicUInt64(0)
+    public var endReachedPosition: Int {
+        Int(Int64(bitPattern: endReachedPositionStorage.loadAcquire()))
+    }
+    public var endReachedRow: Int {
+        Int(Int64(bitPattern: endReachedRowStorage.loadAcquire()))
+    }
 
     public init() {}
+
+    // Der Audio-Callback konsumiert jeden Uhr-Auftrag mit EINEM atomaren
+    // exchange. Ein gleichzeitig eintreffender Auftrag kann dadurch weder
+    // zwischen getrenntem Lesen/Loeschen verloren gehen noch zweimal wirken.
+    @inline(__always)
+    func takePendingElapsedFrames() -> UInt64 {
+        pendingElapsedFramesStorage.exchangeAcquiringAndReleasing(.max)
+    }
+
+    // Vollstaendigen Ziel-Snapshot schreiben, danach erst das Signal mit
+    // Release-Semantik veroeffentlichen. Der MainActor liest das Signal mit
+    // Acquire und sieht dadurch garantiert Frame, Position UND Zeile aus
+    // derselben Transition.
+    @inline(__always)
+    func publishEndTransition(frame: UInt64, position: Int, row: Int) {
+        // Solange der Empfaenger das vorige Signal noch nicht konsumiert hat,
+        // bleibt dessen zusammengehoeriger Snapshot unangetastet. Mehrere
+        // Pulse duerfen zusammenfallen; der Loop-Zielzustand darf es nicht.
+        guard endReachedStorage.loadAcquire() == 0 else { return }
+        endReachedFrameStorage.storeRelaxed(frame)
+        endReachedPositionStorage.storeRelaxed(UInt64(bitPattern: Int64(position)))
+        endReachedRowStorage.storeRelaxed(UInt64(bitPattern: Int64(row)))
+        endReachedStorage.storeRelease(1)
+    }
+
+    @inline(__always)
+    func consumeEndTransition() -> EndTransitionSnapshot? {
+        // Es gibt genau einen Empfaenger (den MainActor-Poller). Solange das
+        // Signal 1 bleibt, schreibt der Audio-Thread keinen neuen Snapshot.
+        // Deshalb zuerst alle drei Werte lokal kopieren und erst danach den
+        // Slot per exchange freigeben. Der UI-Hook kann die lokale Kopie auch
+        // dann noch sicher verwenden, wenn bereits die naechste Transition
+        // veroeffentlicht wurde.
+        guard endReachedStorage.loadAcquire() != 0 else { return nil }
+        let snapshot = EndTransitionSnapshot(
+            frame: endReachedFrameStorage.loadRelaxed(),
+            position: Int(Int64(bitPattern: endReachedPositionStorage.loadRelaxed())),
+            row: Int(Int64(bitPattern: endReachedRowStorage.loadRelaxed())))
+        guard endReachedStorage.exchangeAcquiringAndReleasing(0) != 0 else {
+            return nil
+        }
+        return snapshot
+    }
+
+    // Nur vor einem neuen Renderlauf/Seek verwenden. Die Snapshot-Felder
+    // werden zuerst neutralisiert, das falsche Signal danach veroeffentlicht.
+    func resetEndTransition() {
+        endReachedFrameStorage.storeRelaxed(.max)
+        endReachedPositionStorage.storeRelaxed(.max)
+        endReachedRowStorage.storeRelaxed(0)
+        endReachedStorage.storeRelease(0)
+    }
 }
 
 public final class RealtimeVUBuffer: @unchecked Sendable {
@@ -375,9 +445,9 @@ public enum RenderEngine {
                 // Offenen Uhr-Auftrag des Hauptthreads uebernehmen (Track-Loop).
                 // Nur ein Vergleich und ggf. zwei Zuweisungen — keine
                 // Allokation, kein Lock, damit die Renderblock-Invariante gilt.
-                if state.pendingElapsedFrames != .max {
-                    state.elapsedFrames = state.pendingElapsedFrames
-                    state.pendingElapsedFrames = .max
+                let requestedElapsedFrames = state.takePendingElapsedFrames()
+                if requestedElapsedFrames != .max {
+                    state.elapsedFrames = requestedElapsedFrames
                 }
                 state.elapsedFrames += 1
 
@@ -532,10 +602,11 @@ public enum RenderEngine {
         targetNote: Int,
         linearFrequency: Bool
     ) -> Float {
-        let realNote = max(0, min(119, targetNote + sample.relativeNote))
-        return linearFrequency
-            ? DSPChannel.xmLinearPeriod(realNote: realNote, finetune: sample.finetune)
-            : DSPChannel.xmAmigaPeriod(realNote: realNote, finetune: sample.finetune)
+        DSPChannel.xmPeriod(
+            key: targetNote,
+            relativeNote: sample.relativeNote,
+            finetune: sample.finetune,
+            linearFrequency: linearFrequency)
     }
 
     // XM-Samplevorschau in derselben Stimmung wie die Song-Engine. Frueher lief

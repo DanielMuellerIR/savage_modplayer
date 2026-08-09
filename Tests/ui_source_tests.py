@@ -28,6 +28,17 @@ class CompactTransportSourceTests(unittest.TestCase):
             with self.subTest(action=action):
                 self.assertIn(action, compact_footer)
 
+    def test_macos_track_loop_resets_elapsed_time_and_now_playing(self):
+        source = (
+            ROOT
+            / "Sources/SavageModPlayerApp/UI/MainView+Playback.swift"
+        ).read_text(encoding="utf-8")
+        track_case = source.split("case .track:", maxsplit=1)[1].split(
+            "case .playlist:", maxsplit=1)[0]
+
+        self.assertIn("coordinator.resetElapsedToLoopStart()", track_case)
+        self.assertIn("updateNowPlayingInfo()", track_case)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,4 @@
+module CSavageAtomics {
+    header "CSavageAtomics.h"
+    export *
+}

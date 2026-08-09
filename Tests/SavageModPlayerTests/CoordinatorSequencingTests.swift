@@ -444,6 +444,84 @@ final class CoordinatorSequencingTests: XCTestCase {
         withExtendedLifetime(hold) {}
     }
 
+    /// Echte Producer-/Consumer-Konkurrenz: Jeder Uhr-Auftrag muss genau
+    /// einmal und in Reihenfolge aus dem atomaren Sentinel kommen. Der Test
+    /// laeuft auch unter TSan; die fruehere normale Swift-Variable meldete dort
+    /// einen Zugriffskonflikt beziehungsweise verlor Auftraege.
+    func testPendingElapsedFramesAtomicStressConsumesEveryRequestExactlyOnce() {
+        let state = RealtimePlaybackState()
+        let count: UInt64 = 20_000
+        let mismatch = LockFreeAtomicUInt64(.max)
+        let producerDone = expectation(description: "producer")
+        let consumerDone = expectation(description: "consumer")
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            for value in 0..<count {
+                while state.pendingElapsedFrames != .max {}
+                state.pendingElapsedFrames = value
+            }
+            producerDone.fulfill()
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            var expected: UInt64 = 0
+            while expected < count {
+                let value = state.takePendingElapsedFrames()
+                guard value != .max else { continue }
+                if value != expected {
+                    mismatch.storeRelaxed(value)
+                    break
+                }
+                expected += 1
+            }
+            consumerDone.fulfill()
+        }
+
+        wait(for: [producerDone, consumerDone], timeout: 10)
+        XCTAssertEqual(mismatch.loadRelaxed(), .max)
+        XCTAssertEqual(state.pendingElapsedFrames, .max)
+    }
+
+    /// Der Endtransition-Snapshot wird komplett geschrieben, bevor das
+    /// atomare Signal sichtbar wird. Der Leser nimmt Frame/Position/Zeile vor
+    /// dem Freigeben des Slots auf; dadurch kann kein gemischtes Wertepaar aus
+    /// zwei aufeinanderfolgenden Transitionen entstehen.
+    func testEndTransitionSnapshotReleaseAcquireStressStaysConsistent() {
+        let state = RealtimePlaybackState()
+        let count: UInt64 = 10_000
+        let mismatch = LockFreeAtomicUInt64(.max)
+        let producerDone = expectation(description: "snapshot producer")
+        let consumerDone = expectation(description: "snapshot consumer")
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            for value in 0..<count {
+                while state.endReached {}
+                state.publishEndTransition(
+                    frame: value,
+                    position: Int(value),
+                    row: Int(value * 2))
+            }
+            producerDone.fulfill()
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            var expected: UInt64 = 0
+            while expected < count {
+                guard let snapshot = state.consumeEndTransition() else { continue }
+                if snapshot.frame != expected
+                    || snapshot.position != Int(expected)
+                    || snapshot.row != Int(expected * 2) {
+                    mismatch.storeRelaxed(snapshot.frame)
+                    break
+                }
+                expected += 1
+            }
+            consumerDone.fulfill()
+        }
+
+        wait(for: [producerDone, consumerDone], timeout: 10)
+        XCTAssertEqual(mismatch.loadRelaxed(), .max)
+        XCTAssertFalse(state.endReached)
+    }
+
     /// Ein rueckwaerts gerichteter Bxx-Sprung gilt als Songende, landet aber auf
     /// seinem eigenen Ziel — nicht auf `restartPosition`. Ein zusaetzliches Dxx
     /// setzt dort noch die Zielzeile. Genau dieses Ziel muss der Renderzustand

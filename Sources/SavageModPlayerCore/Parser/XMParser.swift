@@ -28,6 +28,7 @@ public class XMParser {
         case unsupportedDimensions(String)
         case resourceLimit(String)
         case corruptPattern(String)
+        case corruptInstrument(String)
 
         public var errorDescription: String? {
             switch self {
@@ -45,6 +46,8 @@ public class XMParser {
                 return "XM-Modul überschreitet das sichere Ressourcenlimit: \(detail)."
             case .corruptPattern(let detail):
                 return "Beschädigtes XM-Pattern: \(detail)."
+            case .corruptInstrument(let detail):
+                return "Beschädigtes XM-Instrument: \(detail)."
             }
         }
     }
@@ -72,7 +75,10 @@ public class XMParser {
     }
 
     public static func parse(data: Data) throws -> Mod {
-        guard data.count >= 60 else { throw ParserError.fileTooSmall }
+        // Die festen Headerfelder reichen bis einschliesslich Offset 0x4F.
+        // Erst danach duerfen die Reader verwendet werden; ihre Nullwerte
+        // ausserhalb der Eingabe sind kein Ersatz fuer einen Struktur-Guard.
+        guard data.count >= 80 else { throw ParserError.fileTooSmall }
         guard canParse(data: data) else { throw ParserError.invalidSignature }
 
         // Little-Endian-Leser mit Bounds-Guard: außerhalb der Datei liefern sie
@@ -93,6 +99,15 @@ public class XMParser {
             let bytes = (0..<len).map { UInt8(truncatingIfNeeded: byte(o + $0)) }.filter { $0 != 0 }
             return (String(bytes: bytes, encoding: .isoLatin1) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // Ein einziger ueberlaufgepruefter Fensterhelfer fuer alle variablen
+        // XM-Strukturen. Jede deklarierte Laenge wird damit vollstaendig
+        // erzwungen, bevor auch nur ein Feld aus ihrem Fenster gelesen wird.
+        func checkedEnd(start: Int, length: Int) throws -> Int {
+            guard start >= 0, length >= 0 else { throw ParserError.fileTooSmall }
+            let (end, overflow) = start.addingReportingOverflow(length)
+            guard !overflow, end <= data.count else { throw ParserError.fileTooSmall }
+            return end
         }
 
         // ---- Datei-Header (§1) ----
@@ -135,7 +150,7 @@ public class XMParser {
             throw ParserError.unsupportedDimensions(
                 "headerSize \(headerSize) deckt \(songLength) Songpositionen nicht ab")
         }
-        guard 0x3C + headerSize <= data.count else { throw ParserError.fileTooSmall }
+        _ = try checkedEnd(start: 0x3C, length: headerSize)
 
         // Order-Table (256 Byte ab 0x50), nur die ersten songLength Einträge gültig.
         var patternTable = (0..<songLength).map { byte(0x50 + $0) }
@@ -157,6 +172,11 @@ public class XMParser {
             // teilweise stummes Modul.
             guard pos >= 0, pos + 9 <= data.count else { throw ParserError.fileTooSmall }
             let patternHeaderLen = dword(pos)
+            guard patternHeaderLen >= 9 else {
+                throw ParserError.corruptPattern(
+                    "Pattern-Kopf ist mit \(patternHeaderLen) Byte kuerzer als 9 Byte")
+            }
+            let patternHeaderEnd = try checkedEnd(start: pos, length: patternHeaderLen)
             // let packingType = byte(pos + 4) // immer 0
             var numRows = word(pos + 5)
             let patternDataSize = word(pos + 7)
@@ -179,16 +199,12 @@ public class XMParser {
             }
 
             if patternDataSize > 0 {
-                let dataStart = pos + max(patternHeaderLen, 9)
+                let dataStart = patternHeaderEnd
                 // Die deklarierten Pattern-Daten müssen VOLLSTÄNDIG in der Datei
                 // liegen. Ein `min(…, data.count)` würde das Fenster still am
                 // Dateiende kürzen und eine abgeschnittene Datei als gültig
                 // durchlassen (bestätigte Falle, siehe AGENTS.md).
-                guard dataStart >= 0, dataStart <= data.count,
-                      dataStart + patternDataSize <= data.count else {
-                    throw ParserError.fileTooSmall
-                }
-                let dataEnd = dataStart + patternDataSize
+                let dataEnd = try checkedEnd(start: dataStart, length: patternDataSize)
                 var cursor = dataStart
                 var cell = 0
                 while cell < cellCount && cursor < dataEnd {
@@ -245,7 +261,7 @@ public class XMParser {
             }
 
             patterns.append(Pattern(rows: grid.map { Row(notes: $0) }))
-            pos += max(patternHeaderLen, 9) + patternDataSize
+            pos = try checkedEnd(start: patternHeaderEnd, length: patternDataSize)
         }
 
         // Order-Einträge auf nicht existierende Patterns -> ein leeres Pattern.
@@ -261,9 +277,17 @@ public class XMParser {
         var totalSamples = 0
         var totalPCMFrames = 0
         for i in 0..<numInstruments {
-            guard pos >= 0, pos < data.count else { break }
+            // Auch ein Instrument ohne Samples besitzt den festen 29-Byte-
+            // Kopf. Fehlt ein deklariertes Instrument ganz oder teilweise,
+            // ist das XM abgeschnitten und darf nicht als stilles Mod laden.
+            _ = try checkedEnd(start: pos, length: 29)
             let instrStart = pos
             let instrumentSize = dword(instrStart)
+            guard instrumentSize >= 29 else {
+                throw ParserError.corruptInstrument(
+                    "Kopf von Instrument \(i + 1) ist kuerzer als 29 Byte")
+            }
+            let instrumentEnd = try checkedEnd(start: instrStart, length: instrumentSize)
             let instName = string(instrStart + 4, 22)
             let numSamples = word(instrStart + 27)
 
@@ -281,13 +305,21 @@ public class XMParser {
             if numSamples == 0 {
                 // Platzhalter-Instrument: kein Teil-2-Header, keine Samples.
                 instruments.append(Instrument(index: i + 1, name: instName, samples: []))
-                pos = instrStart + max(instrumentSize, 29)
+                pos = instrumentEnd
                 continue
             }
 
             // Teil 2 (nur wenn numSamples > 0), Offsets relativ zum Instrument-Start.
             // sampleHeaderSize liegt bei +29 (im minimalen wie im vollen Header).
-            let sampleHeaderSize = instrumentSize >= 33 ? dword(instrStart + 29) : 40
+            guard instrumentSize >= 33 else {
+                throw ParserError.corruptInstrument(
+                    "Instrument \(i + 1) mit Samples hat keinen sampleHeaderSize-Wert")
+            }
+            let sampleHeaderSize = dword(instrStart + 29)
+            guard sampleHeaderSize >= 40 else {
+                throw ParserError.corruptInstrument(
+                    "Sample-Kopf in Instrument \(i + 1) ist mit \(sampleHeaderSize) Byte kuerzer als 40 Byte")
+            }
 
             // WICHTIG: Die "zweite Hälfte" des Instrument-Headers (Keymap ab +33,
             // Envelopes ab +129, Envelope-Metadaten +225.., Vibrato +235.., Fadeout
@@ -357,7 +389,14 @@ public class XMParser {
             }
 
             // Erst ALLE Sample-Header lesen, dann ALLE Sample-Daten (§4).
-            let shStart = instrStart + max(instrumentSize, 29)
+            let shStart = instrumentEnd
+            let (sampleHeaderBytes, sampleHeaderOverflow) =
+                numSamples.multipliedReportingOverflow(by: sampleHeaderSize)
+            guard !sampleHeaderOverflow else {
+                throw ParserError.resourceLimit("Sample-Kopfbereich laeuft ueber")
+            }
+            let sampleHeadersEnd = try checkedEnd(
+                start: shStart, length: sampleHeaderBytes)
             struct RawSampleHeader {
                 let length, loopStart, loopLength, volume, finetune, type, panning, relativeNote: Int
                 let name: String
@@ -372,19 +411,41 @@ public class XMParser {
                     panning: byte(shp + 15), relativeNote: sbyte(shp + 16), name: string(shp + 18, 22)))
             }
 
-            var sdPos = shStart + numSamples * sampleHeaderSize
+            // Das gesamte PCM-Fenster wird VOR der ersten Dekodierung
+            // validiert. Dadurch kann kein fruehes Sample die Daten des
+            // naechsten Instruments still als eigenen, gekuerzten Inhalt lesen.
+            var totalSampleBytes = 0
+            for h in rawHeaders {
+                let is16bit = (h.type & 0x10) != 0
+                if is16bit, h.length % 2 != 0 {
+                    throw ParserError.corruptInstrument(
+                        "16-Bit-Sample in Instrument \(i + 1) hat eine ungerade Byte-Laenge")
+                }
+                let (newTotalBytes, byteOverflow) =
+                    totalSampleBytes.addingReportingOverflow(h.length)
+                guard !byteOverflow else {
+                    throw ParserError.resourceLimit("Sample-Datenbereich laeuft ueber")
+                }
+                totalSampleBytes = newTotalBytes
+
+                let frames = is16bit ? h.length / 2 : h.length
+                let (newTotalPCMFrames, pcmOverflow) =
+                    totalPCMFrames.addingReportingOverflow(frames)
+                guard !pcmOverflow, newTotalPCMFrames <= maxPCMFrames else {
+                    throw ParserError.resourceLimit(
+                        "mehr als \(maxPCMFrames) dekodierte PCM-Frames")
+                }
+                totalPCMFrames = newTotalPCMFrames
+            }
+            let sampleDataEnd = try checkedEnd(
+                start: sampleHeadersEnd, length: totalSampleBytes)
+
+            var sdPos = sampleHeadersEnd
             var samples = [Sample]()
             samples.reserveCapacity(numSamples)
             for h in rawHeaders {
                 let is16bit = (h.type & 0x10) != 0
-                let availBytes = max(0, data.count - sdPos)
-                let usableBytes = min(h.length, availBytes)
-                let frames = is16bit ? usableBytes / 2 : usableBytes
-                let (newTotalPCMFrames, pcmOverflow) = totalPCMFrames.addingReportingOverflow(frames)
-                guard !pcmOverflow, newTotalPCMFrames <= maxPCMFrames else {
-                    throw ParserError.resourceLimit("mehr als \(maxPCMFrames) dekodierte PCM-Frames")
-                }
-                totalPCMFrames = newTotalPCMFrames
+                let frames = is16bit ? h.length / 2 : h.length
 
                 // Delta-Dekodierung + Normalisierung (§5). Überlauf wrappt bewusst
                 // auf die Bitbreite (&+ auf Int8/Int16).
@@ -434,7 +495,7 @@ public class XMParser {
                 volumeEnvelope: volumeEnvelope, panningEnvelope: panningEnvelope,
                 fadeout: fadeout, autoVibrato: autoVibrato))
 
-            pos = sdPos
+            pos = sampleDataEnd
         }
 
         return Mod(

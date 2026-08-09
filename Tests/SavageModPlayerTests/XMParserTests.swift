@@ -321,6 +321,14 @@ final class XMParserTests: XCTestCase {
         }
     }
 
+    func testFixedHeaderMustReachOffset79() {
+        var bytes = [UInt8](repeating: 0, count: 79)
+        bytes.replaceSubrange(0..<17, with: Array("Extended Module: ".utf8))
+        XCTAssertThrowsError(try XMParser.parse(data: Data(bytes))) { error in
+            XCTAssertEqual(error as? XMParser.ParserError, .fileTooSmall)
+        }
+    }
+
     func testHeaderSizeMustCoverUsedOrderEntries() {
         // headerSize unter 20 + songLength kann die genutzte Order-Table nicht
         // enthalten -> strukturell defekt.
@@ -344,6 +352,78 @@ final class XMParserTests: XCTestCase {
         let truncated = full.prefix(patternStart + 4)
         XCTAssertThrowsError(try XMParser.parse(data: Data(truncated))) { error in
             XCTAssertEqual(error as? XMParser.ParserError, .fileTooSmall)
+        }
+    }
+
+    func testEmptyPatternStillRequiresItsCompleteDeclaredHeader() {
+        var full = makeXM()
+        let patternStart = buildHeader().count
+        // Nur ein Pattern, keine Instrumente; dessen Basis-Kopf liegt vor,
+        // deklariert aber elf weitere Headerbytes und keine Pattern-Daten.
+        full[0x46] = 1; full[0x47] = 0
+        full[0x48] = 0; full[0x49] = 0
+        full[patternStart] = 20
+        full[patternStart + 1] = 0
+        full[patternStart + 2] = 0
+        full[patternStart + 3] = 0
+        full[patternStart + 7] = 0
+        full[patternStart + 8] = 0
+        let truncated = full.prefix(patternStart + 9)
+
+        XCTAssertThrowsError(try XMParser.parse(data: Data(truncated))) { error in
+            XCTAssertEqual(error as? XMParser.ParserError, .fileTooSmall)
+        }
+    }
+
+    func testMissingDeclaredInstrumentAndOneBytePrefixAreRejected() {
+        let firstInstrument = buildHeader().count
+            + buildPattern0().count + buildPattern1Empty().count
+        let full = makeXM()
+        for length in [firstInstrument, firstInstrument + 1] {
+            XCTAssertThrowsError(try XMParser.parse(data: Data(full.prefix(length)))) { error in
+                XCTAssertEqual(error as? XMParser.ParserError, .fileTooSmall)
+            }
+        }
+    }
+
+    func testSampleHeaderSizeBelow40IsRejectedBeforeHeadersOverlap() {
+        var data = makeXM()
+        let firstInstrument = buildHeader().count
+            + buildPattern0().count + buildPattern1Empty().count
+        data[firstInstrument + 29] = 39
+        data[firstInstrument + 30] = 0
+        data[firstInstrument + 31] = 0
+        data[firstInstrument + 32] = 0
+
+        XCTAssertThrowsError(try XMParser.parse(data: data)) { error in
+            guard case .corruptInstrument? = error as? XMParser.ParserError else {
+                return XCTFail("erwartet corruptInstrument, war \(error)")
+            }
+        }
+    }
+
+    func testTruncatedDeclaredSampleDataIsRejectedInsteadOfShortened() {
+        let truncated = makeXM().dropLast()
+        XCTAssertThrowsError(try XMParser.parse(data: Data(truncated))) { error in
+            XCTAssertEqual(error as? XMParser.ParserError, .fileTooSmall)
+        }
+    }
+
+    func testOddByteLengthFor16BitSampleIsRejected() {
+        var data = makeXM()
+        let secondInstrument = buildHeader().count
+            + buildPattern0().count + buildPattern1Empty().count
+            + buildInstrument1().count
+        let sampleHeader = secondInstrument + buildInstrument2().count - 40 - 256
+        data[sampleHeader] = 0xFF
+        data[sampleHeader + 1] = 0
+        data[sampleHeader + 2] = 0
+        data[sampleHeader + 3] = 0
+
+        XCTAssertThrowsError(try XMParser.parse(data: data)) { error in
+            guard case .corruptInstrument? = error as? XMParser.ParserError else {
+                return XCTFail("erwartet corruptInstrument, war \(error)")
+            }
         }
     }
 

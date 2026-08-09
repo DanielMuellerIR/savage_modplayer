@@ -419,6 +419,10 @@ final class MusicLibraryTests: XCTestCase {
 
         XCTAssertFalse(report.failures.isEmpty, "unlesbare Wurzel muss im Bericht stehen")
         XCTAssertEqual(report.removedFiles, 0)
+        XCTAssertFalse(report.archivesComplete,
+                       "unvollstaendiger Rescan darf die bekannte Archivliste nicht ersetzen")
+        XCTAssertNotNil(report.enumerationError,
+                        "der verschluckte Rescan-Fehler muss bis zum Aufrufer gelangen")
         XCTAssertNotNil(library.item(withRelativePath: "a.mod"),
                         "der bekannte Bestand darf nicht verschwinden")
     }

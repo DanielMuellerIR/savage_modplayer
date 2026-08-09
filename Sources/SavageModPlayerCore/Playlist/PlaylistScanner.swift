@@ -1,5 +1,24 @@
 import Foundation
 
+// Nur fuer die asynchrone stdout-Drainage des bsdtar-Vorabchecks. Dieser Lock
+// liegt auf dem Import-Worker, niemals im Audio-Renderblock.
+private final class LockedInt64: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int64 = 0
+
+    func add(_ increment: Int64) {
+        lock.lock()
+        value += increment
+        lock.unlock()
+    }
+
+    func load() -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 // Sammelt Mod-Dateien aus gedroppten URLs bzw. dem Start-Ordner ein und baut
 // daraus eine hierarchische Ordner-Struktur fuer die Playlist-Anzeige.
 //
@@ -16,6 +35,36 @@ import Foundation
 //   Quell-Ordner; aufgeraeumt wird das Temp-Verzeichnis von der App
 //   (Start + Beenden).
 public enum PlaylistScanner {
+
+    // Gemeinsame Restgrenzen fuer EINEN Archiv-Aufruf. Der LibraryImporter
+    // zieht daraus pro Rekursionsstufe das noch freie Session-Budget ab; so
+    // starten innere Archive nicht wieder mit frischen 2 GiB/50.000 Eintraegen.
+    public struct ArchiveUnpackLimits: Sendable {
+        public let maxUncompressedBytes: Int64
+        public let maxEntries: Int
+
+        public init(maxUncompressedBytes: Int64, maxEntries: Int) {
+            self.maxUncompressedBytes = maxUncompressedBytes
+            self.maxEntries = maxEntries
+        }
+
+        public static let `default` = ArchiveUnpackLimits(
+            maxUncompressedBytes: ZipArchiveReaderDefaultLimits.maxTotalUncompressedBytes,
+            maxEntries: ZipArchiveReaderDefaultLimits.maxEntryCount)
+    }
+
+    public struct ArchiveUnpackResult: Sendable {
+        public let unsupportedEntries: Int
+        public let totalUncompressedBytes: Int64
+        public let entryCount: Int
+    }
+
+    // Die ZipArchiveReader-Vorgaben muessen auch in Linux-Builds verfuegbar
+    // sein, wo Apples Compression-Modul (und damit der Reader-Typ) fehlt.
+    private enum ZipArchiveReaderDefaultLimits {
+        static let maxTotalUncompressedBytes: Int64 = 2 * 1024 * 1024 * 1024
+        static let maxEntryCount = 50_000
+    }
 
     // Eine gefundene Mod-Datei: Temp-Kopie + Original-Anzeigename + Ordner-Pfad
     // relativ zur Drop-/Scan-Wurzel (z.B. ["Chiptunes", "4mat"]).
@@ -180,13 +229,22 @@ public enum PlaylistScanner {
     public static func unpackArchive(
         _ archive: URL,
         into destination: URL,
+        limits: ArchiveUnpackLimits = .default,
         isCancelled: () -> Bool = { false }
-    ) throws -> Int {
+    ) throws -> ArchiveUnpackResult {
+        guard limits.maxUncompressedBytes > 0 else {
+            throw ArchiveError.archiveTooLarge
+        }
+        guard limits.maxEntries > 0 else {
+            throw ArchiveError.tooManyEntries
+        }
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true, attributes: nil)
         #if os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
-        return try unpackUsingZipReader(archive, into: destination, isCancelled: isCancelled)
+        return try unpackUsingZipReader(
+            archive, into: destination, limits: limits, isCancelled: isCancelled)
         #else
-        return try unpackUsingBsdtar(archive, into: destination, isCancelled: isCancelled)
+        return try unpackUsingBsdtar(
+            archive, into: destination, limits: limits, isCancelled: isCancelled)
         #endif
     }
 
@@ -198,6 +256,8 @@ public enum PlaylistScanner {
         case toolMissing
         case toolFailed(String, Int32)
         case cancelled
+        case archiveTooLarge
+        case tooManyEntries
 
         public var errorDescription: String? {
             switch self {
@@ -209,6 +269,10 @@ public enum PlaylistScanner {
                 return "Archiv nicht lesbar (bsdtar Exit \(status)): \(name)"
             case .cancelled:
                 return "Entpacken abgebrochen."
+            case .archiveTooLarge:
+                return "Die gemeinsame Obergrenze fuer entpackte Archivdaten wurde erreicht."
+            case .tooManyEntries:
+                return "Die gemeinsame Obergrenze fuer Archiveintraege wurde erreicht."
             }
         }
     }
@@ -219,8 +283,9 @@ public enum PlaylistScanner {
     private static func unpackUsingZipReader(
         _ archive: URL,
         into destination: URL,
+        limits: ArchiveUnpackLimits,
         isCancelled: () -> Bool
-    ) throws -> Int {
+    ) throws -> ArchiveUnpackResult {
         guard archive.pathExtension.lowercased() == "zip" else {
             throw ArchiveError.unsupportedFormat(archive.lastPathComponent)
         }
@@ -233,9 +298,19 @@ public enum PlaylistScanner {
             archive: archive,
             to: destination,
             shouldExtract: { isModFile($0) || isArchive($0) },
+            limits: ZipArchiveReader.Limits(
+                maxTotalUncompressedBytes: limits.maxUncompressedBytes,
+                maxEntryUncompressedBytes: min(
+                    limits.maxUncompressedBytes,
+                    ZipArchiveReader.Limits.default.maxEntryUncompressedBytes),
+                maxCompressionRatio: ZipArchiveReader.Limits.default.maxCompressionRatio,
+                maxEntryCount: limits.maxEntries),
             isCancelled: isCancelled
         )
-        return result.unsupportedEntries
+        return ArchiveUnpackResult(
+            unsupportedEntries: result.unsupportedEntries,
+            totalUncompressedBytes: result.totalUncompressedBytes,
+            entryCount: result.entryCount)
     }
     #else
     // bsdtar liegt auf macOS und den meisten Linux-Distributionen unter
@@ -243,10 +318,32 @@ public enum PlaylistScanner {
     private static func unpackUsingBsdtar(
         _ archive: URL,
         into destination: URL,
+        limits: ArchiveUnpackLimits,
         isCancelled: () -> Bool
-    ) throws -> Int {
+    ) throws -> ArchiveUnpackResult {
         guard let bsdtar = bsdtarURL else { throw ArchiveError.toolMissing }
         if isCancelled() { throw ArchiveError.cancelled }
+
+        // bsdtar selbst kennt kein Groessenlimit. Deshalb laeuft vor dem
+        // Schreiben eine streamende Probe: `-tf` zaehlt alle Archiveintraege,
+        // `-xOf` dekomprimiert regulaere Dateidaten nur nach stdout. Der
+        // Speicher bleibt blockweise konstant, und ein Limitfehler entsteht,
+        // bevor das Zielverzeichnis wachsen kann.
+        let entryCount = try countBsdtarOutput(
+            executable: bsdtar,
+            arguments: ["-t", "-f", archive.path],
+            countLines: true,
+            limit: Int64(limits.maxEntries),
+            archiveName: archive.lastPathComponent,
+            isCancelled: isCancelled)
+        let totalBytes = try countBsdtarOutput(
+            executable: bsdtar,
+            arguments: ["-x", "-O", "-f", archive.path],
+            countLines: false,
+            limit: limits.maxUncompressedBytes,
+            archiveName: archive.lastPathComponent,
+            isCancelled: isCancelled)
+
         let process = Process()
         process.executableURL = bsdtar
         process.arguments = ["-x", "-f", archive.path, "-C", destination.path]
@@ -272,7 +369,80 @@ public enum PlaylistScanner {
         guard process.terminationStatus == 0 else {
             throw ArchiveError.toolFailed(archive.lastPathComponent, process.terminationStatus)
         }
-        return 0
+        return ArchiveUnpackResult(
+            unsupportedEntries: 0,
+            totalUncompressedBytes: totalBytes,
+            entryCount: Int(entryCount))
+    }
+
+    // Zaehlt bsdtar-stdout ohne ihn vollstaendig in den Speicher zu laden.
+    // Der Lesekanal wird asynchron geleert, damit ein volles Pipe-Buffer den
+    // Kindprozess nicht blockiert; die Warteschleife kann ihn dadurch auch
+    // bei einer FIFO oder einem Nutzerabbruch sicher beenden.
+    private static func countBsdtarOutput(
+        executable: URL,
+        arguments: [String],
+        countLines: Bool,
+        limit: Int64,
+        archiveName: String,
+        isCancelled: () -> Bool
+    ) throws -> Int64 {
+        let process = Process()
+        let pipe = Pipe()
+        let observed = LockedInt64()
+        let outputFinished = DispatchSemaphore(value: 0)
+
+        process.executableURL = executable
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                outputFinished.signal()
+                return
+            }
+            let increment = countLines
+                ? data.reduce(into: Int64(0)) { count, byte in
+                    if byte == 0x0A { count += 1 }
+                }
+                : Int64(data.count)
+            observed.add(increment)
+        }
+
+        do {
+            try process.run()
+        } catch {
+            pipe.fileHandleForReading.readabilityHandler = nil
+            throw error
+        }
+        var exceeded = false
+        while process.isRunning {
+            if isCancelled() {
+                process.terminate()
+                process.waitUntilExit()
+                pipe.fileHandleForReading.readabilityHandler = nil
+                throw ArchiveError.cancelled
+            }
+            if observed.load() > limit {
+                exceeded = true
+                process.terminate()
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        process.waitUntilExit()
+        _ = outputFinished.wait(timeout: .now() + 2)
+        pipe.fileHandleForReading.readabilityHandler = nil
+
+        let count = observed.load()
+        if exceeded || count > limit {
+            throw countLines ? ArchiveError.tooManyEntries : ArchiveError.archiveTooLarge
+        }
+        guard process.terminationStatus == 0 else {
+            throw ArchiveError.toolFailed(archiveName, process.terminationStatus)
+        }
+        return count
     }
 
     // Vorhandenes System-bsdtar (libarchive), oder nil. Frueher lief der ganze

@@ -122,10 +122,10 @@ enum SequencerCore {
     // denselben Punkt zurueck.
     @inline(__always)
     private static func recordEndTransition(state: RealtimePlaybackState) {
-        guard state.endReachedFrame == .max else { return }
-        state.endReachedFrame = state.elapsedFrames
-        state.endReachedPosition = state.position
-        state.endReachedRow = state.rowIndex
+        state.publishEndTransition(
+            frame: state.elapsedFrames,
+            position: state.position,
+            row: state.rowIndex)
     }
 
     @inline(__always)
@@ -187,7 +187,6 @@ enum SequencerCore {
         // wird wie beim natuerlichen Wrap noch geladen; Offline-Renderer und UI
         // erhalten danach das einheitliche Endsignal.
         if followedBackwardJump {
-            state.endReached = true
             // Ziel der Endtransition festhalten: Die Anzeige-Uhr im Track-Loop
             // wird auf genau diesen Punkt zurueckgesetzt. Bei einem Bxx-Sprung
             // ist das nicht `restartPosition`, sondern das Sprungziel — und ein
@@ -198,7 +197,6 @@ enum SequencerCore {
         // Live/Offline werten das Signal aus. Die Probe behaelt es lediglich im
         // Zustand und laeuft wie bisher bis zum festen Frame-Limit weiter.
         if state.position >= mod.length {
-            state.endReached = true
             // Erst auf den Neustartpunkt setzen, dann festhalten — sonst
             // merkte sich die Uhr die noch nicht umgebrochene Position.
             state.position = max(0, min(mod.length - 1, state.restartPosition))

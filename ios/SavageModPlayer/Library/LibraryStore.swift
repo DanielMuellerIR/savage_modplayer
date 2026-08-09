@@ -335,12 +335,14 @@ final class LibraryStore: ObservableObject {
                     return ResetOutcome(
                         failures: report.failures,
                         remainingArchives: report.remainingArchives,
+                        archivesComplete: report.archivesComplete,
                         snapshot: LibrarySnapshot.make(from: library),
-                        errorMessage: nil)
+                        errorMessage: report.enumerationError)
                 } catch {
                     return ResetOutcome(
                         failures: [],
                         remainingArchives: [],
+                        archivesComplete: false,
                         snapshot: LibrarySnapshot.make(from: library),
                         errorMessage: LibraryStore.describe(error))
                 }
@@ -350,15 +352,32 @@ final class LibraryStore: ObservableObject {
             // Nach Teilfehlern bleiben Dateien real liegen; der Core hat den
             // Index dann aus dem Restbestand neu aufgebaut und meldet die
             // noch offenen Archive. Nur ein voller Erfolg endet leer.
-            self.pendingArchives = outcome.remainingArchives
-            if favoritesCleared.isSet { self.clearFavorites() }
-            if let first = outcome.failures.first {
-                self.errorMessage = first.reason
+            if outcome.archivesComplete {
+                self.pendingArchives = outcome.remainingArchives
             } else {
-                self.errorMessage = outcome.errorMessage ?? self.errorMessage
+                self.pendingArchives = Array(
+                    Set(self.pendingArchives).union(outcome.remainingArchives)
+                ).sorted()
             }
+            if favoritesCleared.isSet { self.clearFavorites() }
+            self.errorMessage = Self.resetErrorMessage(
+                failures: outcome.failures,
+                enumerationError: outcome.errorMessage,
+                previous: self.errorMessage)
             self.endOperation()
         }
+    }
+
+    // Reine Auswahlfunktion, damit die Fehlerprioritaet ohne absichtlich
+    // beschaedigte Simulator-Dateirechte regressionsgetestet werden kann.
+    // Ein unvollstaendiger Wiederaufbau ist fuer den naechsten Nutzer-Schritt
+    // entscheidend und gewinnt deshalb vor einem bereits bekannten Loeschfehler.
+    static func resetErrorMessage(
+        failures: [ImportFailure],
+        enumerationError: String?,
+        previous: String?
+    ) -> String? {
+        enumerationError ?? failures.first?.reason ?? previous
     }
 
     func clearLastReport() {
@@ -597,6 +616,7 @@ final class LibraryStore: ObservableObject {
     private struct ResetOutcome: Sendable {
         let failures: [ImportFailure]
         let remainingArchives: [String]
+        let archivesComplete: Bool
         let snapshot: LibrarySnapshot
         let errorMessage: String?
     }

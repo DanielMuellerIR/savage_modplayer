@@ -342,6 +342,152 @@ final class LibraryImporterTests: XCTestCase {
             atPath: rootURL.appendingPathComponent("Manuell/aussen.zip").path))
     }
 
+    // Das Bytebudget gilt ueber die ganze Rekursion. Beide Archive passen fuer
+    // sich allein; erst ihre SUMME muss den Import stoppen und die Finder-
+    // Quelle erhalten.
+    func testNestedArchivesShareOneUncompressedByteBudget() throws {
+        try XCTSkipIf(PlaylistScanner.bsdtarURL == nil, "bsdtar nicht installiert")
+
+        let innerDir = workDir.appendingPathComponent("Rohmaterial/Innen", isDirectory: true)
+        try Data(repeating: 0x31, count: 4_000).write(
+            to: try write(innerDir.appendingPathComponent("innen.mod"), marker: 0x31))
+        let outerDir = workDir.appendingPathComponent("Rohmaterial/Aussen", isDirectory: true)
+        try Data(repeating: 0x32, count: 4_000).write(
+            to: try write(outerDir.appendingPathComponent("direkt.mod"), marker: 0x32))
+        let inner = try makeZip(from: innerDir, named: "innen.zip", at: outerDir)
+        let outer = try makeZip(
+            from: outerDir, named: "aussen.zip",
+            at: rootURL.appendingPathComponent("Manuell", isDirectory: true))
+
+        let probeOuter = workDir.appendingPathComponent("Probe/Aussen", isDirectory: true)
+        let outerUsage = try PlaylistScanner.unpackArchive(outer, into: probeOuter)
+        let stagedInner = probeOuter
+            .appendingPathComponent(outerDir.lastPathComponent)
+            .appendingPathComponent(inner.lastPathComponent)
+        let innerUsage = try PlaylistScanner.unpackArchive(
+            stagedInner, into: workDir.appendingPathComponent("Probe/Innen", isDirectory: true))
+        let combined = outerUsage.totalUncompressedBytes + innerUsage.totalUncompressedBytes
+        XCTAssertGreaterThan(combined, max(
+            outerUsage.totalUncompressedBytes, innerUsage.totalUncompressedBytes))
+
+        let importer = LibraryImporter(
+            library: library,
+            archiveLimits: .init(
+                maxTotalUncompressedBytes: combined - 1,
+                maxEntries: 100,
+                maxArchives: 10))
+        let report = try importer.unpackPendingArchives()
+
+        XCTAssertFalse(report.failures.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outer.path),
+                      "Budgetfehler darf die letzte Archivkopie nicht loeschen")
+    }
+
+    func testNestedArchivesShareOneEntryBudget() throws {
+        try XCTSkipIf(PlaylistScanner.bsdtarURL == nil, "bsdtar nicht installiert")
+
+        let innerDir = workDir.appendingPathComponent("Rohmaterial/Innen", isDirectory: true)
+        try write(innerDir.appendingPathComponent("innen.mod"), marker: 0x33)
+        let outerDir = workDir.appendingPathComponent("Rohmaterial/Aussen", isDirectory: true)
+        try write(outerDir.appendingPathComponent("direkt.mod"), marker: 0x34)
+        let inner = try makeZip(from: innerDir, named: "innen.zip", at: outerDir)
+        let outer = try makeZip(
+            from: outerDir, named: "aussen.zip",
+            at: rootURL.appendingPathComponent("Manuell", isDirectory: true))
+
+        let probeOuter = workDir.appendingPathComponent("Probe/Aussen", isDirectory: true)
+        let outerUsage = try PlaylistScanner.unpackArchive(outer, into: probeOuter)
+        let stagedInner = probeOuter
+            .appendingPathComponent(outerDir.lastPathComponent)
+            .appendingPathComponent(inner.lastPathComponent)
+        let innerUsage = try PlaylistScanner.unpackArchive(
+            stagedInner, into: workDir.appendingPathComponent("Probe/Innen", isDirectory: true))
+        let combined = outerUsage.entryCount + innerUsage.entryCount
+
+        let importer = LibraryImporter(
+            library: library,
+            archiveLimits: .init(
+                maxTotalUncompressedBytes: 1_000_000,
+                maxEntries: combined - 1,
+                maxArchives: 10))
+        let report = try importer.unpackPendingArchives()
+
+        XCTAssertFalse(report.failures.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outer.path))
+    }
+
+    func testNestedArchivesShareOneArchiveCountBudget() throws {
+        try XCTSkipIf(PlaylistScanner.bsdtarURL == nil, "bsdtar nicht installiert")
+
+        let innerDir = workDir.appendingPathComponent("Rohmaterial/Innen", isDirectory: true)
+        try write(innerDir.appendingPathComponent("innen.mod"), marker: 0x35)
+        let outerDir = workDir.appendingPathComponent("Rohmaterial/Aussen", isDirectory: true)
+        _ = try makeZip(from: innerDir, named: "eins.zip", at: outerDir)
+        _ = try makeZip(from: innerDir, named: "zwei.zip", at: outerDir)
+        let outer = try makeZip(
+            from: outerDir, named: "aussen.zip",
+            at: rootURL.appendingPathComponent("Manuell", isDirectory: true))
+
+        let importer = LibraryImporter(
+            library: library,
+            archiveLimits: .init(
+                maxTotalUncompressedBytes: 1_000_000,
+                maxEntries: 100,
+                maxArchives: 2))
+        let report = try importer.unpackPendingArchives()
+
+        XCTAssertTrue(report.failures.contains { $0.reason.contains("verschachtelte Archive") })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outer.path))
+    }
+
+    // bsdtar legt Links an. Der Importer muss sie VOR Endungspruefung und
+    // Rekursion ablehnen; sonst koennte `inner.zip` auf eine externe Datei
+    // zeigen und deren Inhalt in die Bibliothek ziehen.
+    func testSymbolicLinkArchiveEntryIsRejectedWithoutFollowingIt() throws {
+        try XCTSkipIf(PlaylistScanner.bsdtarURL == nil, "bsdtar nicht installiert")
+
+        let externalDir = workDir.appendingPathComponent("Extern/Innen", isDirectory: true)
+        try write(externalDir.appendingPathComponent("extern.mod"), marker: 0x36)
+        let externalArchive = try makeZip(
+            from: externalDir, named: "extern.zip",
+            at: workDir.appendingPathComponent("Extern", isDirectory: true))
+
+        let outerDir = workDir.appendingPathComponent("Rohmaterial/Aussen", isDirectory: true)
+        try write(outerDir.appendingPathComponent("direkt.mod"), marker: 0x37)
+        try FileManager.default.createSymbolicLink(
+            at: outerDir.appendingPathComponent("inner.zip"),
+            withDestinationURL: externalArchive)
+        let outer = try makeZip(
+            from: outerDir, named: "aussen.zip",
+            at: rootURL.appendingPathComponent("Manuell", isDirectory: true))
+
+        let report = try LibraryImporter(library: library).unpackPendingArchives()
+
+        XCTAssertTrue(report.failures.contains { $0.reason.contains("Symbolischer Link") })
+        XCTAssertFalse(report.imported.contains { $0.hasSuffix("extern.mod") })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outer.path))
+    }
+
+    func testHiddenSupportedArchiveContentIsImportedCompletely() throws {
+        try XCTSkipIf(PlaylistScanner.bsdtarURL == nil, "bsdtar nicht installiert")
+
+        let packDir = workDir.appendingPathComponent("Rohmaterial/Versteckt", isDirectory: true)
+        try write(packDir.appendingPathComponent(".direkt.mod"), marker: 0x38)
+        let nestedDir = workDir.appendingPathComponent("Rohmaterial/Innen", isDirectory: true)
+        try write(nestedDir.appendingPathComponent("innen.xm"), marker: 0x39)
+        _ = try makeZip(from: nestedDir, named: ".innen.zip", at: packDir)
+        let outer = try makeZip(
+            from: packDir, named: "aussen.zip",
+            at: rootURL.appendingPathComponent("Manuell", isDirectory: true))
+
+        let report = try LibraryImporter(library: library).unpackPendingArchives()
+
+        XCTAssertTrue(report.failures.isEmpty, "unerwartete Fehler: \(report.failures)")
+        XCTAssertTrue(report.imported.contains { $0.hasSuffix("/.direkt.mod") })
+        XCTAssertTrue(report.imported.contains { $0.hasSuffix("/innen.xm") })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outer.path))
+    }
+
     // Ein kaputtes Archiv meldet einen lesbaren Grund und stoppt den Import nicht.
     func testBrokenArchiveIsReportedAndImportContinues() throws {
         try write(sourceDir.appendingPathComponent("kaputt.zip"), marker: 0x70)

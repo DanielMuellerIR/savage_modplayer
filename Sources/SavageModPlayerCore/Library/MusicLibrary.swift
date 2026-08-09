@@ -268,7 +268,11 @@ public final class MusicLibrary: @unchecked Sendable {
         // unvollstaendig.
         var enumerationError: String?
         let enumerator = fileManager.enumerator(
-            at: rootURL, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles],
+            // Unterstützte Dateien aus Archiven duerfen auch in versteckten
+            // Ordnern liegen. Der Importer uebernimmt sie vollstaendig; der
+            // spaetere Abgleich muss sie deshalb ebenfalls sehen, sonst
+            // verschwinden sie beim naechsten Start wieder aus dem Index.
+            at: rootURL, includingPropertiesForKeys: keys, options: [],
             errorHandler: { url, error in
                 if enumerationError == nil {
                     enumerationError =

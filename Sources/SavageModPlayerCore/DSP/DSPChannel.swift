@@ -50,6 +50,26 @@ public final class DSPChannel: Sendable {
         return Float(base * fineFactor)
     }
 
+    // Gemeinsame XM-Grenzregel fuer Song und Instrumentvorschau. FastTracker-
+    // Noten plus signed Sample-Transpose werden auf die 120 darstellbaren
+    // Halbtoene begrenzt, BEVOR lineare oder Amiga-Perioden entstehen.
+    public static func xmPeriod(
+        key: Int,
+        relativeNote: Int,
+        finetune: Int,
+        linearFrequency: Bool
+    ) -> Float {
+        let realNote = max(0, min(119, key + relativeNote))
+        let period = linearFrequency
+            ? xmLinearPeriod(realNote: realNote, finetune: finetune)
+            : xmAmigaPeriod(realNote: realNote, finetune: finetune)
+        // Der signed Finetune kann die Periode auch NACH dem Noten-Clamp aus
+        // dem gueltigen Renderbereich schieben (linear: 7744 bzw. 0,5 an den
+        // beiden Enden). Song und Vorschau muessen deshalb bereits hier
+        // denselben fertigen Wert erhalten, nicht erst spaeter im Song-Tick.
+        return max(1, min(linearFrequency ? 7680 : 32768, period))
+    }
+
     // IT linear: 64 Periodeneinheiten pro Halbton, C-5 liegt bei 3840. Die
     // Sample-C5Speed fließt erst bei der Frequenzberechnung ein.
     public static func itLinearPeriod(key: Int) -> Float {
@@ -648,16 +668,11 @@ public final class DSPChannel: Sendable {
             } else if xmMode {
                 // XM: Periode aus (Key + Sample-relativeNote) + Sample-Finetune;
                 // das Header-Flag wählt lineare oder Amiga-Perioden.
-                let realNote = playbackKey + (activeSample?.relativeNote ?? 0)
-                self.setPeriod = xmLinearMode
-                    ? DSPChannel.xmLinearPeriod(
-                        realNote: realNote,
-                        finetune: activeSample?.finetune ?? 0
-                    )
-                    : DSPChannel.xmAmigaPeriod(
-                        realNote: realNote,
-                        finetune: activeSample?.finetune ?? 0
-                    )
+                self.setPeriod = DSPChannel.xmPeriod(
+                    key: playbackKey,
+                    relativeNote: activeSample?.relativeNote ?? 0,
+                    finetune: activeSample?.finetune ?? 0,
+                    linearFrequency: xmLinearMode)
             } else {
                 // S3M: Period aus Halbton-Key + C2Spd des (neuen oder laufenden)
                 // Samples berechnen.

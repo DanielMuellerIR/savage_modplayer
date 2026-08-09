@@ -113,6 +113,11 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Zaehlt bei jedem erreichten Songende hoch. Die UI beobachtet das per
     // onChange und wertet dort den loopMode aus (stop / Song wiederholen / naechster).
     @Published public var songEndPulse: Int = 0
+    // Der MainActor kopiert das Loop-Ziel beim Konsumieren des atomaren Signals.
+    // Der SwiftUI-onChange-Hook laeuft erst danach; bis dahin kann der
+    // Audio-Thread schon die naechste Transition veroeffentlicht haben.
+    private var consumedEndPosition = -1
+    private var consumedEndRow = 0
     
     private var audioEngine: AVAudioEngine?
     private var sourceNode: AVAudioSourceNode?
@@ -175,6 +180,8 @@ public final class ModPlayerCoordinator: ObservableObject {
     // aussagekraeftiger.
     public func setMod(_ mod: Mod, fallbackName: String? = nil) {
         stop()
+        consumedEndPosition = -1
+        consumedEndRow = 0
         self.activeMod = mod
         // Header-Titel um Leerraum bereinigen; nur ein echter, nicht-leerer Titel
         // gewinnt, sonst der Dateiname-Fallback (und erst zuletzt der Default).
@@ -279,9 +286,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.tempoSlide = 0
         state.globalVolumeSlide = 0
         state.rowTickDelay = 0
-        state.endReached = false
-        state.endReachedFrame = .max
-        state.endReachedPosition = -1
+        state.resetEndTransition()
         state.pendingElapsedFrames = .max
         if let states = channels.first?.itVoicePool?.patternChannels {
             for patternState in states {
@@ -542,9 +547,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.tempoSlide = 0
         state.globalVolumeSlide = 0
         state.rowTickDelay = 0
-        state.endReached = false
-        state.endReachedFrame = .max
-        state.endReachedPosition = -1
+        state.resetEndTransition()
         state.pendingElapsedFrames = .max
         if let states = channels.first?.itVoicePool?.patternChannels {
             for patternState in states {
@@ -579,7 +582,11 @@ public final class ModPlayerCoordinator: ObservableObject {
         // wurde, gilt der Neustartpunkt aus dem Modulkopf.
         let position: Int
         let row: Int
-        if state.endReachedPosition >= 0 {
+        if consumedEndPosition >= 0 {
+            position = max(0, min(mod.length - 1, consumedEndPosition))
+            row = max(0, consumedEndRow)
+        } else if state.endReachedPosition >= 0 {
+            // Fallback fuer direkte Core-Aufrufer, die keinen VU-Poll fahren.
             position = max(0, min(mod.length - 1, state.endReachedPosition))
             row = max(0, state.endReachedRow)
         } else {
@@ -698,9 +705,9 @@ public final class ModPlayerCoordinator: ObservableObject {
         // Read progress directly from shared state (100% lock-free, allocation-free)
         if let state = self.playbackState {
             // Songende-Signal aus dem Renderblock auf den MainActor heben.
-            if state.endReached {
-                state.endReached = false
-                state.endReachedFrame = .max
+            if let transition = state.consumeEndTransition() {
+                consumedEndPosition = transition.position
+                consumedEndRow = transition.row
                 self.songEndPulse &+= 1
             }
 
@@ -719,8 +726,9 @@ public final class ModPlayerCoordinator: ObservableObject {
             // Liegt ein Uhr-Auftrag an (Track-Loop), zaehlt bereits dieser Wert.
             // Sonst zeigte die Anzeige bis zum naechsten Audio-Callback noch
             // einmal die alte, zu lange Spielzeit.
-            let elapsed = state.pendingElapsedFrames != .max
-                ? state.pendingElapsedFrames
+            let pendingElapsed = state.pendingElapsedFrames
+            let elapsed = pendingElapsed != .max
+                ? pendingElapsed
                 : state.elapsedFrames
             vis.elapsedTime = Double(elapsed) / sampleRate
 

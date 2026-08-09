@@ -1,4 +1,5 @@
 import XCTest
+import SavageModPlayerCore
 @testable import SavageModPlayer
 
 // Rauchtest fuers Projektgeruest: Wenn dieser Test laeuft, ist das App-Target
@@ -12,5 +13,15 @@ final class ProjectSkeletonTests: XCTestCase {
         // bewusst kein Farbschema.
         XCTAssertEqual(PlayerTheme.allCases.count, 3)
         XCTAssertNil(PlayerTheme.system.colorScheme)
+    }
+
+    @MainActor
+    func testIncompleteResetShowsRescanErrorBeforeExistingFailure() {
+        let message = LibraryStore.resetErrorMessage(
+            failures: [ImportFailure(path: "Bibliothek", reason: "Loeschen fehlgeschlagen")],
+            enumerationError: "Abgleich nach Teilfehler unvollstaendig",
+            previous: "Alter Fehler")
+
+        XCTAssertEqual(message, "Abgleich nach Teilfehler unvollstaendig")
     }
 }

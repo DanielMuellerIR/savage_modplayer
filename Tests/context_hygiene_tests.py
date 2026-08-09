@@ -57,6 +57,30 @@ def _hard_name_pattern():
                       re.IGNORECASE) if frags else None
 
 
+def _tracked_utf8_text_files():
+    """Alle getrackten Dateien, deren Inhalt strikt als UTF-8 lesbar ist.
+
+    Dateiendungen sind absichtlich kein Filter: Swift, JavaScript, HTML, JSON,
+    YAML und neue Textformate gehoeren automatisch zum Veroeffentlichungs-Gate.
+    Echte Binaerdateien werden ueber NUL-Bytes oder einen Decode-Fehler erkannt.
+    """
+    raw = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=ROOT,
+        check=True, capture_output=True).stdout
+    for encoded in raw.split(b"\0"):
+        if not encoded:
+            continue
+        relative = Path(os.fsdecode(encoded))
+        data = (ROOT / relative).read_bytes()
+        if b"\0" in data:
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        yield relative, text
+
+
 class ContextHygieneTests(unittest.TestCase):
     def test_unreadable_denylist_fails_instead_of_silently_skipping(self):
         """Gesetzte, aber unlesbare Denylist => Fehler, kein stilles Opt-out."""
@@ -124,9 +148,10 @@ class ContextHygieneTests(unittest.TestCase):
         dass `tasks/2026-07-05-linux-port/plan.md` nie geprueft wurde und deshalb
         zweimal den Kurznamen eines privaten Rechners veroeffentlicht hat.
 
-        Geprueft werden ausserdem Shell- und Python-Quellen: Ein interner
-        Hinweis wandert genauso leicht in einen Skriptkommentar wie in eine
-        Markdown-Datei, und beide werden mit veroeffentlicht.
+        Geprueft werden alle strikt als UTF-8 lesbaren getrackten Dateien: Ein
+        interner Hinweis wandert genauso leicht in Swift, JavaScript, HTML,
+        JSON oder CI-YAML wie in Markdown und wird in allen Faellen
+        mitveroeffentlicht.
 
         Zwei Pruefungen: private IPv4-Bereiche direkt hier, und private Namen
         gegen die `gate:`-Zeilen der Liste ausserhalb dieses Repos (siehe
@@ -137,10 +162,16 @@ class ContextHygieneTests(unittest.TestCase):
         Name steht ohnehin auf dem GitHub-Profil, und Beispiele oder Screenshots
         duerfen einen echten Desktop-Pfad zeigen.
         """
-        tracked = subprocess.run(
-            ["git", "ls-files", "*.md", "*.sh", "*.py"], cwd=ROOT,
-            check=True, capture_output=True, text=True).stdout.splitlines()
-        self.assertGreater(len(tracked), 5, "keine Text-Quellen gefunden")
+        tracked = list(_tracked_utf8_text_files())
+        paths = {path.as_posix() for path, _ in tracked}
+        self.assertGreater(len(tracked), 100, "keine vollstaendige Text-Inventur")
+        for representative in (
+            "Sources/SavageModPlayerCore/DSP/RenderEngine.swift",
+            "mod-player-worklet.js",
+            "savage-mod-player.html",
+            ".github/workflows/ci.yml",
+        ):
+            self.assertIn(representative, paths)
 
         # Private IPv4-Bereiche nach RFC 1918 plus der link-local-Bereich.
         # Dokumentationsadressen (192.0.2.x, 198.51.100.x, 203.0.113.x) und
@@ -150,9 +181,8 @@ class ContextHygieneTests(unittest.TestCase):
             r"\.\d{1,3}\.\d{1,3}\b")
 
         names = _hard_name_pattern()
-        for relative in tracked:
+        for relative, text in tracked:
             with self.subTest(path=relative):
-                text = (ROOT / relative).read_text(encoding="utf-8")
                 found = private_ip.search(text)
                 # assertFalse statt assertIsNone: assertIsNone druckt das
                 # Match-Objekt mit und damit den Fund im Klartext. Die Meldung

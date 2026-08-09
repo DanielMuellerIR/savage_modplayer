@@ -6,8 +6,10 @@
 #   SIMULATOR_NAME="iPhone 17" ios/scripts/run-tests.sh
 #   TEST_FILTER=SavageModPlayerTests/LibraryImportUITests ios/scripts/run-tests.sh
 #
-# Ohne SIMULATOR_NAME nimmt das Skript das erste verfuegbare iPhone der neuesten
-# installierten iOS-Laufzeit. Exit 0 = alle Tests gruen.
+# Ohne SIMULATOR_NAME nimmt das Skript das erste verfuegbare iPhone und spricht
+# es ueber seine eindeutige ID an. Ein Ziel nur per Name wuerde `xcodebuild`
+# implizit auf `OS:latest` festlegen und scheitert, wenn dieses Modell nur in
+# einer aelteren installierten Laufzeit existiert. Exit 0 = alle Tests gruen.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,11 +26,15 @@ mkdir -p "$(dirname "$LOG")"
 # die Diagnose mit Geraeteliste und Exit 2 unten waere unerreichbar.
 if [ -n "${SIMULATOR_NAME:-}" ]; then
     DEVICE_NAME="$SIMULATOR_NAME"
+    DESTINATION="platform=iOS Simulator,name=$DEVICE_NAME"
 else
-    DEVICE_NAME="$( (xcrun simctl list devices available \
-        | grep -oE '^ +iPhone [^(]+' \
-        | head -1 \
-        | sed 's/^ *//; s/ *$//') || true)"
+    DEVICE_LINE="$( (xcrun simctl list devices available \
+        | grep -m1 -E '^ +iPhone .+ \([0-9A-F-]{36}\) \((Booted|Shutdown)\)[[:space:]]*$') || true)"
+    DEVICE_NAME="$(printf '%s\n' "$DEVICE_LINE" \
+        | sed -E 's/^ +(.+) \([0-9A-F-]{36}\) \((Booted|Shutdown)\)[[:space:]]*$/\1/')"
+    DEVICE_ID="$(printf '%s\n' "$DEVICE_LINE" \
+        | sed -E 's/^ +.+ \(([0-9A-F-]{36})\) \((Booted|Shutdown)\)[[:space:]]*$/\1/')"
+    DESTINATION="platform=iOS Simulator,id=$DEVICE_ID"
 fi
 
 if [ -z "$DEVICE_NAME" ]; then
@@ -44,7 +50,7 @@ ARGS=(
     -project "$IOS_DIR/SavageModPlayer.xcodeproj"
     -scheme SavageModPlayer
     -configuration Debug
-    -destination "platform=iOS Simulator,name=$DEVICE_NAME"
+    -destination "$DESTINATION"
     -derivedDataPath "$DERIVED_DATA"
     CODE_SIGNING_ALLOWED=NO
 )

@@ -1,6 +1,6 @@
 # Aktiver Projekt-Backlog
 
-Stand: 2026-08-02 · Version 1.6.5.
+Stand: 2026-08-09 · Version 1.6.6.
 
 Diese Datei ist die einzige aktive Projektliste. Erledigte Chronik liegt in
 Release Notes, abgeschlossenen Tasks und `archive/`.

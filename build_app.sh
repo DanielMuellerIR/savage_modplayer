@@ -48,14 +48,22 @@ QL_MACOS_DIR="$QL_APPEX/Contents/MacOS"
 mkdir -p "$QL_MACOS_DIR"
 
 ARCH="$(uname -m)"
+QL_ATOMICS_OBJECT=".build/CSavageAtomics-quicklook.o"
+xcrun clang -O2 -std=c11 \
+    -target "$ARCH-apple-macos13.0" \
+    -I Sources/CSavageAtomics/include \
+    -c Sources/CSavageAtomics/CSavageAtomics.c \
+    -o "$QL_ATOMICS_OBJECT"
 swiftc -O -parse-as-library \
     -module-name "$QL_NAME" \
     -target "$ARCH-apple-macos13.0" \
     -application-extension \
+    -I Sources/CSavageAtomics/include \
     Sources/SavageModPlayerCore/PreviewCacheIdentity.swift \
     Sources/SavageModPlayerCore/Parser/*.swift \
     Sources/SavageModPlayerCore/DSP/*.swift \
     quicklook/PreviewProvider.swift \
+    "$QL_ATOMICS_OBJECT" \
     -Xlinker -e -Xlinker _NSExtensionMain \
     -o "$QL_MACOS_DIR/$QL_NAME"
 

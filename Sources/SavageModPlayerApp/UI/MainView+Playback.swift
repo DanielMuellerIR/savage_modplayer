@@ -75,7 +75,10 @@ extension MainView {
         case .none:
             coordinator.stop()
         case .track:
-            break // Engine wrappt bereits auf Position 0 und spielt weiter.
+            // Die Engine spielt am echten Endziel bereits weiter; nur Anzeige-
+            // und System-Spielzeit muessen auf denselben Punkt springen.
+            coordinator.resetElapsedToLoopStart()
+            updateNowPlayingInfo()
         case .playlist:
             nextTrack()
         }

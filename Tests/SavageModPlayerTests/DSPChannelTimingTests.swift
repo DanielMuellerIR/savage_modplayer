@@ -246,6 +246,72 @@ final class DSPChannelTimingTests: XCTestCase {
         XCTAssertEqual(ch.period, 3840, accuracy: 0.001)
     }
 
+    func testXMExtremeRelativeNotesUseSameClampedPeriodInSongAndPreview() {
+        for (key, relativeNote) in [(0, -128), (95, 127)] {
+            for linear in [true, false] {
+                let ch = DSPChannel(index: 1)
+                ch.xmMode = true
+                ch.xmLinearMode = linear
+                ch.periodMin = 1
+                ch.periodMax = linear ? 7680 : 32768
+                let sample = Sample(
+                    pcm: [0.1, 0.2], loopStart: 0, loopLength: 0,
+                    loopType: .none, volume: 64, finetune: 17,
+                    relativeNote: relativeNote)
+                let instrument = Instrument(index: 1, name: "XM", samples: [sample])
+
+                ch.playNote(
+                    Note(instrument: 1, period: 0, effectId: 0, effectData: 0, key: key),
+                    instruments: [nil, instrument])
+                let preview = RenderEngine.xmPreviewPeriod(
+                    sample: sample, targetNote: key, linearFrequency: linear)
+
+                XCTAssertEqual(
+                    ch.period, preview, accuracy: 0.001,
+                    "Song und Vorschau muessen dieselbe Randnote verwenden")
+                XCTAssertEqual(
+                    ch.period,
+                    DSPChannel.xmPeriod(
+                        key: key, relativeNote: relativeNote,
+                        finetune: sample.finetune, linearFrequency: linear),
+                    accuracy: 0.001)
+            }
+        }
+    }
+
+    // Auch der signed Finetune kann die lineare Periode NACH dem Noten-Clamp
+    // noch aus 1...7680 schieben. Song und Vorschau muessen bereits aus dem
+    // gemeinsamen Helfer denselben begrenzten Wert erhalten; ein spaeterer
+    // Clamp nur im Songpfad waere fuer die Vorschau zu spaet.
+    func testXMLinearBoundaryFinetunesClampSongAndPreviewPeriod() {
+        for (key, finetune, expected): (Int, Int, Float) in [
+            (0, -128, 7680),
+            (119, 127, 1)
+        ] {
+            let channel = DSPChannel(index: 1)
+            channel.xmMode = true
+            channel.xmLinearMode = true
+            channel.periodMin = 1
+            channel.periodMax = 7680
+            let sample = Sample(
+                pcm: [0.1, 0.2], loopStart: 0, loopLength: 0,
+                loopType: .none, volume: 64, finetune: finetune,
+                relativeNote: 0)
+            let instrument = Instrument(index: 1, name: "XM", samples: [sample])
+
+            channel.playNote(
+                Note(instrument: 1, period: 0, effectId: 0, effectData: 0, key: key),
+                instruments: [nil, instrument])
+            channel.performTick(tick: 0, sampleRate: sampleRate, clockRate: clockRate)
+            let preview = RenderEngine.xmPreviewPeriod(
+                sample: sample, targetNote: key, linearFrequency: true)
+
+            XCTAssertEqual(channel.currentPeriod, expected, accuracy: 0.001)
+            XCTAssertEqual(channel.period, expected, accuracy: 0.001)
+            XCTAssertEqual(preview, expected, accuracy: 0.001)
+        }
+    }
+
     /// Key-Off (Note 97 / Note.keyOff) setzt keyReleased und retriggert die Note
     /// nicht (Sample-Position/Periode unverändert). Ohne Volume-Hüllkurve stoppt der
     /// Ton nach FT2-Quirk sofort, MIT Hüllkurve läuft er (Fadeout) weiter.

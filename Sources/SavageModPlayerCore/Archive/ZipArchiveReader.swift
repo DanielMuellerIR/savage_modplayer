@@ -202,6 +202,10 @@ public enum ZipArchiveReader {
         public let unsupportedEntries: Int
         /// Summe der geschriebenen Bytes.
         public let totalUncompressedBytes: Int64
+        /// Zahl aller Eintraege im Central Directory, auch wenn der Vorfilter
+        /// sie nicht schreiben wollte. Das gemeinsame rekursive Importbudget
+        /// muss jede verschachtelte Inhaltsliste zaehlen.
+        public let entryCount: Int
     }
 
     // MARK: Konstanten
@@ -389,7 +393,8 @@ public enum ZipArchiveReader {
             extractedFiles: extractedFiles,
             skippedEntries: skippedEntries,
             unsupportedEntries: unsupportedEntries,
-            totalUncompressedBytes: totalBytes
+            totalUncompressedBytes: totalBytes,
+            entryCount: records.count
         )
     }
 

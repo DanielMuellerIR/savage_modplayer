@@ -29,19 +29,27 @@ public enum LibraryReset {
         public let removedDirectories: Int
         public let failures: [ImportFailure]
         // Nach Teilfehlern: Archive, die im verbliebenen Bestand liegen (aus
-        // dem Wiederaufbau-Rescan). Bei vollstaendigem Erfolg leer.
+        // dem Wiederaufbau-Rescan). Bei einem unvollstaendigen Scan ist das
+        // nur eine Teilmenge und muss beim Aufrufer mit dem bekannten Stand
+        // vereinigt werden.
         public let remainingArchives: [String]
+        public let archivesComplete: Bool
+        public let enumerationError: String?
 
         public init(
             removedFiles: Int,
             removedDirectories: Int,
             failures: [ImportFailure],
-            remainingArchives: [String] = []
+            remainingArchives: [String] = [],
+            archivesComplete: Bool = true,
+            enumerationError: String? = nil
         ) {
             self.removedFiles = removedFiles
             self.removedDirectories = removedDirectories
             self.failures = failures
             self.remainingArchives = remainingArchives
+            self.archivesComplete = archivesComplete
+            self.enumerationError = enumerationError
         }
     }
 
@@ -115,10 +123,30 @@ public enum LibraryReset {
         // vollstaendigen Durchlauf. Bei einem Teilscan bleiben die Eintraege
         // nicht besuchter Teilbaeume erhalten, statt still zu verschwinden.
         var remainingArchives: [String] = []
+        var archivesComplete = true
+        var rescanError: String?
         if rootFailures.isEmpty {
             try library.clearIndex(removeFile: options.removeIndex)
-        } else if let rescan = try? library.rescan() {
-            remainingArchives = rescan.archivesFound
+        } else {
+            do {
+                let rescan = try library.rescan()
+                remainingArchives = rescan.archivesFound
+                archivesComplete = rescan.isComplete
+                rescanError = rescan.enumerationError
+                if let rescanError {
+                    rootFailures.append(ImportFailure(
+                        path: library.rootURL.lastPathComponent,
+                        reason: rescanError))
+                }
+            } catch {
+                archivesComplete = false
+                let message = "Bibliotheks-Abgleich nach dem Teilfehler scheiterte: "
+                    + (error as NSError).localizedDescription
+                rescanError = message
+                rootFailures.append(ImportFailure(
+                    path: library.rootURL.lastPathComponent,
+                    reason: message))
+            }
         }
 
         if options.clearFavorites {
@@ -129,7 +157,9 @@ public enum LibraryReset {
             removedFiles: removedFiles,
             removedDirectories: removedDirectories,
             failures: rootFailures + temporaryFailures,
-            remainingArchives: remainingArchives)
+            remainingArchives: remainingArchives,
+            archivesComplete: archivesComplete,
+            enumerationError: rescanError)
     }
 
     // Zaehlt, was hinter einem Eintrag steckt: eine Datei zaehlt als eine
