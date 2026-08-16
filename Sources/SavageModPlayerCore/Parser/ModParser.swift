@@ -4,6 +4,8 @@ public class ModParser {
         case fileTooSmall
         case invalidSignature(String)
         case emptySong
+        case truncatedPatternData
+        case truncatedSampleData
 
         public var errorDescription: String? {
             switch self {
@@ -14,6 +16,10 @@ public class ModParser {
                 return "Unbekannte oder nicht unterstützte Signatur '\(clean)' (kein unterstütztes Amiga-MOD)."
             case .emptySong:
                 return "Leeres Modul: keine Songpositionen (Länge 0)."
+            case .truncatedPatternData:
+                return "Abgeschnittenes MOD: deklarierte Pattern-Daten fehlen."
+            case .truncatedSampleData:
+                return "Abgeschnittenes MOD: deklarierte Sample-Daten fehlen."
             }
         }
     }
@@ -29,6 +35,10 @@ public class ModParser {
         // gespeicherte Pattern und müssen halbiert werden.
         let flt8: Bool
     }
+
+    // Feste Groesse der Playlist im Dateikopf. Gilt fuer beide Varianten:
+    // 31 Instrumente (ab Offset 952) und Ur-Soundtracker (ab Offset 472).
+    private static let orderTableEntries = 128
 
     // Signatur (Offset 1080) auf Layout mappen. Kein Treffer und keine
     // plausible 15-Sample-Struktur -> invalidSignature.
@@ -111,14 +121,20 @@ public class ModParser {
         // Die deklarierten Patterns müssen vollständig in der Datei liegen.
         let patternsEnd = 600 + (maxPattern + 1) * 1024
         guard data.count >= patternsEnd else { return false }
-        // Und die Gesamtstruktur darf die Dateigröße nicht absurd verfehlen
-        // (kleiner Puffer für Trailer-Bytes mancher Ripper).
+        // Die Heuristik darf bis zu 1024 fehlende Samplebytes noch als
+        // Soundtracker-Struktur ERKENNEN. `parse` erzwingt danach trotzdem das
+        // vollständige deklarierte Samplefenster und lehnt eine Kürzung ab.
         guard patternsEnd + totalSampleBytes <= data.count + 1024 else { return false }
 
         return true
     }
 
     public static func parse(data: Data) throws -> Mod {
+        // Dieser Parser adressiert Dateioffsets direkt (data[470], data[952],
+        // subdata(in: 0..<20)) und setzt damit startIndex 0 voraus. Ein Slice
+        // aus einem groesseren Puffer haette einen anderen startIndex — siehe
+        // `Data.rebasedToZero`. Ohne Slice kostet das nichts.
+        let data = data.rebasedToZero
         guard data.count >= 600 else {
             throw ParserError.fileTooSmall
         }
@@ -151,8 +167,14 @@ public class ModParser {
         guard songLength > 0 else {
             throw ParserError.emptySong
         }
+        // Die Playlist ist physisch 128 Byte lang — dahinter stehen bei den
+        // 31-Instrument-Varianten die Signatur und danach die Pattern-Daten.
+        // Ein Laengenbyte ueber 128 ist deshalb keine laengere Playlist, sondern
+        // ein defekter Wert: ohne diese Grenze landeten die Signaturbytes
+        // "M.K." als Playlist-Eintraege 77, 46, 75, 46 im Song und der Player
+        // spielte hinter dem echten Ende Patterns, die es nie gab.
         var patternTable = [Int]()
-        for i in 0..<songLength {
+        for i in 0..<min(songLength, orderTableEntries) {
             if orderOffset + i < data.count {
                 let raw = Int(data[orderOffset + i])
                 // FLT8: Eintrag zeigt auf das erste 4-Kanal-Pattern des Paares.
@@ -161,14 +183,40 @@ public class ModParser {
                 break
             }
         }
+        guard !patternTable.isEmpty else { throw ParserError.emptySong }
 
         let maxPatternIndex = patternTable.max() ?? 0
         // Anzahl physisch gespeicherter Patterns (FLT8: 2 pro logischem Pattern).
         let storedPatternCount = layout.flt8 ? (maxPatternIndex + 1) * 2 : maxPatternIndex + 1
 
+        // Pattern- und Samplefenster sind deklarierte Binärstruktur. Fehlende
+        // Bytes dürfen nicht als leere Noten oder gekürzte PCM-Daten erfunden
+        // werden; Trailerbytes hinter dem vollständigen Fenster bleiben erlaubt.
+        let (patternByteCount, patternSizeOverflow) = storedPatternCount
+            .multipliedReportingOverflow(by: storedPatternBytes)
+        let (patternsEnd, patternEndOverflow) = patternsOffset
+            .addingReportingOverflow(patternByteCount)
+        guard !patternSizeOverflow, !patternEndOverflow, patternsEnd <= data.count else {
+            throw ParserError.truncatedPatternData
+        }
+
+        var totalSampleBytes = 0
+        for i in 0..<layout.instrumentCount {
+            let offset = 20 + i * 30
+            let length = 2 * Int(UInt16(data[offset + 22]) << 8 | UInt16(data[offset + 23]))
+            let (nextTotal, sampleSizeOverflow) = totalSampleBytes.addingReportingOverflow(length)
+            guard !sampleSizeOverflow else { throw ParserError.truncatedSampleData }
+            totalSampleBytes = nextTotal
+        }
+        let (samplesEnd, sampleEndOverflow) = patternsEnd
+            .addingReportingOverflow(totalSampleBytes)
+        guard !sampleEndOverflow, samplesEnd <= data.count else {
+            throw ParserError.truncatedSampleData
+        }
+
         // 3. Instrumenten-Header parsen (Offset 20, je 30 Bytes)
         var instruments: [Instrument?] = [nil] // Index 0 ist leer
-        var sampleStartOffset = patternsOffset + storedPatternCount * storedPatternBytes
+        var sampleStartOffset = patternsEnd
 
         for i in 0..<layout.instrumentCount {
             let offset = 20 + i * 30
@@ -194,9 +242,8 @@ public class ModParser {
             let repeatLength = 2 * Int(UInt16(header[28]) << 8 | UInt16(header[29]))
 
             // Sample-Bytes extrahieren
-            let start = min(sampleStartOffset, data.count)
-            let end = min(start + instLength, data.count)
-            let sampleData = data.subdata(in: start..<end)
+            let end = sampleStartOffset + instLength
+            let sampleData = data.subdata(in: sampleStartOffset..<end)
 
             // Convert to signed Int8
             let bytes = sampleData.map { Int8(bitPattern: $0) }
@@ -226,23 +273,13 @@ public class ModParser {
         var storedPatterns = [Pattern]()
         for p in 0..<storedPatternCount {
             let patternOffset = patternsOffset + p * storedPatternBytes
-            if patternOffset >= data.count { break }
-
             var rows = [Row]()
             for r in 0..<64 {
                 let rowOffset = patternOffset + r * storedChannels * 4
-                if rowOffset >= data.count { break }
 
                 var notes = [Note]()
                 for c in 0..<storedChannels {
                     let noteOffset = rowOffset + c * 4
-                    if noteOffset + 3 >= data.count {
-                        // Fehlende Kanäle bleiben leer, damit jede Zeile
-                        // weiterhin exakt storedChannels Noten besitzt.
-                        notes.append(Note(instrument: 0, period: 0, effectId: 0, effectData: 0))
-                        continue
-                    }
-
                     let b0 = data[noteOffset]
                     let b1 = data[noteOffset + 1]
                     let b2 = data[noteOffset + 2]
@@ -272,18 +309,7 @@ public class ModParser {
                     ))
                 }
 
-                // Jede Zeile muss für UI und DSP exakt storedChannels Noten liefern.
-                while notes.count < storedChannels {
-                    notes.append(Note(instrument: 0, period: 0, effectId: 0, effectData: 0))
-                }
                 rows.append(Row(notes: notes))
-            }
-
-            // Jedes Pattern muss exakt 64 Zeilen liefern.
-            while rows.count < 64 {
-                rows.append(Row(notes: (0..<storedChannels).map { _ in
-                    Note(instrument: 0, period: 0, effectId: 0, effectData: 0)
-                }))
             }
             storedPatterns.append(Pattern(rows: rows))
         }
@@ -294,14 +320,10 @@ public class ModParser {
             var k = 0
             while k * 2 < storedPatterns.count {
                 let first = storedPatterns[k * 2]
-                // Fehlt die zweite Hälfte (abgeschnittene Datei), bleiben Kanal 5-8 leer.
-                let second = k * 2 + 1 < storedPatterns.count ? storedPatterns[k * 2 + 1] : nil
+                let second = storedPatterns[k * 2 + 1]
                 var rows = [Row]()
                 for r in 0..<64 {
-                    let tail = second?.rows[r].notes ?? (0..<4).map { _ in
-                        Note(instrument: 0, period: 0, effectId: 0, effectData: 0)
-                    }
-                    rows.append(Row(notes: first.rows[r].notes + tail))
+                    rows.append(Row(notes: first.rows[r].notes + second.rows[r].notes))
                 }
                 patterns.append(Pattern(rows: rows))
                 k += 1
@@ -312,7 +334,11 @@ public class ModParser {
 
         return Mod(
             name: name,
-            length: songLength,
+            // Wie bei S3M, XM und IT die tatsaechliche Playlistlaenge, nicht das
+            // rohe Kopfbyte: sonst koennte `length` groesser als patternTable
+            // sein, und der Sequencer wuerde fuer die ueberzaehligen Positionen
+            // das letzte Pattern wiederholen statt den Song zu beenden.
+            length: patternTable.count,
             patternTable: patternTable,
             instruments: instruments,
             patterns: patterns,

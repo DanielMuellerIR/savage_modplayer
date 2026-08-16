@@ -27,6 +27,15 @@ public final class RealtimePlaybackState: Sendable {
         let row: Int
     }
 
+    struct SeekSnapshot: Sendable {
+        let position: Int
+        let row: Int
+        let ticksPerRow: Int
+        let bpm: Int
+        let globalVolume: Int
+        let elapsedFrames: UInt64
+    }
+
     // Der neutrale Vorstart steht direkt vor Zeile 0 der ersten Position. Ein
     // festes rowIndex=63 funktionierte nur zufaellig mit klassischen
     // 64-Zeilen-Patterns und spielte bei OpenMPT-Patterns ab 65 Zeilen erst den
@@ -72,6 +81,14 @@ public final class RealtimePlaybackState: Sendable {
     
     // Elapsed frames for timing calculation
     nonisolated(unsafe) public var elapsedFrames: UInt64 = 0
+    // Der Audio-Thread veröffentlicht am Ende jedes Renderblocks einen
+    // atomaren Stand für UI und Sperrbildschirm. `elapsedFrames` selbst bleibt
+    // im Live-Betrieb alleiniger Besitz des Renderblocks; Offline-Helfer nutzen
+    // ihren jeweils privaten Zustand weiterhin synchron.
+    private let publishedElapsedFramesStorage = LockFreeAtomicUInt64(0)
+    public var publishedElapsedFrames: UInt64 {
+        publishedElapsedFramesStorage.loadAcquire()
+    }
     // Auftrag an den Renderblock, `elapsedFrames` neu zu setzen; `.max` heisst
     // "kein Auftrag". Waehrend der Wiedergabe erhoeht ausschliesslich der
     // Renderblock den Zaehler (`+= 1` pro Frame). Schriebe der Hauptthread den
@@ -89,6 +106,17 @@ public final class RealtimePlaybackState: Sendable {
     // (Frueher mit dem Callback-lokalen frame & 127 indiziert — bei Buffern < 128
     // Frames blieb das Ende des Scopes stehen und es ruckelte zwischen Callbacks.)
     nonisolated(unsafe) public var masterWaveWriteIndex: Int = 0
+
+    // Seek-Auftrag als lockfreier Zwei-Feld-Snapshot. `seekSequenceStorage` ist
+    // waehrend des Schreibens ungerade und danach gerade. Der Audio-Thread
+    // akzeptiert die Nutzdaten nur, wenn zwei Acquire-Lesevorgaenge dieselbe
+    // gerade Sequenz sehen. So koennen schnelle Slider-Bewegungen alte Auftraege
+    // ueberschreiben, aber nie Position aus Auftrag A mit Uhrwert aus Auftrag B
+    // mischen. Alle Speicher werden beim State-Aufbau alloziert, nie im Callback.
+    private let seekSequenceStorage = LockFreeAtomicUInt64(0)
+    private let seekTargetStorage = LockFreeAtomicUInt64(0)
+    private let seekElapsedFramesStorage = LockFreeAtomicUInt64(0)
+    nonisolated(unsafe) private var appliedSeekSequence: UInt64 = 0
     // Wird im Renderblock gesetzt, wenn der Song hinter die letzte Position laeuft
     // (Wrap auf 0). Der MainActor-Poller liest das Flag und meldet das Songende,
     // damit die UI den loopMode (none/track/playlist) auswerten kann.
@@ -122,6 +150,57 @@ public final class RealtimePlaybackState: Sendable {
     @inline(__always)
     func takePendingElapsedFrames() -> UInt64 {
         pendingElapsedFramesStorage.exchangeAcquiringAndReleasing(.max)
+    }
+
+    func requestSeek(
+        position: Int,
+        row: Int,
+        ticksPerRow: Int,
+        bpm: Int,
+        globalVolume: Int,
+        elapsedFrames: UInt64
+    ) {
+        let packed = UInt64(max(0, min(Int(UInt16.max), position)))
+            | (UInt64(max(0, min(Int(UInt16.max), row))) << 16)
+            | (UInt64(max(1, min(Int(UInt8.max), ticksPerRow))) << 32)
+            | (UInt64(max(1, min(Int(UInt16.max), bpm))) << 40)
+            | (UInt64(max(0, min(Int(UInt8.max), globalVolume))) << 56)
+
+        let current = seekSequenceStorage.loadRelaxed()
+        let writingSequence = (current &+ 1) | 1
+        _ = seekSequenceStorage.exchangeAcquiringAndReleasing(writingSequence)
+        LockFreeAtomicUInt64.sequentiallyConsistentFence()
+        seekTargetStorage.storeRelaxed(packed)
+        seekElapsedFramesStorage.storeRelaxed(elapsedFrames)
+        seekSequenceStorage.storeRelease(writingSequence &+ 1)
+    }
+
+    @inline(__always)
+    func takePendingSeek() -> SeekSnapshot? {
+        let firstSequence = seekSequenceStorage.loadAcquire()
+        guard firstSequence != 0,
+              firstSequence & 1 == 0,
+              firstSequence != appliedSeekSequence else { return nil }
+
+        let packed = seekTargetStorage.loadRelaxed()
+        let elapsed = seekElapsedFramesStorage.loadRelaxed()
+        LockFreeAtomicUInt64.sequentiallyConsistentFence()
+        let secondSequence = seekSequenceStorage.loadAcquire()
+        guard firstSequence == secondSequence else { return nil }
+
+        appliedSeekSequence = firstSequence
+        return SeekSnapshot(
+            position: Int(packed & 0xFFFF),
+            row: Int((packed >> 16) & 0xFFFF),
+            ticksPerRow: Int((packed >> 32) & 0xFF),
+            bpm: Int((packed >> 40) & 0xFFFF),
+            globalVolume: Int((packed >> 56) & 0xFF),
+            elapsedFrames: elapsed)
+    }
+
+    @inline(__always)
+    func publishElapsedFrames() {
+        publishedElapsedFramesStorage.storeRelease(elapsedFrames)
     }
 
     // Vollstaendigen Ziel-Snapshot schreiben, danach erst das Signal mit
@@ -381,6 +460,10 @@ public enum RenderEngine {
                 }
             }
         }
+        // Wie in SequencerCore.patternRowCount: ohne Playlist gibt es keine
+        // Position, die sich rekonstruieren liesse — und patternTable[0] waere
+        // ein Zugriff ausserhalb der Grenzen.
+        guard !mod.patternTable.isEmpty else { return (speed, bpm, gvol) }
         let lastPos = max(0, min(mod.length - 1, toPosition))
         for p in 0...lastPos {
             let posIndex = max(0, min(mod.patternTable.count - 1, p))
@@ -434,6 +517,13 @@ public enum RenderEngine {
             let safeFrameCount = Int(frameCount)
 
             for frame in 0..<safeFrameCount {
+                if let request = state.takePendingSeek() {
+                    Self.applySeek(
+                        request,
+                        state: state,
+                        channels: dspChannels,
+                        sampleRate: sampleRate)
+                }
                 SequencerCore.advanceIfNeeded(
                     state: state,
                     channels: dspChannels,
@@ -569,7 +659,56 @@ public enum RenderEngine {
                 state.masterWaveWriteIndex = (state.masterWaveWriteIndex + 1) & 127
                 waveBuffer.masterWavesPointer[state.masterWaveWriteIndex] = (limitedL + limitedR) * 0.5
             }
+            state.publishElapsedFrames()
         }
+    }
+
+    // Wendet den kompletten Seek dort an, wo alle betroffenen Felder ohnehin
+    // leben: am Anfang eines Audioframes im Renderblock. Kein Lock, keine
+    // Allokation und kein Zugriff des Oberflaechen-Threads auf halb geaenderten
+    // Sequencer- oder Kanalzustand.
+    @inline(__always)
+    private nonisolated static func applySeek(
+        _ request: RealtimePlaybackState.SeekSnapshot,
+        state: RealtimePlaybackState,
+        channels: [DSPChannel],
+        sampleRate: Double
+    ) {
+        state.position = request.position
+        state.rowIndex = request.row - 1
+        state.ticksPerRow = request.ticksPerRow
+        state.bpm = request.bpm
+        state.tick = request.ticksPerRow - 1
+        state.globalVolume = Float(request.globalVolume)
+
+        state.positionJump = -1
+        state.patternBreak = -1
+        state.patternLoopRow = -1
+        state.patternDelay = 0
+        state.patternDelayCounter = 0
+        state.patternDelaySeen = false
+        state.tempoSlide = 0
+        state.globalVolumeSlide = 0
+        state.rowTickDelay = 0
+
+        for channel in channels {
+            channel.patternLoopCount = -1
+            channel.patternLoopStartRow = 0
+            channel.playing = false
+        }
+        if let patternStates = channels.first?.itVoicePool?.patternChannels {
+            for patternState in patternStates {
+                patternState.patternLoopCount = -1
+                patternState.patternLoopStartRow = 0
+                patternState.channelVolumeSlide = 0
+                patternState.panningSlide = 0
+            }
+        }
+
+        state.resetEndTransition()
+        _ = state.takePendingElapsedFrames()
+        SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
+        state.elapsedFrames = request.elapsedFrames
     }
 
     // IT-Samplevorschau in derselben Stimmung wie die Song-Engine. C-5 spielt
@@ -757,6 +896,23 @@ public enum RenderEngine {
         let frames = Double(cumulativeRows(mod, upTo: position, row: row) * max(1, ticksPerRow))
             * max(0, outputsPerTick)
         return frames.isFinite && frames > 0 ? UInt64(frames) : 0
+    }
+
+    // Ein Endsignal entsteht exakt an `transitionFrame`; bis der MainActor es
+    // beim naechsten 30-/5-Hz-Poll verarbeitet, hat der Renderblock bereits
+    // weitere Frames am Loop-Ziel gespielt. Diese Strecke gehoert auf den
+    // statischen Loop-Start, sonst hinkt die sichtbare Uhr bei jedem Durchlauf
+    // um ein Poll-Intervall hinterher.
+    nonisolated static func elapsedFramesAfterLoopTransition(
+        loopStartFrames: UInt64,
+        transitionFrame: UInt64,
+        renderedFrame: UInt64
+    ) -> UInt64 {
+        let distance = renderedFrame >= transitionFrame
+            ? renderedFrame - transitionFrame
+            : 0
+        let (result, overflow) = loopStartFrames.addingReportingOverflow(distance)
+        return overflow ? .max : result
     }
 
     // Globaler Zeilen-Index: Summe der ECHTEN Pattern-Reihen aller Positionen vor

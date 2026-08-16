@@ -44,4 +44,9 @@ final class LockFreeAtomicUInt64: @unchecked Sendable {
     func exchangeAcquiringAndReleasing(_ value: UInt64) -> UInt64 {
         savage_atomic_u64_exchange_acq_rel(storage, value)
     }
+
+    @inline(__always)
+    static func sequentiallyConsistentFence() {
+        savage_atomic_thread_fence_seq_cst()
+    }
 }

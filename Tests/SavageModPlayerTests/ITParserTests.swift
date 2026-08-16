@@ -366,4 +366,32 @@ final class ITParserTests: XCTestCase {
             data[data.startIndex + offset + byte] = UInt8(truncatingIfNeeded: value >> (byte * 8))
         }
     }
+
+    // Der eigene Reader des IT-Parsers rechnet relativ zu data.startIndex und
+    // vertruege einen Slice. ITOpenMPTExtensionParser, an den er weiterreicht,
+    // adressiert seine Chunks dagegen absolut — bei einem Slice aus einem
+    // groesseren Puffer beendete das den Prozess, sobald der startIndex ueber
+    // den Chunk-Offsets lag. Der oeffentliche Einstieg muss jeden Slice genauso
+    // lesen wie den Originalpuffer.
+    func testParsingIsIndependentOfDataStartIndex() throws {
+        let original = makeIT(patterns: [nil])
+        let reference = try ITParser.parse(data: original)
+
+        for padding in [100, 2000] {
+            var padded = Data(repeating: 0xAA, count: padding)
+            padded.append(original)
+            let slice = padded[padding...]
+            XCTAssertEqual(slice.startIndex, padding)
+
+            let parsed = try ITParser.parse(data: slice)
+            XCTAssertEqual(parsed.format, reference.format, "Abstand \(padding)")
+            XCTAssertEqual(parsed.length, reference.length, "Abstand \(padding)")
+            XCTAssertEqual(parsed.patternTable, reference.patternTable, "Abstand \(padding)")
+            XCTAssertEqual(parsed.channelCount, reference.channelCount, "Abstand \(padding)")
+            XCTAssertEqual(parsed.patterns.count, reference.patterns.count, "Abstand \(padding)")
+
+            // Und ueber den Dispatch, den App, CLI und Quick Look benutzen.
+            XCTAssertEqual(try ModuleLoader.parse(data: slice).length, reference.length)
+        }
+    }
 }

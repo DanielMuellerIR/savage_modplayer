@@ -80,7 +80,7 @@ final class MultiFormatTests: XCTestCase {
 
     func testSoundtracker15Heuristic() throws {
         // Ur-Soundtracker: 15 Instrumente, KEINE Signatur, Patterns ab 600.
-        var data = Data(repeating: 0, count: 600 + 1024)
+        var data = Data(repeating: 0, count: 600 + 1024 + 4)
         data.replaceSubrange(0..<9, with: Data("OLDSCHOOL".utf8))
         // Instrument 1: Laenge 2 Words (4 Bytes), Volume 64, Loop 2 Words
         data[42] = 0x00; data[43] = 0x02
@@ -100,6 +100,18 @@ final class MultiFormatTests: XCTestCase {
         XCTAssertEqual(mod.instruments[1]?.primarySample?.volume, 64)
         XCTAssertEqual(mod.patterns[0].rows[0].notes[0].period, 428)
         XCTAssertEqual(mod.patterns[0].rows[0].notes[0].instrument, 1)
+    }
+
+    func testSoundtracker15RejectsTruncatedSampleData() {
+        // Die Struktur ist eindeutig ein 15-Sample-Soundtracker-Modul, aber
+        // Instrument 1 deklariert vier Bytes hinter dem vollstaendigen Pattern,
+        // die am Dateiende fehlen.
+        var data = Data(repeating: 0, count: 600 + 1024)
+        data[42] = 0x00; data[43] = 0x02
+        data[45] = 64
+        data[470] = 1
+
+        XCTAssertThrowsError(try ModParser.parse(data: data))
     }
 
     func testGarbageWithoutSignatureStillRejected() {
@@ -227,6 +239,74 @@ final class MultiFormatTests: XCTestCase {
         let empty = mod.patterns[0].rows[3].notes[0]
         XCTAssertNil(empty.effectPresent)
         XCTAssertFalse(empty.hasEffect)
+    }
+
+    func testS3MOrderListStopsAtFirstEndMarker() throws {
+        var data = makeS3M()
+        // Drei Orders brauchen einen um ein Byte verschobenen Instrument- und
+        // Pattern-Parapointer. Der dritte Eintrag liegt bewusst hinter 255.
+        data[0x20] = 3
+        data[0x65] = data[0x64]
+        data[0x64] = data[0x63]
+        data[0x63] = data[0x62]
+        data[0x62] = 0
+        data[0x60] = 0
+        data[0x61] = 255
+        data[0x62] = 0
+
+        let mod = try S3MParser.parse(data: data)
+
+        XCTAssertEqual(mod.patternTable, [0])
+        XCTAssertEqual(mod.length, 1)
+    }
+
+    func testS3MJumpBeyondEndMarkerMapsToSongEnd() throws {
+        var data = makeS3M()
+        data[0x20] = 3
+        data[0x65] = data[0x64]
+        data[0x64] = data[0x63]
+        data[0x63] = data[0x62]
+        data[0x62] = 0
+        data[0x60] = 0
+        data[0x61] = 255
+        data[0x62] = 0
+        // Row 0: B02. Raw-Order 2 liegt hinter dem Endmarker und muss auf den
+        // Endzustand (Index patternTable.count), nicht auf Songanfang zeigen.
+        data[0xD6] = 0x02
+        data[0xD7] = 0x02
+
+        let mod = try S3MParser.parse(data: data)
+        let jump = mod.patterns[0].rows[0].notes[0]
+        XCTAssertEqual(jump.effectId, 0x0B)
+        XCTAssertEqual(jump.effectData, mod.length)
+    }
+
+    func testS3MJumpBeyondDeclaredOrdersMapsToSongEnd() throws {
+        var data = makeS3M()
+        // Das Minimalmodul deklariert genau eine Order. B02 liegt auch ohne
+        // expliziten 255-Marker ausserhalb und darf nicht zu Position 0 werden.
+        data[0xD6] = 0x02
+        data[0xD7] = 0x02
+
+        let mod = try S3MParser.parse(data: data)
+        let jump = mod.patterns[0].rows[0].notes[0]
+        XCTAssertEqual(jump.effectId, 0x0B)
+        XCTAssertEqual(jump.effectData, mod.length)
+    }
+
+    func testS3MRejectsTruncatedSampleData() {
+        var data = makeS3M()
+        data.removeLast()
+
+        XCTAssertThrowsError(try S3MParser.parse(data: data))
+    }
+
+    func testS3MStereoSampleRequiresBothDeclaredChannels() {
+        var data = makeS3M()
+        data[0x8F] = 0x02       // Stereo, 8 Bit: 4 Frames brauchen 8 Bytes
+        data.append(contentsOf: [0, 0, 0]) // insgesamt nur 7 Samplebytes
+
+        XCTAssertThrowsError(try S3MParser.parse(data: data))
     }
 
     func testS3MRejectsOversizedHeaderTablesBeforeAllocating() {
@@ -691,5 +771,39 @@ final class MultiFormatTests: XCTestCase {
         let wav = try ModuleRenderer.renderWavData(mod: mod, maxDurationSeconds: 1.0)
         XCTAssertGreaterThan(wav.count, 44)
         XCTAssertEqual(String(decoding: wav.prefix(4), as: UTF8.self), "RIFF")
+    }
+
+    // Ein `Data` aus einem groesseren Puffer behaelt dessen Indizes: sein
+    // startIndex ist dann nicht 0. ModParser und S3MParser adressierten
+    // Dateioffsets absolut und lasen aus so einem Slice die falschen Bytes —
+    // sobald der startIndex ueber ihren festen Offsets lag (etwa 1200 > 952),
+    // beendete der Zugriff sogar den Prozess. Der oeffentliche Einstieg
+    // ModuleLoader.parse muss jeden Slice genauso lesen wie den Originalpuffer.
+    func testParsingIsIndependentOfDataStartIndex() throws {
+        let cases: [(String, Data)] = [
+            ("MOD", makeMultichannelMod(signature: "M.K.", channels: 4)),
+            ("S3M", makeS3M())
+        ]
+
+        for (label, original) in cases {
+            let reference = try ModuleLoader.parse(data: original)
+
+            // Zwei Abstaende: einer unterhalb, einer oberhalb der festen
+            // Offsets der beiden Parser.
+            for padding in [100, 1200] {
+                var padded = Data(repeating: 0xAA, count: padding)
+                padded.append(original)
+                let slice = padded[padding...]
+                XCTAssertEqual(slice.startIndex, padding)
+
+                let parsed = try ModuleLoader.parse(data: slice)
+                XCTAssertEqual(parsed.format, reference.format, "\(label), Abstand \(padding)")
+                XCTAssertEqual(parsed.name, reference.name, "\(label), Abstand \(padding)")
+                XCTAssertEqual(parsed.length, reference.length, "\(label), Abstand \(padding)")
+                XCTAssertEqual(parsed.patternTable, reference.patternTable, "\(label), Abstand \(padding)")
+                XCTAssertEqual(parsed.channelCount, reference.channelCount, "\(label), Abstand \(padding)")
+                XCTAssertEqual(parsed.patterns.count, reference.patterns.count, "\(label), Abstand \(padding)")
+            }
+        }
     }
 }

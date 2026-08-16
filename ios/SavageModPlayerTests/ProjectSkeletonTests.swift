@@ -24,4 +24,24 @@ final class ProjectSkeletonTests: XCTestCase {
 
         XCTAssertEqual(message, "Abgleich nach Teilfehler unvollstaendig")
     }
+
+    @MainActor
+    func testIncompleteScanKeepsKnownAndAddsNewArchives() {
+        XCTAssertEqual(
+            LibraryStore.reconciledArchives(
+                previous: ["Alt/b.zip"],
+                discovered: ["Neu/a.zip"],
+                scanIsComplete: false),
+            ["Alt/b.zip", "Neu/a.zip"])
+    }
+
+    @MainActor
+    func testCompleteScanReplacesKnownArchives() {
+        XCTAssertEqual(
+            LibraryStore.reconciledArchives(
+                previous: ["Alt.zip"],
+                discovered: ["Neu.zip"],
+                scanIsComplete: true),
+            ["Neu.zip"])
+    }
 }

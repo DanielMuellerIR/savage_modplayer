@@ -324,6 +324,48 @@ final class ZipArchiveReaderTests: XCTestCase {
         XCTAssertFalse(fileExists("readme.txt"), "gefilterte Einträge dürfen gar nicht erst entpackt werden")
     }
 
+    func testPrefilterCannotHideSymbolicLinkEntry() throws {
+        let archive = try writeArchive([
+            ZipItem(
+                name: "link.txt",
+                payload: Data("/etc/passwd".utf8),
+                method: 0,
+                externalAttributes: 0xA1FF_0000)
+        ])
+
+        let error = zipError {
+            try ZipArchiveReader.extract(
+                archive: archive,
+                to: destination,
+                shouldExtract: PlaylistScanner.isModFile)
+        }
+
+        guard case .some(.symbolicLinkEntry) = error else {
+            return XCTFail("symbolicLinkEntry erwartet, war: \(String(describing: error))")
+        }
+    }
+
+    func testPrefilterCannotHideEncryptedEntry() throws {
+        let archive = try writeArchive([
+            ZipItem(
+                name: "secret.txt",
+                payload: Data("geheim".utf8),
+                method: 0,
+                flags: 0x0001)
+        ])
+
+        let error = zipError {
+            try ZipArchiveReader.extract(
+                archive: archive,
+                to: destination,
+                shouldExtract: PlaylistScanner.isModFile)
+        }
+
+        guard case .some(.encryptedEntry) = error else {
+            return XCTFail("encryptedEntry erwartet, war: \(String(describing: error))")
+        }
+    }
+
     func testDataDescriptorEntryUsesCentralDirectorySizes() throws {
         // Flag-Bit 3: der Local File Header enthaelt nur Nullen, die echten
         // Werte stehen im Central Directory (und hinter den Daten).
@@ -477,6 +519,38 @@ final class ZipArchiveReaderTests: XCTestCase {
             return XCTFail("symbolicLinkEntry erwartet, war: \(String(describing: error))")
         }
         XCTAssertFalse(fileExists("link.mod"))
+    }
+
+    // Dasselbe Archiv, nur von einem Darwin-Packer geschrieben: ZIP APPNOTE
+    // 4.4.2.2 kennt neben 3 (Unix) auch 19 (OS X/Darwin) als System, das einen
+    // Unix-Dateimodus in den oberen 16 Bit der externen Attribute ablegt. Wurde
+    // nur die 3 geprueft, galt so ein Eintrag als normale Datei und landete mit
+    // dem Linkziel als Inhalt auf der Platte, statt abgelehnt zu werden.
+    func testDarwinMadeSymbolicLinkEntryIsRejected() throws {
+        let archive = try writeArchive([
+            ZipItem(
+                name: "link.mod",
+                payload: Data("/etc/passwd".utf8),
+                method: 0,
+                externalAttributes: 0xA1FF_0000,
+                versionMadeBy: 0x1314   // 0x13 = 19 = OS X (Darwin)
+            )
+        ])
+
+        let error = zipError {
+            try ZipArchiveReader.extract(archive: archive, to: destination, shouldExtract: acceptAll)
+        }
+
+        guard case .some(.symbolicLinkEntry) = error else {
+            return XCTFail("symbolicLinkEntry erwartet, war: \(String(describing: error))")
+        }
+        XCTAssertFalse(fileExists("link.mod"))
+
+        // Auch die reine Inhaltsliste darf so einen Eintrag nicht als
+        // unterstuetzt melden.
+        let entries = try ZipArchiveReader.inspect(archive: archive)
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertFalse(try XCTUnwrap(entries.first).isSupported)
     }
 
     // MARK: - Zip-Bomben

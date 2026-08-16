@@ -15,5 +15,6 @@ uint64_t savage_atomic_u64_load_acquire(const SavageAtomicUInt64 *atomic_value);
 void savage_atomic_u64_store_relaxed(SavageAtomicUInt64 *atomic_value, uint64_t value);
 void savage_atomic_u64_store_release(SavageAtomicUInt64 *atomic_value, uint64_t value);
 uint64_t savage_atomic_u64_exchange_acq_rel(SavageAtomicUInt64 *atomic_value, uint64_t value);
+void savage_atomic_thread_fence_seq_cst(void);
 
 #endif

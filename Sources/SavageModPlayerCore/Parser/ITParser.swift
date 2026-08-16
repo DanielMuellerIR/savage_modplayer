@@ -123,6 +123,13 @@ public enum ITParser {
     }
 
     public static func parse(data: Data) throws -> Mod {
+        // Der eigene Reader rechnet relativ zu data.startIndex und vertruege
+        // einen Slice — ITOpenMPTExtensionParser, an den hier weitergereicht
+        // wird, adressiert seine Chunks dagegen absolut. Bei einem Slice aus
+        // einem groesseren Puffer beendete das den Prozess. Deshalb wird die
+        // Eingabe wie in ModParser und S3MParser einmal normalisiert; ohne
+        // Slice kostet das nichts (siehe Data.rebasedToZero).
+        let data = data.rebasedToZero
         guard data.count >= headerSize else { throw ParserError.fileTooSmall }
         guard canParse(data: data) else { throw ParserError.invalidSignature }
         let reader = Reader(data)

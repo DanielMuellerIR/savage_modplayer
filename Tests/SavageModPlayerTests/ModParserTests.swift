@@ -318,6 +318,56 @@ final class ModParserTests: XCTestCase {
         // Multichannel-Module geparst — die Akzeptanz-Tests dafuer liegen in
         // MultiFormatTests.swift.
     }
+
+    func testDeclaredPatternWindowMustBeComplete() {
+        var data = Data(repeating: 0, count: 1084 + 1023)
+        data.replaceSubrange(1080..<1084, with: Data("M.K.".utf8))
+        data[950] = 1
+        data[952] = 0
+
+        XCTAssertThrowsError(try ModParser.parse(data: data))
+    }
+
+    func testDeclaredSampleWindowMustBeComplete() {
+        // Pattern 0 ist vollstaendig. Instrument 1 deklariert vier PCM-Bytes,
+        // von denen nur drei in der Datei stehen.
+        var data = Data(repeating: 0, count: 1084 + 1024 + 3)
+        data.replaceSubrange(1080..<1084, with: Data("M.K.".utf8))
+        data[42] = 0x00
+        data[43] = 0x02
+        data[950] = 1
+        data[952] = 0
+
+        XCTAssertThrowsError(try ModParser.parse(data: data))
+    }
+
+    // Die Playlist im Dateikopf ist physisch 128 Byte lang; dahinter stehen die
+    // Signatur und die Pattern-Daten. Ein Laengenbyte darueber ist ein defekter
+    // Wert und keine laengere Playlist: ohne Begrenzung landeten die
+    // Signaturbytes "M.K." als Eintraege 77, 46, 75, 46 im Song, und `length`
+    // wurde groesser als die Playlist selbst — der Sequencer haette fuer die
+    // ueberzaehligen Positionen das letzte Pattern wiederholt, statt zu enden.
+    func testSongLengthIsBoundedToTheOrderTable() throws {
+        var data = Data(repeating: 0, count: 1084 + 1024)
+        data.replaceSubrange(1080..<1084, with: Data("M.K.".utf8))
+        data[950] = 200        // mehr als die 128 Eintraege der Playlist
+        data[952] = 0          // Order 0 -> Pattern 0
+
+        let mod = try ModParser.parse(data: data)
+        XCTAssertEqual(mod.patternTable.count, 128)
+        XCTAssertEqual(mod.length, mod.patternTable.count,
+                       "length und Playlist duerfen nie auseinanderlaufen")
+        XCTAssertFalse(mod.patternTable.contains(77),
+                       "Signaturbyte 'M' darf nicht als Playlist-Eintrag erscheinen")
+        XCTAssertFalse(mod.patternTable.contains(75),
+                       "Signaturbyte 'K' darf nicht als Playlist-Eintrag erscheinen")
+
+        // Der Normalfall bleibt unveraendert.
+        data[950] = 4
+        let normal = try ModParser.parse(data: data)
+        XCTAssertEqual(normal.length, 4)
+        XCTAssertEqual(normal.patternTable.count, 4)
+    }
     
     // Braucht die AVAudioEngine-gebundene Live-Klasse — entfällt unter Linux.
 #if canImport(AVFoundation) && canImport(Combine)
@@ -397,7 +447,7 @@ final class ModParserTests: XCTestCase {
     }
     
     func testOneShotSentinelNotLooped() throws {
-        var data = Data(repeating: 0, count: 2108)
+        var data = Data(repeating: 0, count: 2108 + 20)
         data.replaceSubrange(1080..<1084, with: Data("M.K.".utf8))
         data[950] = 1
         data[952] = 0

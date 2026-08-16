@@ -780,6 +780,19 @@ public struct Mod: Sendable, Codable {
     public let playbackSemantics: PlaybackSemantics?
     public let itProperties: ITModuleProperties?
 
+    // Tatsaechlich im Song belegte Kanalindizes. IT kann zwischen benutzten
+    // Kanaelen reservierte Luecken enthalten; die UI blendet diese aus, behaelt
+    // aber die Originalindizes fuer Beschriftung, Mute/Solo und Scope-Daten.
+    //
+    // Einmal im Initializer berechnet statt bei jedem Zugriff: Der Wert haengt
+    // nur von den unveraenderlichen Patterns ab, die SwiftUI-Bodies fragen ihn
+    // aber mehrfach je Auswertung ab (MainView+CompactLayout allein viermal).
+    // Ein Durchlauf ueber alle Noten eines grossen IT-Moduls (100 Patterns,
+    // 64 Zeilen, 64 Kanaele) kostete gemessen 0,32 ms im Release- und 42 ms im
+    // Debug-Build — bei ~20 Zeilenwechseln je Sekunde also spuerbare Last auf
+    // dem Hauptthread fuer einen Wert, der sich nie aendert.
+    public let usedChannelIndices: [Int]
+
     public var globalVolumeScale: GlobalVolumeScale {
         format == .it ? .impulseTracker128 : .tracker64
     }
@@ -795,23 +808,6 @@ public struct Mod: Sendable, Codable {
         // einzig sinnvolle Information.
         let used = usedChannelIndices
         return used.isEmpty ? channelCount : used.count
-    }
-
-    // Tatsaechlich im Song belegte Kanalindizes. IT kann zwischen benutzten
-    // Kanaelen reservierte Luecken enthalten; die UI blendet diese aus, behaelt
-    // aber die Originalindizes fuer Beschriftung, Mute/Solo und Scope-Daten.
-    public var usedChannelIndices: [Int] {
-        var usedChannels = Set<Int>()
-
-        for patternIndex in patternTable where patterns.indices.contains(patternIndex) {
-            for row in patterns[patternIndex].rows {
-                for (channel, note) in row.notes.enumerated() where noteUsesChannel(note) {
-                    usedChannels.insert(channel)
-                }
-            }
-        }
-
-        return usedChannels.sorted()
     }
 
     public var displayChannelIndices: [Int] {
@@ -852,13 +848,33 @@ public struct Mod: Sendable, Codable {
         instruments.indices.dropFirst().filter { previewSelection(instrumentIndex: $0) != nil }
     }
 
-    private func noteUsesChannel(_ note: Note) -> Bool {
+    private static func noteUsesChannel(_ note: Note) -> Bool {
         note.instrument != 0
             || note.period != 0
             || note.key != -1
             || note.volume != -1
             || note.volCmd != 0
             || note.hasEffect
+    }
+
+    // Der eine Durchlauf, dessen Ergebnis `usedChannelIndices` festhaelt. Nur die
+    // Patterns, die in der Playlist wirklich vorkommen, zaehlen — ein Pattern
+    // ohne Eintrag in patternTable wird nie gespielt.
+    private static func scanUsedChannelIndices(
+        patternTable: [Int],
+        patterns: [Pattern]
+    ) -> [Int] {
+        var usedChannels = Set<Int>()
+
+        for patternIndex in patternTable where patterns.indices.contains(patternIndex) {
+            for row in patterns[patternIndex].rows {
+                for (channel, note) in row.notes.enumerated() where noteUsesChannel(note) {
+                    usedChannels.insert(channel)
+                }
+            }
+        }
+
+        return usedChannels.sorted()
     }
 
     // Sichtbare, nicht-fatale Einschränkungen. Der Parser behält das spielbare
@@ -940,6 +956,10 @@ public struct Mod: Sendable, Codable {
             linearFrequency: linearFrequency
         )
         self.itProperties = itProperties
+        self.usedChannelIndices = Self.scanUsedChannelIndices(
+            patternTable: patternTable,
+            patterns: patterns
+        )
     }
 
     private static func inferredSemantics(

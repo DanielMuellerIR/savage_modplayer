@@ -44,6 +44,30 @@ public extension Color {
     }
 }
 
+/// Farbstufen der LED-Pegelanzeigen.
+///
+/// Es gibt zwei VU-Darstellungen: den einzelnen `VUMeterView` und die Kanalspalten
+/// in `ChannelScopesCanvas`. Beide hatten dieselben vier Schwellen samt Farben
+/// eigenstaendig ausgeschrieben. Wer die Stufen einmal nachzieht, haette sonst
+/// zwei Anzeigen mit unterschiedlicher Optik nebeneinander — deshalb stehen sie
+/// hier an einer Stelle, wie schon `Color.accent(_:)` fuer den Akzentton.
+enum VUPalette {
+    /// Farbe eines aktiven Segments. `threshold` ist die Untergrenze des
+    /// Segments in 0...1.
+    static func led(_ threshold: Float, _ theme: PlayerTheme) -> Color {
+        if threshold > 0.85 { return .red }
+        if threshold > 0.65 { return .orange }
+        // Light: kraeftiger Blau-Akzent; Dark: helles Glow-Cyan.
+        if threshold > 0.4 { return theme == .workbench ? .lightAccent : .spaceAccentGlow }
+        return theme == .workbench ? Color.lightAccent.opacity(0.65) : .spaceAccent
+    }
+
+    /// Farbe eines noch nicht erreichten Segments.
+    static func inactive(_ theme: PlayerTheme) -> Color {
+        theme == .workbench ? Color.black.opacity(0.07) : Color.white.opacity(0.04)
+    }
+}
+
 public struct PremiumHoverButtonStyle: ButtonStyle {
     let theme: PlayerTheme
     

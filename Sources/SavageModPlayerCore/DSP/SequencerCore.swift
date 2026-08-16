@@ -3,6 +3,26 @@
 // nur bereits vorhandene Zustands-, Kanal- und Modulwerte uebergeben.
 enum SequencerCore {
 
+    @inline(__always)
+    static func outputsPerTick(
+        tempoMode: ITTempoMode,
+        bpm: Int,
+        ticksPerRow: Int,
+        rowsPerBeat: Int,
+        sampleRate: Double
+    ) -> Double {
+        let tempo = Double(max(1, bpm))
+        switch tempoMode {
+        case .classic:
+            return sampleRate * 60.0 / (tempo * 24.0)
+        case .alternative:
+            return sampleRate / tempo
+        case .modern:
+            return sampleRate * 60.0
+                / (tempo * Double(max(1, ticksPerRow)) * Double(max(1, rowsPerBeat)))
+        }
+    }
+
     // OpenMPT-Timingformeln: Classic = 2,5/BPM Sekunden pro Tick,
     // Alternative = 1/BPM und Modern = 60/(BPM*Speed*RowsPerBeat).
     @inline(__always)
@@ -10,16 +30,12 @@ enum SequencerCore {
         state: RealtimePlaybackState,
         sampleRate: Double
     ) {
-        let tempo = Double(max(1, state.bpm))
-        switch state.tempoMode {
-        case .classic:
-            state.outputsPerTick = sampleRate * 60.0 / (tempo * 24.0)
-        case .alternative:
-            state.outputsPerTick = sampleRate / tempo
-        case .modern:
-            state.outputsPerTick = sampleRate * 60.0
-                / (tempo * Double(max(1, state.ticksPerRow)) * Double(max(1, state.rowsPerBeat)))
-        }
+        state.outputsPerTick = outputsPerTick(
+            tempoMode: state.tempoMode,
+            bpm: state.bpm,
+            ticksPerRow: state.ticksPerRow,
+            rowsPerBeat: state.rowsPerBeat,
+            sampleRate: sampleRate)
     }
 
     // Prueft pro Audio-Frame zuerst die Tick-Grenze. Wenn ein Tick faellig ist,
@@ -130,6 +146,13 @@ enum SequencerCore {
 
     @inline(__always)
     static func patternRowCount(_ mod: Mod, at position: Int) -> Int {
+        // Ohne diesen Guard klemmt `min(count - 1, position)` bei leerer
+        // Playlist auf -1, `max(0, -1)` macht daraus 0 — und der Zugriff auf
+        // patternTable[0] beendet den Prozess. Die vier Parser lehnen leere
+        // Playlists ab (ParserError.emptySong), aber `Mod` ist oeffentlich und
+        // laesst sich ohne Playlist bauen. SequencerTraceSnapshot faengt
+        // denselben Fall bereits ab; hier fehlte er.
+        guard !mod.patternTable.isEmpty else { return 64 }
         let positionIndex = max(0, min(mod.patternTable.count - 1, position))
         let patternIndex = mod.patternTable[positionIndex]
         guard patternIndex >= 0 && patternIndex < mod.patterns.count else { return 64 }
@@ -203,6 +226,7 @@ enum SequencerCore {
             recordEndTransition(state: state)
         }
 
+        guard !mod.patternTable.isEmpty else { return }
         let positionIndex = max(0, min(mod.patternTable.count - 1, state.position))
         let patternIndex = mod.patternTable[positionIndex]
         guard patternIndex >= 0 && patternIndex < mod.patterns.count else { return }

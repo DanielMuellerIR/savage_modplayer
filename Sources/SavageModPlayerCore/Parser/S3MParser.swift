@@ -20,6 +20,7 @@ public class S3MParser {
         case unsupportedDimensions(String)
         case resourceLimit(String)
         case corruptPattern(String)
+        case truncatedSample(Int)
 
         public var errorDescription: String? {
             switch self {
@@ -37,6 +38,8 @@ public class S3MParser {
                 return "S3M-Modul überschreitet das sichere Ressourcenlimit: \(detail)."
             case .corruptPattern(let detail):
                 return "Beschädigtes S3M-Pattern: \(detail)."
+            case .truncatedSample(let instrument):
+                return "Abgeschnittenes S3M-Sample in Instrument \(instrument)."
             }
         }
     }
@@ -52,10 +55,16 @@ public class S3MParser {
     // Schneller Vorab-Check für den Format-Dispatch (ModuleLoader).
     public static func canParse(data: Data) -> Bool {
         guard data.count >= 0x60 else { return false }
-        return data[0x2C] == 0x53 && data[0x2D] == 0x43 && data[0x2E] == 0x52 && data[0x2F] == 0x4D // "SCRM"
+        let base = data.startIndex
+        return data[base + 0x2C] == 0x53 && data[base + 0x2D] == 0x43
+            && data[base + 0x2E] == 0x52 && data[base + 0x2F] == 0x4D // "SCRM"
     }
 
     public static func parse(data: Data) throws -> Mod {
+        // Wie ModParser adressiert dieser Parser Dateioffsets direkt (func byte
+        // liest data[o], subdata(in: 0..<28)) und setzt damit startIndex 0
+        // voraus — siehe `Data.rebasedToZero`. Ohne Slice kostet das nichts.
+        let data = data.rebasedToZero
         guard data.count >= 0x60 else { throw ParserError.fileTooSmall }
         guard canParse(data: data) else { throw ParserError.invalidSignature }
 
@@ -118,28 +127,35 @@ public class S3MParser {
         guard channelCount > 0 else { throw ParserError.noChannels }
 
         // ---- Order-Liste ----
-        // 254 (++) = Skip-Marker, 255 (--) = Ende. Beide werden entfernt;
+        // 254 (++) = Skip-Marker, 255 (--) = Ende. Skip-Marker werden entfernt,
+        // beim ersten Endmarker ist die Liste wirklich zu Ende;
         // damit Bxx (Position Jump) weiter stimmt, merken wir uns pro
         // Original-Index den Ziel-Index in der gefilterten Liste.
         var patternTable = [Int]()
-        var rawIsMarker = [Bool](repeating: false, count: ordNum)
+        var rawIsSkip = [Bool](repeating: false, count: ordNum)
+        var effectiveOrderCount = ordNum
         for i in 0..<ordNum {
             let v = byte(0x60 + i)
-            if v >= 254 {
-                rawIsMarker[i] = true
+            if v == 255 {
+                effectiveOrderCount = i
+                break
+            } else if v == 254 {
+                rawIsSkip[i] = true
             } else {
                 patternTable.append(v)
             }
         }
         guard !patternTable.isEmpty else { throw ParserError.emptySong }
 
-        // orderMap[original] = Index in patternTable; Marker zeigen auf den
-        // nächsten echten Eintrag (ST3 spielt dort weiter).
-        var orderMap = [Int](repeating: 0, count: max(1, ordNum))
+        // orderMap[original] = Index in patternTable; Skip-Marker zeigen auf
+        // den nächsten echten Eintrag. Der Endmarker, der Rest dahinter und
+        // Sprungziele ausserhalb der Order-Liste zeigen auf `length`: Der
+        // Sequencer behandelt das als Songende statt als Sprung zu Position 0.
+        var orderMap = [Int](repeating: patternTable.count, count: max(1, ordNum))
         var filtered = 0
-        for i in 0..<ordNum {
-            orderMap[i] = min(filtered, patternTable.count - 1)
-            if !rawIsMarker[i] { filtered += 1 }
+        for i in 0..<effectiveOrderCount {
+            orderMap[i] = min(filtered, patternTable.count)
+            if !rawIsSkip[i] { filtered += 1 }
         }
 
         // ---- Parapointer ----
@@ -190,7 +206,7 @@ public class S3MParser {
 
             let memseg = (byte(off + 0x0D) << 16) | word(off + 0x0E)
             let sampleOffset = memseg * 16
-            var length = dword(off + 0x10)
+            let length = dword(off + 0x10)
             var loopStart = dword(off + 0x14)
             var loopEnd = dword(off + 0x18)
             let volume = min(64, byte(off + 0x1C))
@@ -200,11 +216,18 @@ public class S3MParser {
 
             let is16Bit = (flags & 4) != 0
             let bytesPerSample = is16Bit ? 2 : 1
-            // Nur so viele Samples übernehmen, wie wirklich in der Datei liegen.
-            if sampleOffset < data.count {
-                length = min(length, (data.count - sampleOffset) / bytesPerSample)
-            } else {
-                length = 0
+            let channelCount = (flags & 2) != 0 ? 2 : 1
+            let (bytesPerFrame, frameSizeOverflow) = bytesPerSample
+                .multipliedReportingOverflow(by: channelCount)
+            let (sampleByteCount, sampleSizeOverflow) = length
+                .multipliedReportingOverflow(by: bytesPerFrame)
+            let (sampleEnd, sampleEndOverflow) = sampleOffset
+                .addingReportingOverflow(sampleByteCount)
+            guard length == 0 || (
+                    !frameSizeOverflow && !sampleSizeOverflow && !sampleEndOverflow
+                    && sampleOffset >= 0 && sampleEnd <= data.count
+                  ) else {
+                throw ParserError.truncatedSample(i + 1)
             }
 
             let (newTotalPCMFrames, pcmOverflow) = totalPCMFrames.addingReportingOverflow(length)
@@ -330,7 +353,11 @@ public class S3MParser {
                     default: key = (noteByte >> 4) * 12 + (noteByte & 0x0F)
                     }
 
-                    let (effectId, effectData) = translateEffect(cmd: cmd, info: info, orderMap: orderMap)
+                    let (effectId, effectData) = translateEffect(
+                        cmd: cmd,
+                        info: info,
+                        orderMap: orderMap,
+                        songEnd: patternTable.count)
 
                     grid[row][target] = Note(
                         instrument: instByte,
@@ -377,12 +404,17 @@ public class S3MParser {
     // S3M-Buchstaben-Effekt (cmd 1 = A, 2 = B, …) auf interne Effekt-IDs
     // übersetzen. Nicht abbildbare/exotische Effekte werden zu (0, 0) = kein
     // Effekt.
-    private static func translateEffect(cmd: Int, info: Int, orderMap: [Int]) -> (Int, Int) {
+    private static func translateEffect(
+        cmd: Int,
+        info: Int,
+        orderMap: [Int],
+        songEnd: Int
+    ) -> (Int, Int) {
         switch cmd {
         case 1: // Axx: Set Speed (Ticks/Zeile)
             return (ModuleEffect.setSpeed, info)
         case 2: // Bxx: Position Jump — durch die gefilterte Order-Liste remappen
-            let target = info < orderMap.count ? orderMap[info] : 0
+            let target = info < orderMap.count ? orderMap[info] : songEnd
             return (0x0B, target)
         case 3: // Cxx: Pattern Break (Zielzeile als BCD, wie MOD Dxx)
             return (0x0D, info)

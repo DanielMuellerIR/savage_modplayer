@@ -61,6 +61,10 @@ enum ITOpenMPTExtensionParser {
         }
     }
 
+    /// Erwartet `data` mit startIndex 0: alle Chunk-Offsets werden direkt als
+    /// Index verwendet. `ITParser.parse` normalisiert seine Eingabe deshalb
+    /// vorher ueber `Data.rebasedToZero`; wer hier mit einem Slice aus einem
+    /// groesseren Puffer hereinkommt, adressiert an der Nutzlast vorbei.
     static func parse(
         data: Data,
         tablesEnd: Int,

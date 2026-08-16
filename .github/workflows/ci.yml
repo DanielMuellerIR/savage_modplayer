@@ -38,6 +38,13 @@ jobs:
       - name: Swift build (release)
         run: swift build -c release
 
+      # Die Exit-Code-Zusagen der einzigen kopflosen Schnittstelle: ungueltige
+      # Zahlparameter muessen vor Parse und Render mit 2 enden, eine fehlende
+      # Datei mit 1. Laeuft direkt nach dem Release-Build, weil der Test das
+      # gebaute savage-cli benutzt und sich sonst nur ueberspringen wuerde.
+      - name: savage-cli Vertrag (Exit-Codes, Zahlgrenzen)
+        run: python3 Tests/cli_contract_tests.py
+
       # Quick-Look-Appex und App-Bundle entstehen NUR in build_app.sh (eigener
       # swiftc-Aufruf) — swift build allein wuerde Build- oder Plist-Fehler der
       # ausgelieferten Extension nicht bemerken. SIGN_APP=0: unsignierter Lauf,
@@ -65,6 +72,9 @@ jobs:
 
       - name: JS↔Swift Worklet-Parität (headless)
         run: node Tests/js/worklet-timing.mjs
+
+      - name: Browser-MOD-Parser-Grenzen (headless)
+        run: node Tests/js/pattern-bounds.mjs
 
       - name: Single-File-HTML ist aktuell (build.py)
         run: |

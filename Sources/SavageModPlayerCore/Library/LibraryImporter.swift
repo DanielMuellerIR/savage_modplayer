@@ -88,10 +88,9 @@ public final class LibraryImporter: @unchecked Sendable {
 
     // Wie viele Archiv-Ebenen tief ausgepackt wird. Ein Archiv im Archiv ist
     // in Modul-Sammlungen normal; unbegrenzte Rekursion waere dagegen ein
-    // Angriffspunkt (Archiv-Bombe). Derselbe Wert wie in
-    // `PlaylistScanner.collectEntries`, damit Playlist und Bibliothek gleich
-    // tief schauen.
-    static let maxArchiveDepth = 3
+    // Angriffspunkt (Archiv-Bombe). Bewusst derselbe Wert wie im
+    // Playlist-Scanner — deshalb hier keine zweite Zahl, sondern dieselbe.
+    static let maxArchiveDepth = PlaylistScanner.maxArchiveDepth
 
     // Wie eine Quelldatei geoeffnet wird. Voreinstellung: direkter Zugriff.
     // iOS ersetzt das durch koordiniertes Lesen (`NSFileCoordinator`), weil
@@ -566,17 +565,18 @@ public final class LibraryImporter: @unchecked Sendable {
         }
     }
 
-    // Fingerabdruck einer bereits in der Bibliothek liegenden Datei. Passen
-    // Groesse und Aenderungsdatum zum Index, wird der gespeicherte Wert
+    // Fingerabdruck einer bereits in der Bibliothek liegenden Datei. Gilt die
+    // Datei gegenueber dem Index als unveraendert, wird der gespeicherte Wert
     // wiederverwendet — sonst wuerde ein zweiter Import der gleichen Sammlung
-    // die halbe Bibliothek erneut durchlesen.
+    // die halbe Bibliothek erneut durchlesen. Die Regel dafuer ist dieselbe wie
+    // beim Abgleich in `MusicLibrary.rescan` und steht bei
+    // `LibraryItem.matchesFileOnDisk`.
     private func fingerprintOfExisting(at url: URL, relativePath: String) throws -> ContentFingerprint {
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         if let known = library.item(withRelativePath: relativePath),
-           let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
-           Int64(values.fileSize ?? -1) == known.fileSize,
-           let modified = values.contentModificationDate,
-           let indexed = known.modifiedAt,
-           abs(modified.timeIntervalSince(indexed)) < 1 {
+           known.matchesFileOnDisk(
+               size: values?.fileSize.map(Int64.init),
+               modifiedAt: values?.contentModificationDate) {
             return ContentFingerprint(hash: known.contentHash, size: known.fileSize)
         }
         return try ContentHasher.fingerprint(of: url)

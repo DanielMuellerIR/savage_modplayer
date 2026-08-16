@@ -22,26 +22,9 @@ struct VUMeterView: View {
                 // idx 0 = unterstes Segment.
                 let y = size.height - 2 - CGFloat(idx + 1) * segH - CGFloat(idx) * gap
                 let rect = CGRect(x: 0, y: y, width: size.width, height: segH)
-                let color = isActive ? ledColor(for: threshold) : inactiveColor
+                let color = isActive ? VUPalette.led(threshold, theme) : VUPalette.inactive(theme)
                 ctx.fill(Path(roundedRect: rect, cornerRadius: 1.5), with: .color(color))
             }
-        }
-    }
-
-    private var inactiveColor: Color {
-        theme == .workbench ? Color.black.opacity(0.07) : Color.white.opacity(0.04)
-    }
-
-    private func ledColor(for threshold: Float) -> Color {
-        if threshold > 0.85 {
-            return .red
-        } else if threshold > 0.65 {
-            return .orange
-        } else if threshold > 0.4 {
-            // Light: kraeftiger Blau-Akzent; Dark: helles Glow-Cyan
-            return theme == .workbench ? .lightAccent : .spaceAccentGlow
-        } else {
-            return theme == .workbench ? Color.lightAccent.opacity(0.65) : .spaceAccent
         }
     }
 }

@@ -139,10 +139,15 @@ public final class ModulePCMSource: @unchecked Sendable {
                     if remaining == 0 { return written }
                 }
 
+                // Drei Grenzen, aber nur zwei davon sind unabhaengig: die
+                // Restanforderung des Sinks, die Groesse des vorallozierten
+                // Chunks und — falls gesetzt — das Restbudget. Die
+                // Restanforderung stand frueher zusaetzlich als eigener
+                // Term davor, obwohl der Budget-Term sie bereits enthielt.
+                let requested = frames - written
                 let want = min(
-                    frames - written,
                     Self.chunkCapacity,
-                    Int(min(UInt64(frames - written), budgetRemaining))
+                    Int(min(UInt64(requested), budgetRemaining))
                 )
                 block(UInt32(want), left, right)
 

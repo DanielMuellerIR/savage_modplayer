@@ -84,7 +84,7 @@ struct ChannelScopesCanvas: View {
                         let y = size.height - 2 - CGFloat(s + 1) * segH - CGFloat(s) * segGap
                         let rect = CGRect(x: colX, y: y, width: vuW, height: segH)
                         ctx.fill(Path(roundedRect: rect, cornerRadius: 1.5),
-                                 with: .color(active ? Self.ledColor(threshold, theme) : Self.inactiveColor(theme)))
+                                 with: .color(active ? VUPalette.led(threshold, theme) : VUPalette.inactive(theme)))
                     }
                 }
                 // ---- Oszilloskop ----
@@ -109,15 +109,6 @@ struct ChannelScopesCanvas: View {
         }
     }
 
-    static func inactiveColor(_ theme: PlayerTheme) -> Color {
-        theme == .workbench ? Color.black.opacity(0.07) : Color.white.opacity(0.04)
-    }
-    static func ledColor(_ threshold: Float, _ theme: PlayerTheme) -> Color {
-        if threshold > 0.85 { return .red }
-        if threshold > 0.65 { return .orange }
-        if threshold > 0.4 { return theme == .workbench ? .lightAccent : .spaceAccentGlow }
-        return theme == .workbench ? Color.lightAccent.opacity(0.65) : .spaceAccent
-    }
 }
 
 // Kanalnummern + Mute/Solo. Beobachtet den Coordinator (Mute/Solo ändern sich selten)

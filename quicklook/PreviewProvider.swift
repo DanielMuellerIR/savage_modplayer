@@ -74,19 +74,7 @@ class PreviewProvider: QLPreviewProvider, QLPreviewingController {
             maxDurationSeconds: previewDurationSeconds
         )
 
-        // Aufraeumen: Der Schlüssel hängt am Inhalt — WAVs ersetzter oder
-        // gelöschter Dateien verwaisen und verschwinden über dieses
-        // Alters-Aufräumen, damit wiederholtes Leertasten schnell bleibt,
-        // ohne den Extension-Container dauerhaft zu füllen.
-        if let existing = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) {
-            let cutoff = Date().addingTimeInterval(-86_400)
-            for url in existing {
-                let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                if mtime < cutoff {
-                    try? fm.removeItem(at: url)
-                }
-            }
-        }
+        pruneOldPreviews(in: dir)
 
         // Zuerst in eine private temporäre Datei schreiben und danach umbenennen:
         // parallele Finder-Anfragen können so nie eine halbfertige WAV erhalten.
@@ -102,10 +90,34 @@ class PreviewProvider: QLPreviewProvider, QLPreviewingController {
         }
     }
 
+    // Aufraeumen: Der Schluessel haengt am Inhalt — WAVs ersetzter oder
+    // geloeschter Dateien verwaisen und verschwinden ueber dieses
+    // Alters-Aufraeumen, damit wiederholtes Leertasten schnell bleibt, ohne den
+    // Extension-Container dauerhaft zu fuellen.
+    //
+    // Gilt ausdruecklich fuer BEIDE Vorschauarten. Frueher lief der Durchgang
+    // nur beim erfolgreichen Rendern; die Fehlertexte tragen aber je einen
+    // eigenen UUID-Namen, und wer nur defekte Dateien anschaut, hinterliess so
+    // eine Datei je Leertastendruck, die nie jemand aufraeumte.
+    private static func pruneOldPreviews(in directory: URL) {
+        let fm = FileManager.default
+        guard let existing = try? fm.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let cutoff = Date().addingTimeInterval(-86_400)
+        for url in existing {
+            let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            if mtime < cutoff {
+                try? fm.removeItem(at: url)
+            }
+        }
+    }
+
     private static func writeErrorPreview(_ error: Error, sourceURL: URL) throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("SavagePreviews", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        pruneOldPreviews(in: dir)
 
         let message = """
         Savage Mod Player konnte dieses Modul nicht wiedergeben.

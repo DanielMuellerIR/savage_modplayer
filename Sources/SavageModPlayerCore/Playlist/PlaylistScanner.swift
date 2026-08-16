@@ -92,6 +92,12 @@ public enum PlaylistScanner {
     // Archiv-Endungen, die wie Ordner behandelt werden.
     public static let archiveExtensions: Set<String> = ["zip", "7z"]
 
+    // Wie viele Archiv-Ebenen tief geoeffnet wird. Ein Archiv im Archiv ist in
+    // Modul-Sammlungen normal; unbegrenzte Rekursion waere ein Angriffspunkt.
+    // `LibraryImporter` benutzt denselben Wert, damit Playlist und Bibliothek
+    // gleich tief schauen.
+    public static let maxArchiveDepth = 3
+
     // Mod-Erkennung: bekannte Endungen oder Amiga-Konvention "mod.<name>".
     public static func isModFile(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
@@ -131,7 +137,15 @@ public enum PlaylistScanner {
             // Archive ZUERST klassifizieren: `mod.collection.zip` matcht sonst
             // die Amiga-Namenskonvention `mod.<name>` und wuerde als
             // unspielbare "Moduldatei" kopiert statt entpackt.
-            if isArchive(fileURL), archiveDepth < 3 {
+            //
+            // Die Tiefengrenze gehoert INNERHALB dieses Zweigs geprueft, nicht
+            // in seine Bedingung: Stand sie dort, fiel ein zu tief liegendes
+            // Archiv in den Modul-Zweig darunter — und ein `mod.sammlung.zip`
+            // landete als unspielbare "Moduldatei" in der Playlist, genau der
+            // Fall, den die Reihenfolge oben verhindern soll. `LibraryImporter`
+            // trennt beides bereits so.
+            if isArchive(fileURL) {
+                guard archiveDepth < maxArchiveDepth else { return }
                 if let extractedDir = extractArchive(fileURL, tempDir: tempDir) {
                     // Archivname ohne Endung als Ordner-Name — dass es ein
                     // Archiv war, soll man in der Playlist nicht merken.
@@ -154,7 +168,11 @@ public enum PlaylistScanner {
         // Ordner rekursiv absteigen und dabei die relativen Pfad-Komponenten
         // mitfuehren (der fruehere flache enumerator verlor die Hierarchie).
         func scanDirectory(_ dir: URL, folderPath: [String], archiveDepth: Int) {
-            guard let children = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else { return }
+            guard let children = try? fm.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles]
+            ) else { return }
             for child in children {
                 // Das eigene Temp-Wurzelverzeichnis nie als Kind mitscannen —
                 // sonst wuerden frisch angelegte Kopien erneut eingesammelt,
@@ -162,8 +180,14 @@ public enum PlaylistScanner {
                 // (Die extracted-Unterverzeichnisse DARUNTER werden dagegen
                 // gezielt per scanDirectory betreten — nicht ausschliessen.)
                 if child.standardizedFileURL.path == tempDir.standardizedFileURL.path { continue }
-                let isDir = (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-                if isDir {
+                let values = try? child.resourceValues(
+                    forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                // bsdtar kann Links aus einem fremden Archiv als echte
+                // Dateisystem-Links anlegen. Vor jeder Endungspruefung und vor
+                // der Rekursion ablehnen, damit weder song.mod noch inner.zip
+                // aus dem Entpackverzeichnis heraus verfolgt werden.
+                if values?.isSymbolicLink == true { continue }
+                if values?.isDirectory == true {
                     scanDirectory(child, folderPath: folderPath + [child.lastPathComponent], archiveDepth: archiveDepth)
                 } else {
                     handleFile(child, folderPath: folderPath, archiveDepth: archiveDepth)

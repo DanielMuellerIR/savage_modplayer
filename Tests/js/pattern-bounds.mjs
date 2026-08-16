@@ -72,6 +72,17 @@ try {
 check('vollständige MOD parst', !threwFull);
 check('vollständige MOD liefert 1 Pattern', mod2?.patterns?.length === 1);
 
+// --- Fall 3: Songlaenge 0 ist kein abspielbares Modul ---
+const emptySong = makeMod(1084 + 1024, 0);
+let emptySongError;
+try {
+    parseModBuffer(emptySong, 'empty-song');
+} catch (error) {
+    emptySongError = error;
+}
+check('Songlaenge 0 wird abgelehnt', emptySongError instanceof Error);
+check('Fehler nennt die leere Songstruktur', /Songlänge 0/.test(emptySongError?.message ?? ''));
+
 if (failures > 0) {
     console.error(`\n${failures} Test(s) fehlgeschlagen.`);
     process.exit(1);

@@ -80,8 +80,8 @@ export class Pattern {
     // Bounds-Check: Kaputte/abgeschnittene MOD-Dateien deklarieren manchmal mehr
     // Patterns als tatsächlich Bytes vorhanden sind. Ohne Prüfung würde der
     // Uint8Array-Konstruktor eine RangeError werfen, die im async Drop-Handler
-    // unbehandelt bleibt (nur console.error). Der Swift-Parser (ModParser) ist
-    // hier defensiv und liefert leere Rows — die JS-Variante zieht nach:
+    // unbehandelt bleibt (nur console.error). Der kompakte Browserplayer bleibt
+    // bei diesem historischen Fall bewusst tolerant:
     // passt das komplette 1024-Byte-Pattern nicht mehr in die Datei, werden
     // 64 leere (Null-)Rows erzeugt statt zu crashen.
     const offset = 1084 + index * 1024;
@@ -104,7 +104,15 @@ export class Mod {
     this.name = String.fromCodePoint(...Array.from(nameBytes)).trim();
 
     // Anzahl der Pattern-Positionen + die Reihenfolge (PatternTable).
-    this.length = new Uint8Array(modfile, 950, 1)[0];
+    //
+    // Die Playlist ist physisch 128 Byte lang; dahinter stehen die Signatur
+    // (Offset 1080) und die Pattern-Daten. Ein Laengenbyte ueber 128 ist
+    // deshalb kein laengerer Song, sondern ein defekter Wert: ohne diese
+    // Grenze landeten die Signaturbytes "M.K." als Playlist-Eintraege
+    // 77, 46, 75, 46 im Song und der Player spielte hinter dem echten Ende
+    // Patterns, die es nie gab. Gleiche Grenze wie in ModParser.swift — der
+    // gemeinsame 4-Kanal-MOD-Kern muss in beiden Umsetzungen gleich lesen.
+    this.length = Math.min(new Uint8Array(modfile, 950, 1)[0], 128);
     this.patternTable = new Uint8Array(modfile, 952, this.length);
 
     // Höchste verwendete Pattern-Nummer bestimmt die Größe. Bei leerer
@@ -155,6 +163,10 @@ export function parseModBuffer(arrayBuffer, label = 'buffer') {
   const validSigs = ['M.K.', 'M!K!', 'FLT4', '4CHN'];
   if (!validSigs.includes(sigStr)) {
     throw new Error(`Ungültige MOD-Signatur "${sigStr}": ${label}`);
+  }
+  const songLength = new Uint8Array(arrayBuffer, 950, 1)[0];
+  if (songLength === 0) {
+    throw new Error(`Leeres MOD (Songlänge 0): ${label}`);
   }
   return new Mod(arrayBuffer);
 }

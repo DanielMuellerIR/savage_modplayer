@@ -1,48 +1,49 @@
-Savage Mod Player 1.6.6 härtet rekursive Archivimporte, beseitigt zwei
-Nebenläufigkeitsfehler in der Wiedergabe und schließt die verbliebenen
-XM-Abschneidepfade.
+Savage Mod Player 1.6.8 behebt Fehler bei Nebenläufigkeit, Archivsicherheit und
+abgeschnittenen Dateien, die im Folgereview des QA-Durchgangs für 1.6.7 gefunden
+wurden.
 
-## Bibliothek und Archive
+## Wiedergabe
 
-- Rekursive Importe teilen sich jetzt eine Obergrenze für entpackte Bytes,
-  Archiveinträge und die Archivzahl über den gesamten Verschachtelungsbaum.
-  Die Grenzen gelten für den eigenen ZIP-Reader ebenso wie für bsdtar auf
-  macOS/Linux; innere Archive starten nicht mehr mit frischen 2 GiB und 50.000
-  Einträgen.
-- bsdtar-Archive werden vor dem Schreiben streamend vermessen. Symbolische
-  Links werden vor der Verzeichnis- oder Endungsprüfung abgelehnt; ein
-  `inner.zip` im Zwischenlager kann damit nicht aus dem Entpackordner zeigen.
-- Versteckte unterstützte Module und innere Archive werden verarbeitet, statt
-  still zu fehlen. Das Quellarchiv verschwindet weiterhin erst, wenn alle
-  unterstützten Inhalte erfolgreich behandelt wurden.
-- Ein unvollständiger Abgleich nach einem teilweise gescheiterten
-  Bibliotheks-Reset bleibt als unvollständig erkennbar. Die iPhone-App vereinigt
-  dessen Teilmenge mit der bekannten Liste offener Archive, statt die Liste
-  durch fehlende Daten zu ersetzen.
+- Ein Sprung während der Live-Wiedergabe wird jetzt als vorab angelegter,
+  lockfreier Auftrag im Audio-Callback ausgeführt. Position, Zeile, Timing,
+  Effekte und Stimmen können nicht mehr in einem halb geänderten Zustand gelesen
+  werden.
+- Nach einer Titelwiederholung enthält die Anzeige- und Sperrbildschirmzeit auch
+  die Audioframes, die seit dem exakten Loop-Übergang bereits gerendert wurden.
+  Die Uhr hinkt nicht mehr bei jeder Runde um bis zu ein Abfrageintervall nach.
 
-## Wiedergabe-Korrektheit
+## Module
 
-- Der offene Auftrag zum Zurücksetzen der Spielzeit ist ein lockfreier
-  C11-Atomik-Sentinel und wird per atomarem Austausch genau einmal verbraucht.
-  Das funktioniert weiterhin ab macOS 13 und unter Linux.
-- Frame, Position und Zeile eines Songendes werden als vollständiger atomarer
-  Schnappschuss geschrieben, bevor das Bereitschaftssignal sichtbar wird. Die
-  Oberfläche kann kein altes oder halb geschriebenes Loop-Ziel mehr lesen.
-- Der Titel-Loop auf macOS setzt die sichtbare Spielzeit jetzt am tatsächlichen
-  Loop-Punkt zurück und aktualisiert die systemweite Wiedergabeinformation
-  sofort — wie bereits die iPhone-App.
-- XM-Wiedergabe und Instrumentvorschau begrenzen Note plus Sample-Transpose
-  gemeinsam auf 0...119, bevor lineare oder Amiga-Perioden berechnet werden.
-  Das gilt auch für extreme vorzeichenbehaftete Transpositionen.
+- MOD- und 15-Sample-Soundtracker-Dateien müssen alle deklarierten Pattern- und
+  Samplebytes enthalten. Abgeschnittene Dateien werden abgelehnt, statt fehlende
+  Noten mit Stille oder PCM-Daten gekürzt zu erfinden.
+- S3M-Sampledaten werden vor dem Dekodieren gegen Framezahl, Bitbreite und
+  Stereo-Aufbau geprüft. Abgeschnittene Samples erscheinen nicht mehr als
+  verkürzte oder leere Instrumente.
+- Der erste S3M-Endmarker beendet jetzt wirklich die Order-Liste. Einträge
+  dahinter werden nicht mehr gespielt; Positionssprünge in diesen Rest führen
+  zum Songende.
+- Der Browserplayer lehnt ein signiertes MOD mit Songlänge null mit einer
+  endlichen Parsermeldung ab, statt im Audio-Worklet fortlaufend zu scheitern.
 
-## Parser und Veröffentlichungshygiene
+## Archive und Bibliothek
 
-- Der XM-Parser verlangt den vollständigen festen 80-Byte-Header, jeden
-  deklarierten Pattern-Kopf auch bei Datengröße null, jeden Instrument-Kopf,
-  mindestens 40 Byte pro Sample-Kopf und das vollständige deklarierte
-  PCM-Fenster. Ungerade Byte-Längen bei 16-Bit-Samples werden abgelehnt.
-- Das Veröffentlichungs-Gate inventarisiert jede getrackte, als UTF-8 lesbare
-  Textdatei einschließlich Swift, JavaScript, HTML, JSON und CI-YAML statt nur
-  Markdown-, Shell- und Python-Dateien.
-- Der optionale ZIP-Digital-Signature-Datensatz ist korrekt als Datensatz am
-  Ende des ZIP-Inhaltsverzeichnisses dokumentiert.
+- Der Desktop-Playlist-Scanner ignoriert symbolische Links, die beim Entpacken
+  eines Archivs entstehen. Ein verlinktes Modul oder inneres Archiv kann den
+  Scan nicht mehr aus seinem temporären Entpackverzeichnis führen.
+- Der iOS-ZIP-Reader lehnt symbolische Links und verschlüsselte Einträge im
+  gesamten Inhaltsverzeichnis ab, auch wenn ein Dateifilter sie sonst
+  überspringen würde.
+- Ein unvollständiger iOS-Dateisystemscan ergänzt neu gefundene Archive in der
+  bekannten offenen Liste und behält ältere Einträge. Ein erreichbares Archiv
+  bleibt nicht mehr unsichtbar, nur weil ein anderer Teilbaum unlesbar war.
+
+## Prüfungen und Werkzeuge
+
+- Ein benannter iOS-Simulator wird zu seiner UUID aufgelöst. Damit funktioniert
+  auch ein gewähltes Gerät aus einer älteren installierten Laufzeit, statt
+  fälschlich `OS:latest` zu verlangen.
+- Die Kommandozeilentests erreichen und prüfen jetzt die echten
+  Fehlwert-Zweige von `--seconds`, `--rate` und `--pattern`.
+- Die Parser-Grenztests des Browserplayers laufen in CI, zusätzlich zur
+  Worklet-Parität und zur Prüfung des erzeugten HTML-Bundles.

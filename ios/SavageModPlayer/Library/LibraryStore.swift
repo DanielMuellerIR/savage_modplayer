@@ -156,7 +156,10 @@ final class LibraryStore: ObservableObject {
             }
 
             if let snapshot = outcome.snapshot { self.apply(snapshot) }
-            if outcome.archivesComplete { self.pendingArchives = outcome.archives }
+            self.pendingArchives = Self.reconciledArchives(
+                previous: self.pendingArchives,
+                discovered: outcome.archives,
+                scanIsComplete: outcome.archivesComplete)
             self.errorMessage = outcome.errorMessage ?? self.errorMessage
 
             // ZIPs aus Finder-Dateifreigabe oder Dateien-App verhalten sich wie
@@ -289,7 +292,10 @@ final class LibraryStore: ObservableObject {
 
         apply(outcome.snapshot)
         lastReport = outcome.report
-        if outcome.archivesComplete { pendingArchives = outcome.archives }
+        pendingArchives = Self.reconciledArchives(
+            previous: pendingArchives,
+            discovered: outcome.archives,
+            scanIsComplete: outcome.archivesComplete)
         errorMessage = outcome.errorMessage ?? errorMessage
     }
 
@@ -352,13 +358,10 @@ final class LibraryStore: ObservableObject {
             // Nach Teilfehlern bleiben Dateien real liegen; der Core hat den
             // Index dann aus dem Restbestand neu aufgebaut und meldet die
             // noch offenen Archive. Nur ein voller Erfolg endet leer.
-            if outcome.archivesComplete {
-                self.pendingArchives = outcome.remainingArchives
-            } else {
-                self.pendingArchives = Array(
-                    Set(self.pendingArchives).union(outcome.remainingArchives)
-                ).sorted()
-            }
+            self.pendingArchives = Self.reconciledArchives(
+                previous: self.pendingArchives,
+                discovered: outcome.remainingArchives,
+                scanIsComplete: outcome.archivesComplete)
             if favoritesCleared.isSet { self.clearFavorites() }
             self.errorMessage = Self.resetErrorMessage(
                 failures: outcome.failures,
@@ -378,6 +381,19 @@ final class LibraryStore: ObservableObject {
         previous: String?
     ) -> String? {
         enumerationError ?? failures.first?.reason ?? previous
+    }
+
+    // Nur ein vollständiger Scan darf beweisen, dass ein bisher bekanntes
+    // Archiv verschwunden ist. Ein Teilergebnis ergänzt dagegen die bekannte
+    // Liste um neu erreichbare Archive, damit sie trotz eines unlesbaren
+    // anderen Teilbaums sichtbar und erneut entpackbar werden.
+    static func reconciledArchives(
+        previous: [String],
+        discovered: [String],
+        scanIsComplete: Bool
+    ) -> [String] {
+        if scanIsComplete { return Array(Set(discovered)).sorted() }
+        return Array(Set(previous).union(discovered)).sorted()
     }
 
     func clearLastReport() {

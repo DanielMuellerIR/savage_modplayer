@@ -465,6 +465,43 @@ final class MusicLibraryTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: rootURL.path), [])
     }
 
+    // MARK: - Unveraendert-Heuristik
+
+    // Abgleich (`rescan`) und Dedupe (`LibraryImporter`) entscheiden mit
+    // derselben Regel, ob eine Datei neu gehasht werden muss. Sie lag frueher
+    // doppelt vor; liefen die Fassungen auseinander, haette derselbe Bestand je
+    // nach Weg als geaendert oder als unveraendert gegolten.
+    func testMatchesFileOnDiskRule() {
+        let indexed = Date(timeIntervalSince1970: 1_000_000)
+        let item = LibraryItem(
+            relativePath: "a/b.mod", displayName: "b.mod", fileSize: 4096,
+            contentHash: "abc", addedAt: indexed, modifiedAt: indexed)
+
+        XCTAssertTrue(item.matchesFileOnDisk(size: 4096, modifiedAt: indexed))
+        // Ganze Sekunden mancher Dateisysteme: unter 1 s gilt als gleich.
+        XCTAssertTrue(item.matchesFileOnDisk(size: 4096, modifiedAt: indexed.addingTimeInterval(0.9)))
+        XCTAssertFalse(item.matchesFileOnDisk(size: 4096, modifiedAt: indexed.addingTimeInterval(1.1)))
+        XCTAssertFalse(item.matchesFileOnDisk(size: 4097, modifiedAt: indexed))
+
+        // Unbekannte Merkmale zaehlen als veraendert — lieber einmal zu viel
+        // hashen als eine Aenderung verschlucken.
+        XCTAssertFalse(item.matchesFileOnDisk(size: nil, modifiedAt: indexed))
+        XCTAssertFalse(item.matchesFileOnDisk(size: 4096, modifiedAt: nil))
+
+        // Ein alter Indexeintrag ohne modifiedAt muss einmal neu gehasht werden.
+        let legacy = LibraryItem(
+            relativePath: "a/b.mod", displayName: "b.mod", fileSize: 4096,
+            contentHash: "abc", addedAt: indexed, modifiedAt: nil)
+        XCTAssertFalse(legacy.matchesFileOnDisk(size: 4096, modifiedAt: indexed))
+
+        // Eine 0-Byte-Datei mit unlesbarer Groessenangabe darf nicht als
+        // unveraendert durchgehen.
+        let empty = LibraryItem(
+            relativePath: "leer.mod", displayName: "leer.mod", fileSize: 0,
+            contentHash: "d41d8", addedAt: indexed, modifiedAt: indexed)
+        XCTAssertFalse(empty.matchesFileOnDisk(size: nil, modifiedAt: indexed))
+    }
+
     // MARK: - Fingerabdruck
 
     func testFingerprintIsStableAndContentSensitive() throws {

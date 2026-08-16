@@ -133,4 +133,96 @@ final class PlaylistScannerTests: XCTestCase {
         _ = try makeFile("MitMod/deep/song.mod")
         XCTAssertTrue(PlaylistScanner.directoryContainsPlayableContent(workDir.appendingPathComponent("MitMod")))
     }
+
+    // Packt `sources` (relativ zu `directory`) in ein Archiv im Arbeitsordner.
+    private func pack(_ names: [String], from directory: URL, as name: String) throws -> URL {
+        let tool = try XCTUnwrap(PlaylistScanner.bsdtarURL)
+        let archiveURL = directory.appendingPathComponent(name)
+        let process = Process()
+        process.executableURL = tool
+        process.arguments = ["-a", "-c", "-f", archiveURL.path, "-C", directory.path] + names
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0, "bsdtar konnte \(name) nicht erzeugen")
+        for entry in names {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(entry))
+        }
+        return archiveURL
+    }
+
+    // Jenseits der Tiefengrenze wird ein Archiv gar nicht mehr geoeffnet — es
+    // darf dann aber auch nicht in den Modul-Zweig fallen. Ein Archiv mit
+    // Amiga-Namenskonvention (`mod.<name>.zip`) traf genau das: es landete als
+    // unspielbare "Moduldatei" in der Playlist, obwohl es ein ZIP ist.
+    func testArchiveBeyondTheDepthLimitIsSkippedInsteadOfTreatedAsModule() throws {
+        try XCTSkipIf(
+            PlaylistScanner.bsdtarURL == nil,
+            "bsdtar nicht installiert — Archiv-Scan nicht pruefbar (Linux: libarchive-tools)")
+
+        let nest = workDir.appendingPathComponent("Nest", isDirectory: true)
+        try FileManager.default.createDirectory(at: nest, withIntermediateDirectories: true)
+        try Data([0x78]).write(to: nest.appendingPathComponent("platzhalter.txt"))
+
+        // Ebene 4 traegt die Amiga-Namenskonvention und liegt damit genau auf
+        // der Grenze: mod.inner.zip ist ein Archiv, matcht aber auch "mod.".
+        _ = try pack(["platzhalter.txt"], from: nest, as: "mod.inner.zip")
+        _ = try pack(["mod.inner.zip"], from: nest, as: "l3.zip")
+        _ = try pack(["l3.zip"], from: nest, as: "l2.zip")
+        let outer = try pack(["l2.zip"], from: nest, as: "outer.zip")
+
+        let entries = PlaylistScanner.collectEntries(from: [outer], tempDir: tempDir)
+        XCTAssertTrue(
+            entries.isEmpty,
+            "ein zu tief liegendes Archiv darf nicht als Modul eingesammelt werden, war: "
+            + entries.map(\.displayName).joined(separator: ", "))
+    }
+
+    // Gegenprobe: innerhalb der Grenze wird weiterhin ausgepackt, damit der
+    // Test oben nicht einfach nur die ganze Rekursion abschaltet.
+    func testArchiveWithinTheDepthLimitIsStillUnpacked() throws {
+        try XCTSkipIf(
+            PlaylistScanner.bsdtarURL == nil,
+            "bsdtar nicht installiert — Archiv-Scan nicht pruefbar (Linux: libarchive-tools)")
+
+        let nest = workDir.appendingPathComponent("Nest2", isDirectory: true)
+        try FileManager.default.createDirectory(at: nest, withIntermediateDirectories: true)
+        try Data([0x78]).write(to: nest.appendingPathComponent("song.mod"))
+
+        _ = try pack(["song.mod"], from: nest, as: "inner.zip")
+        let outer = try pack(["inner.zip"], from: nest, as: "outer.zip")
+
+        let entries = PlaylistScanner.collectEntries(from: [outer], tempDir: tempDir)
+        XCTAssertEqual(entries.map(\.displayName), ["song.mod"])
+        XCTAssertEqual(entries.first?.folderPath, ["outer", "inner"])
+    }
+
+    // bsdtar legt Archiv-Links als echte Links im temporaeren Ziel an. Der
+    // Playlist-Scanner darf ihnen weder beim Modul-Kopieren noch bei einer
+    // vermeintlichen inner.zip folgen, sonst verlaesst er unbemerkt das
+    // Entpackverzeichnis des fremden Archivs.
+    func testArchiveSymbolicLinkIsIgnoredWithoutFollowingIt() throws {
+        try XCTSkipIf(
+            PlaylistScanner.bsdtarURL == nil,
+            "bsdtar nicht installiert — Archiv-Symlink nicht pruefbar")
+
+        let external = workDir.appendingPathComponent("Extern", isDirectory: true)
+        try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
+        try Data([0x65]).write(to: external.appendingPathComponent("extern.mod"))
+        let externalArchive = try pack(["extern.mod"], from: external, as: "extern.zip")
+
+        let outerDir = workDir.appendingPathComponent("Aussen", isDirectory: true)
+        try FileManager.default.createDirectory(at: outerDir, withIntermediateDirectories: true)
+        try Data([0x64]).write(to: outerDir.appendingPathComponent("direkt.mod"))
+        try FileManager.default.createSymbolicLink(
+            at: outerDir.appendingPathComponent("inner.zip"),
+            withDestinationURL: externalArchive)
+        let outer = try pack(["direkt.mod", "inner.zip"], from: outerDir, as: "outer.zip")
+
+        let entries = PlaylistScanner.collectEntries(from: [outer], tempDir: tempDir)
+
+        XCTAssertEqual(entries.map(\.displayName), ["direkt.mod"])
+        XCTAssertFalse(entries.contains { $0.displayName == "extern.mod" })
+    }
 }

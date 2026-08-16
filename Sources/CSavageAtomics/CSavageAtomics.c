@@ -43,3 +43,7 @@ void savage_atomic_u64_store_release(SavageAtomicUInt64 *atomic_value, uint64_t 
 uint64_t savage_atomic_u64_exchange_acq_rel(SavageAtomicUInt64 *atomic_value, uint64_t value) {
     return atomic_exchange_explicit(&atomic_value->value, value, memory_order_acq_rel);
 }
+
+void savage_atomic_thread_fence_seq_cst(void) {
+    atomic_thread_fence(memory_order_seq_cst);
+}

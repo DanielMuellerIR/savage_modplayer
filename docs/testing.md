@@ -56,6 +56,8 @@ Consumer muss sauber als `outputClosed` enden.
 - Nach Änderungen an `src/`, `modplayer.js`, `mod-player-worklet.js`, `VERSION`
   oder am Bundler: `python3 build.py` und den Diff von
   `savage-mod-player.html` semantisch prüfen.
+- Parser-Grenzen des Browserplayers mit
+  `node Tests/js/pattern-bounds.mjs` prüfen.
 - DSP-Änderungen immer mit `node Tests/js/worklet-timing.mjs` gegen Swift prüfen.
 - Drop-Autoplay-Smoke: `python3 -m http.server 8765`, dann
   `http://127.0.0.1:8765/savage-mod-player.html?testDropAutoplay=1` laden und

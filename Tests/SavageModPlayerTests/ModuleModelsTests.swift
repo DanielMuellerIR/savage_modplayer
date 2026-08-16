@@ -452,7 +452,7 @@ final class ModuleModelsTests: XCTestCase {
         XCTAssertEqual(decoded.playbackSemantics, .impulseTracker(compatibility))
     }
 
-    func testUsedChannelCountIgnoresReservedEmptyChannelsAndUnusedPatterns() {
+    func testUsedChannelCountIgnoresReservedEmptyChannelsAndUnusedPatterns() throws {
         let empty = Note(instrument: 0, period: 0, effectId: 0, effectData: 0)
         let audible = Note(instrument: 1, period: 428, effectId: 0, effectData: 0)
         let effectOnly = Note(instrument: 0, period: 0, effectId: 0, effectData: 0, effectPresent: true)
@@ -479,6 +479,14 @@ final class ModuleModelsTests: XCTestCase {
         XCTAssertEqual(module.usedChannelCount, 2)
         XCTAssertEqual(module.displayChannelIndices, [2, 17])
         XCTAssertEqual(module.displayChannelCount, 2)
+
+        // `usedChannelIndices` wird einmal im Initializer berechnet und nicht
+        // mitgespeichert. Ein geladenes Modul muss den Wert deshalb aus seinen
+        // Patterns neu aufbauen — sonst haetten dekodierte Module gar keine
+        // Kanalanzeige mehr.
+        let decoded = try JSONDecoder().decode(Mod.self, from: JSONEncoder().encode(module))
+        XCTAssertEqual(decoded.usedChannelIndices, [2, 17])
+        XCTAssertEqual(decoded.displayChannelCount, 2)
     }
 
     func testITPreviewUsesGlobalSamplePoolAndSkipsEmptyMappingSlots() throws {

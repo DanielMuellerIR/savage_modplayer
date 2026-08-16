@@ -20,30 +20,35 @@ LOG="${TEST_LOG:-$IOS_DIR/build/run-tests.log}"
 mkdir -p "$(dirname "$LOG")"
 
 # Zielgeraet bestimmen. `simctl list devices available` liefert Zeilen der Form
-# "    iPhone 17 Pro (UUID) (Shutdown)"; daraus fischen wir den ersten Namen.
-# Das `|| true` ist noetig: unter `set -euo pipefail` beendet ein leerer
-# grep-Treffer (oder ein scheiterndes simctl) sonst schon die Zuweisung —
-# die Diagnose mit Geraeteliste und Exit 2 unten waere unerreichbar.
-if [ -n "${SIMULATOR_NAME:-}" ]; then
-    DEVICE_NAME="$SIMULATOR_NAME"
-    DESTINATION="platform=iOS Simulator,name=$DEVICE_NAME"
-else
-    DEVICE_LINE="$( (xcrun simctl list devices available \
-        | grep -m1 -E '^ +iPhone .+ \([0-9A-F-]{36}\) \((Booted|Shutdown)\)[[:space:]]*$') || true)"
-    DEVICE_NAME="$(printf '%s\n' "$DEVICE_LINE" \
-        | sed -E 's/^ +(.+) \([0-9A-F-]{36}\) \((Booted|Shutdown)\)[[:space:]]*$/\1/')"
-    DEVICE_ID="$(printf '%s\n' "$DEVICE_LINE" \
-        | sed -E 's/^ +.+ \(([0-9A-F-]{36})\) \((Booted|Shutdown)\)[[:space:]]*$/\1/')"
-    DESTINATION="platform=iOS Simulator,id=$DEVICE_ID"
-fi
+# "    iPhone 17 Pro (UUID) (Shutdown)". Auch ein ausdruecklich genannter
+# Simulator wird hier auf seine eindeutige UUID aufgeloest; `xcodebuild` wuerde
+# bei einem Ziel nur per Name implizit `OS:latest` verlangen und ein vorhandenes
+# Modell aus einer aelteren Laufzeit faelschlich nicht finden.
+DEVICE_LIST="$(xcrun simctl list devices available 2>/dev/null || true)"
+DEVICE_NAME=""
+DEVICE_ID=""
+while IFS= read -r DEVICE_LINE; do
+    CANDIDATE_NAME="$(printf '%s\n' "$DEVICE_LINE" \
+        | sed -nE 's/^ +(.+) \([0-9A-Fa-f-]{36}\) \((Booted|Shutdown)\)[[:space:]]*$/\1/p')"
+    CANDIDATE_ID="$(printf '%s\n' "$DEVICE_LINE" \
+        | sed -nE 's/^ +.+ \(([0-9A-Fa-f-]{36})\) \((Booted|Shutdown)\)[[:space:]]*$/\1/p')"
+    [ -n "$CANDIDATE_NAME" ] || continue
+    case "$CANDIDATE_NAME" in iPhone*) ;; *) continue ;; esac
+    if [ -z "${SIMULATOR_NAME:-}" ] || [ "$CANDIDATE_NAME" = "$SIMULATOR_NAME" ]; then
+        DEVICE_NAME="$CANDIDATE_NAME"
+        DEVICE_ID="$CANDIDATE_ID"
+        break
+    fi
+done <<< "$DEVICE_LIST"
 
-if [ -z "$DEVICE_NAME" ]; then
+if [ -z "$DEVICE_NAME" ] || [ -z "$DEVICE_ID" ]; then
     echo "FEHLER: Kein iPhone-Simulator verfuegbar. Verfuegbare Geraete:"
-    xcrun simctl list devices available
+    printf '%s\n' "$DEVICE_LIST"
     exit 2
 fi
 
-echo "==> Tests auf Simulator: $DEVICE_NAME"
+DESTINATION="platform=iOS Simulator,id=$DEVICE_ID"
+echo "==> Tests auf Simulator: $DEVICE_NAME ($DEVICE_ID)"
 
 ARGS=(
     test

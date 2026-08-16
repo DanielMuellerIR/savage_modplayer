@@ -9,6 +9,19 @@ import Foundation
 import AVFoundation
 import Combine
 
+// Gemeinsamer Nenner der beiden Traeger von Mute und Solo: bei IT der logische
+// Pattern-Kanal, sonst die Stimme selbst. Beide sind Klassen, deshalb genuegt
+// eine Referenz, um den Schalter zu lesen und zu setzen. Die Auswahl trifft
+// `ModPlayerCoordinator.muteState(at:)` — der Echtzeit-Renderblock liest die
+// Felder weiterhin direkt am konkreten Typ und bekommt hiervon nichts mit.
+protocol ChannelMuteState: AnyObject, Sendable {
+    var isMuted: Bool { get set }
+    var isSoloed: Bool { get set }
+}
+
+extension DSPChannel: ChannelMuteState {}
+extension ITPatternChannelState: ChannelMuteState {}
+
 @MainActor
 public final class ModPlayerCoordinator: ObservableObject {
     @Published public var isPlaying = false
@@ -36,12 +49,18 @@ public final class ModPlayerCoordinator: ObservableObject {
     // sonst liest der Render-Block weiter die alten `state.bpm`/`state.ticksPerRow`
     // und die Stepper waeren wirkungslos (sie wuerden ausserdem beim naechsten
     // VU-Poll wieder vom Render-Zustand ueberschrieben).
+    // Beim Veröffentlichen eines Seek-Ziels werden die UI-Werte sofort
+    // nachgezogen. Dieser Schalter verhindert, dass ihre didSet-Hooks dabei
+    // denselben Zustand doch wieder ausserhalb des Audiothreads verändern.
+    private var suppressRealtimeParameterWriteback = false
+
     @Published public var bpm = 125 {
         didSet {
             // Nur durchschreiben, wenn der Wert tatsaechlich von der UI kommt.
             // Der VU-Poller setzt `bpm` selbst aus `state.bpm` — in dem Fall sind
             // beide Werte schon gleich und wir sparen uns die Neuberechnung.
-            guard let state = playbackState, state.bpm != bpm, bpm > 0 else { return }
+            guard !suppressRealtimeParameterWriteback,
+                  let state = playbackState, state.bpm != bpm, bpm > 0 else { return }
             state.bpm = bpm
             // Tick-Laenge in Output-Frames neu bestimmen (gleiche Formel wie play()/seek()).
             let sampleRate = audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
@@ -51,7 +70,8 @@ public final class ModPlayerCoordinator: ObservableObject {
     @Published public var speed = 6 {
         didSet {
             // Analog zu `bpm`: Speed = Ticks pro Zeile an den Echtzeit-Zustand geben.
-            guard let state = playbackState, state.ticksPerRow != speed, speed > 0 else { return }
+            guard !suppressRealtimeParameterWriteback,
+                  let state = playbackState, state.ticksPerRow != speed, speed > 0 else { return }
             state.ticksPerRow = speed
             let sampleRate = audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
             SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
@@ -118,6 +138,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Audio-Thread schon die naechste Transition veroeffentlicht haben.
     private var consumedEndPosition = -1
     private var consumedEndRow = 0
+    private var consumedEndFrame = UInt64.max
     
     private var audioEngine: AVAudioEngine?
     private var sourceNode: AVAudioSourceNode?
@@ -182,6 +203,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         stop()
         consumedEndPosition = -1
         consumedEndRow = 0
+        consumedEndFrame = .max
         self.activeMod = mod
         // Header-Titel um Leerraum bereinigen; nur ein echter, nicht-leerer Titel
         // gewinnt, sonst der Dateiname-Fallback (und erst zuletzt der Default).
@@ -458,9 +480,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         let p = max(0, min(mod.length - 1, pos))
         let r = max(0, min(RenderEngine.patternRowCount(mod, at: p) - 1, row))
         let params = RenderEngine.reconstructGlobalParams(mod, toPosition: p, row: r)
-        // Coordinator-Tempo spiegeln (play() liest self.speed/self.bpm beim Kaltstart).
-        self.speed = params.speed
-        self.bpm = params.bpm
+        publishSeekParameters(speed: params.speed, bpm: params.bpm)
         guard let state = playbackState else {
             // Gestoppt: Ziel vormerken; play() startet dort mit dem rekonstruierten Tempo.
             pendingStartPosition = p
@@ -470,102 +490,106 @@ public final class ModPlayerCoordinator: ObservableObject {
             currentRow = r
             return
         }
-        let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
-        state.ticksPerRow = params.speed
-        state.bpm = params.bpm
-        SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
-        state.globalVolume = Float(params.globalVolume)
-        applySeek(state: state, mod: mod, position: p, row: r)
+        requestSeek(
+            state: state,
+            mod: mod,
+            position: p,
+            row: r,
+            speed: params.speed,
+            bpm: params.bpm,
+            globalVolume: params.globalVolume)
     }
 
     public func seek(toPosition: Int) {
         guard let mod = activeMod else { return }
         let pos = max(0, min(mod.length - 1, toPosition))
+        let params = RenderEngine.reconstructGlobalParams(mod, toPosition: pos, row: 0)
+        publishSeekParameters(speed: params.speed, bpm: params.bpm)
         guard let state = playbackState else {
             // Gestoppt: Position nur vormerken und in der UI anzeigen —
             // play() greift sie auf und beginnt an dieser Stelle.
             pendingStartPosition = pos
+            pendingStartRow = 0
+            pendingGlobalVolume = params.globalVolume
             currentPosition = pos
             currentRow = 0
             return
         }
-        applySeek(state: state, mod: mod, position: pos, row: 0)
+        requestSeek(
+            state: state,
+            mod: mod,
+            position: pos,
+            row: 0,
+            speed: params.speed,
+            bpm: params.bpm,
+            globalVolume: params.globalVolume)
     }
 
     // Relativer Zeitsprung (z.B. +30s/-15s). Rechnet die gewuenschten Sekunden
     // ueber die aktuelle Zeilendauer (Speed/BPM) in Pattern-Zeilen um und
     // springt zeilengenau — bei Tempo-Wechseln im Song eine Naeherung.
     public func seek(bySeconds delta: Double) {
-        guard let state = playbackState, let mod = activeMod else { return }
-        let bpm = Double(state.bpm > 0 ? state.bpm : 125)
-        let rowDuration = Double(max(1, state.ticksPerRow)) * 60.0 / (bpm * 24.0)
+        guard playbackState != nil, let mod = activeMod else { return }
+        let effectiveBPM = Double(bpm > 0 ? bpm : 125)
+        let rowDuration = Double(max(1, speed)) * 60.0 / (effectiveBPM * 24.0)
         guard rowDuration > 0 else { return }
 
-        let currentRows = RenderEngine.cumulativeRows(mod, upTo: state.position, row: max(0, state.rowIndex))
+        let currentRows = RenderEngine.cumulativeRows(
+            mod,
+            upTo: currentPosition,
+            row: max(0, currentRow))
         var targetRows = currentRows + Int((delta / rowDuration).rounded())
         let totalRows = RenderEngine.cumulativeRows(mod, upTo: mod.length)
         targetRows = max(0, min(totalRows - 1, targetRows))
         let target = RenderEngine.positionAndRow(mod, forGlobalRow: targetRows)
-        applySeek(state: state, mod: mod, position: target.position, row: target.row)
+        seek(toPosition: target.position, row: target.row)
     }
 
-    private func applySeek(state: RealtimePlaybackState, mod: Mod, position: Int, row: Int) {
-        // Ziel so setzen, dass der naechste Tick-Boundary die Zielzeile LAEDT
-        // und ihre Noten triggert: eine Zeile davor auf dem letzten Tick stehen.
-        // (rowIndex -1 ist fuer row 0 in Ordnung — der Row-Advance rechnet +1.)
-        state.position = position
-        state.rowIndex = row - 1
-        state.tick = state.ticksPerRow - 1
-
-        // Noch nicht konsumierte Sequenz-Sprungbefehle loeschen. Ohne das wuerde
-        // ein vor dem Seek gesetzter Position-Jump (Bxx), Pattern-Break (Dxx) oder
-        // Pattern-Loop (E6x) beim naechsten Row-Advance feuern und die eben
-        // angesprungene Zielposition sofort wieder ueberschreiben. -1 = "inaktiv".
-        state.positionJump = -1
-        state.patternBreak = -1
-        state.patternLoopRow = -1
-        // Auch die per-Channel Pattern-Loop-Zustaende (E6x) neutralisieren. Sonst
-        // greift beim naechsten E6x-Handler der `patternLoopCount < 0`-Guard nicht
-        // (Zaehler noch positiv aus der Zeit vor dem Seek) und der Loop liefe mit
-        // stale Restzaehler weiter — analog zu DSPChannel.reset().
-        for ch in channels {
-            ch.patternLoopCount = -1
-            ch.patternLoopStartRow = 0
-            // Alle Kanaele stummschalten: vor dem Seek laufende Noten sollen an der
-            // Zielstelle NICHT weiterklingen (sonst "haengende" Kanaele). Ab der
-            // Zielzeile getriggerte Noten spielen normal. Per-Kanal-Slide-/Sustain-
-            // Zustaende werden (noch) nicht rekonstruiert -> gehaltene Noten von vor
-            // dem Sprung fehlen; das ist der bewusste Kompromiss fuer Test-Spruenge.
-            ch.playing = false
-        }
-        // Defensiv: ein laufender Pattern-Delay (EEx) wuerde sonst die erste Row
-        // nach dem Seek unerwartet verzoegern.
-        state.patternDelay = 0
-        state.patternDelayCounter = 0
-
-        state.patternDelaySeen = false
-        state.tempoSlide = 0
-        state.globalVolumeSlide = 0
-        state.rowTickDelay = 0
-        state.resetEndTransition()
-        state.pendingElapsedFrames = .max
-        if let states = channels.first?.itVoicePool?.patternChannels {
-            for patternState in states {
-                patternState.patternLoopCount = -1
-                patternState.patternLoopStartRow = 0
-                patternState.channelVolumeSlide = 0
-                patternState.panningSlide = 0
-            }
-        }
-
+    private func requestSeek(
+        state: RealtimePlaybackState,
+        mod: Mod,
+        position: Int,
+        row: Int,
+        speed: Int,
+        bpm: Int,
+        globalVolume: Int
+    ) {
         let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
-        SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
-        state.elapsedFrames = RenderEngine.elapsedFrames(
+        let tempoMode = mod.itProperties?.openMPTExtensions?.tempoMode ?? .classic
+        let headerRowsPerBeat = mod.itProperties.map { $0.patternHighlight & 0xFF } ?? 4
+        let rowsPerBeat = max(
+            1,
+            mod.itProperties?.openMPTExtensions?.rowsPerBeat
+                ?? (headerRowsPerBeat > 0 ? headerRowsPerBeat : 4))
+        let outputsPerTick = SequencerCore.outputsPerTick(
+            tempoMode: tempoMode,
+            bpm: bpm,
+            ticksPerRow: speed,
+            rowsPerBeat: rowsPerBeat,
+            sampleRate: sampleRate)
+        let elapsedFrames = RenderEngine.elapsedFrames(
             for: mod, position: position, row: row,
-            ticksPerRow: state.ticksPerRow, outputsPerTick: state.outputsPerTick)
+            ticksPerRow: speed, outputsPerTick: outputsPerTick)
+        state.requestSeek(
+            position: position,
+            row: row,
+            ticksPerRow: speed,
+            bpm: bpm,
+            globalVolume: globalVolume,
+            elapsedFrames: elapsedFrames)
 
+        consumedEndPosition = -1
+        consumedEndRow = 0
+        consumedEndFrame = .max
         self.currentPosition = position
         self.currentRow = max(0, row)
+    }
+
+    private func publishSeekParameters(speed: Int, bpm: Int) {
+        suppressRealtimeParameterWriteback = true
+        self.speed = speed
+        self.bpm = bpm
+        suppressRealtimeParameterWriteback = false
     }
 
     // Setzt NUR die Anzeige-/Sperrbildschirm-Uhr auf den Loop-Neustartpunkt
@@ -593,9 +617,31 @@ public final class ModPlayerCoordinator: ObservableObject {
             position = max(0, min(mod.length - 1, state.restartPosition))
             row = 0
         }
-        let frames = RenderEngine.elapsedFrames(
+        let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
+        let tempoMode = mod.itProperties?.openMPTExtensions?.tempoMode ?? .classic
+        let headerRowsPerBeat = mod.itProperties.map { $0.patternHighlight & 0xFF } ?? 4
+        let rowsPerBeat = max(
+            1,
+            mod.itProperties?.openMPTExtensions?.rowsPerBeat
+                ?? (headerRowsPerBeat > 0 ? headerRowsPerBeat : 4))
+        let outputsPerTick = SequencerCore.outputsPerTick(
+            tempoMode: tempoMode,
+            bpm: bpm,
+            ticksPerRow: speed,
+            rowsPerBeat: rowsPerBeat,
+            sampleRate: sampleRate)
+        let loopStartFrames = RenderEngine.elapsedFrames(
             for: mod, position: position, row: row,
-            ticksPerRow: state.ticksPerRow, outputsPerTick: state.outputsPerTick)
+            ticksPerRow: speed, outputsPerTick: outputsPerTick)
+        let transitionFrame = consumedEndFrame != .max
+            ? consumedEndFrame
+            : state.endReachedFrame
+        let frames = transitionFrame != .max
+            ? RenderEngine.elapsedFramesAfterLoopTransition(
+                loopStartFrames: loopStartFrames,
+                transitionFrame: transitionFrame,
+                renderedFrame: state.publishedElapsedFrames)
+            : loopStartFrames
         // Den Zaehler NICHT selbst schreiben: Er gehoert dem Renderblock, der
         // ihn pro Frame erhoeht. Ein direkter Schreibzugriff von hier koennte
         // zwischen dessen Lesen und Zurueckschreiben verlorengehen.
@@ -605,19 +651,33 @@ public final class ModPlayerCoordinator: ObservableObject {
         // `visualizerState.elapsedTime`; ohne diese Zeile zeigte er dort noch
         // einmal die alte, zu lange Zeit und korrigierte sich erst beim
         // naechsten VU-Takt.
-        let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
         visualizerState.elapsedTime = Double(frames) / sampleRate
     }
     
-    public func toggleMute(channelIndex: Int) {
-        guard channelIndex >= 0 && channelIndex < channelCount else { return }
+    // Wer traegt Mute und Solo fuer diesen sichtbaren Kanal?
+    //
+    // IT fuehrt beide Schalter am logischen Pattern-Kanal, weil eine Note dort
+    // ueber NNA mehrere Stimmen gleichzeitig belegen kann; alle anderen Formate
+    // fuehren sie direkt an der einen Stimme des Kanals. Lesen und Schreiben
+    // muessen zwingend denselben Traeger treffen — sonst schaltet die
+    // Oberflaeche den einen stumm und liest den anderen aus, und der
+    // M/S-Schalter zeigt etwas anderes an, als zu hoeren ist. Deshalb steht die
+    // Auswahl hier einmal statt viermal.
+    private func muteState(at channelIndex: Int) -> ChannelMuteState? {
+        guard channelIndex >= 0, channelIndex < channelCount else { return nil }
         if activeMod?.format == .it,
            let states = channels.first?.itVoicePool?.patternChannels,
            channelIndex < states.count {
-            states[channelIndex].isMuted.toggle()
-        } else {
-            channels[channelIndex].isMuted.toggle()
+            return states[channelIndex]
         }
+        // channelCount ist in setMod auf die Stimmenzahl begrenzt, der Zugriff
+        // liegt damit immer innerhalb von `channels`.
+        return channels[channelIndex]
+    }
+
+    public func toggleMute(channelIndex: Int) {
+        guard let state = muteState(at: channelIndex) else { return }
+        state.isMuted.toggle()
         objectWillChange.send()
         // Die Kanal-Streifen beobachten den visualizerState (nicht den Coordinator).
         // Ohne diesen Anstoß aktualisierte sich die M/S-Optik im gestoppten Zustand
@@ -626,36 +686,18 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
 
     public func toggleSolo(channelIndex: Int) {
-        guard channelIndex >= 0 && channelIndex < channelCount else { return }
-        if activeMod?.format == .it,
-           let states = channels.first?.itVoicePool?.patternChannels,
-           channelIndex < states.count {
-            states[channelIndex].isSoloed.toggle()
-        } else {
-            channels[channelIndex].isSoloed.toggle()
-        }
+        guard let state = muteState(at: channelIndex) else { return }
+        state.isSoloed.toggle()
         objectWillChange.send()
         visualizerState.nudge()
     }
 
     public func isMuted(channelIndex: Int) -> Bool {
-        guard channelIndex >= 0 && channelIndex < channelCount else { return false }
-        if activeMod?.format == .it,
-           let states = channels.first?.itVoicePool?.patternChannels,
-           channelIndex < states.count {
-            return states[channelIndex].isMuted
-        }
-        return channels[channelIndex].isMuted
+        muteState(at: channelIndex)?.isMuted ?? false
     }
 
     public func isSoloed(channelIndex: Int) -> Bool {
-        guard channelIndex >= 0 && channelIndex < channelCount else { return false }
-        if activeMod?.format == .it,
-           let states = channels.first?.itVoicePool?.patternChannels,
-           channelIndex < states.count {
-            return states[channelIndex].isSoloed
-        }
-        return channels[channelIndex].isSoloed
+        muteState(at: channelIndex)?.isSoloed ?? false
     }
 
     @MainActor
@@ -706,6 +748,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         if let state = self.playbackState {
             // Songende-Signal aus dem Renderblock auf den MainActor heben.
             if let transition = state.consumeEndTransition() {
+                consumedEndFrame = transition.frame
                 consumedEndPosition = transition.position
                 consumedEndRow = transition.row
                 self.songEndPulse &+= 1
@@ -729,7 +772,7 @@ public final class ModPlayerCoordinator: ObservableObject {
             let pendingElapsed = state.pendingElapsedFrames
             let elapsed = pendingElapsed != .max
                 ? pendingElapsed
-                : state.elapsedFrames
+                : state.publishedElapsedFrames
             vis.elapsedTime = Double(elapsed) / sampleRate
 
         }

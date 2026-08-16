@@ -444,6 +444,108 @@ final class CoordinatorSequencingTests: XCTestCase {
         withExtendedLifetime(hold) {}
     }
 
+    func testSeekMutatesSequencerAndChannelsOnlyInsideRenderBlock() {
+        let mod = makeTraceMod()
+        let channels = RenderEngine.makeRenderChannels(for: mod)
+        let state = RenderEngine.makeRenderState(for: mod, sampleRate: 44_100)
+        state.outputsUntilNextTick = 100
+        state.positionJump = 7
+        state.patternBreak = 12
+        channels[0].playing = true
+
+        let channelCount = channels.count
+        let peaks = UnsafeMutablePointer<Float>.allocate(capacity: channelCount)
+        defer { peaks.deallocate() }
+        peaks.initialize(repeating: 0, count: channelCount)
+        let waves = UnsafeMutablePointer<Float>.allocate(capacity: channelCount * 32)
+        defer { waves.deallocate() }
+        waves.initialize(repeating: 0, count: channelCount * 32)
+        let master = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+        defer { master.deallocate() }
+        master.initialize(repeating: 0, count: 128)
+        let block = RenderEngine.createRenderBlock(
+            state: state,
+            vuBuffer: RealtimeVUBuffer(pointer: peaks),
+            waveBuffer: RealtimeWaveBuffer(channelWaves: waves, masterWaves: master),
+            dspChannels: channels,
+            mod: mod,
+            sampleRate: 44_100)
+        let buffer = StereoRenderBuffer(capacity: 1)
+
+        state.requestSeek(
+            position: 1,
+            row: 3,
+            ticksPerRow: 8,
+            bpm: 150,
+            globalVolume: 32,
+            elapsedFrames: 9_000)
+
+        XCTAssertEqual(state.position, 0, "der Producer legt nur einen Auftrag ab")
+        XCTAssertTrue(channels[0].playing, "Kanaele gehoeren bis zum Callback dem Audiothread")
+
+        block(1, buffer.left, buffer.right)
+
+        XCTAssertEqual(state.position, 1)
+        XCTAssertEqual(state.rowIndex, 2)
+        XCTAssertEqual(state.tick, 7)
+        XCTAssertEqual(state.ticksPerRow, 8)
+        XCTAssertEqual(state.bpm, 150)
+        XCTAssertEqual(state.globalVolume, 32)
+        XCTAssertEqual(state.positionJump, -1)
+        XCTAssertEqual(state.patternBreak, -1)
+        XCTAssertFalse(channels[0].playing)
+        XCTAssertEqual(state.elapsedFrames, 9_001)
+        XCTAssertEqual(state.publishedElapsedFrames, 9_001)
+    }
+
+    func testSeekSnapshotStressNeverMixesTwoRequests() {
+        let state = RealtimePlaybackState()
+        let lastValue = 20_000
+        let mismatch = LockFreeAtomicUInt64(.max)
+        let producerDone = LockFreeAtomicUInt64(0)
+        let producer = expectation(description: "seek producer")
+        let consumer = expectation(description: "seek consumer")
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            for value in 1...lastValue {
+                state.requestSeek(
+                    position: value,
+                    row: value % 1_000,
+                    ticksPerRow: value % 200 + 1,
+                    bpm: value % 400 + 32,
+                    globalVolume: value % 129,
+                    elapsedFrames: UInt64(value * 7))
+            }
+            producerDone.storeRelease(1)
+            producer.fulfill()
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            while true {
+                if let request = state.takePendingSeek() {
+                    let value = request.position
+                    if request.row != value % 1_000
+                        || request.ticksPerRow != value % 200 + 1
+                        || request.bpm != value % 400 + 32
+                        || request.globalVolume != value % 129
+                        || request.elapsedFrames != UInt64(value * 7) {
+                        mismatch.storeRelaxed(UInt64(value))
+                        break
+                    }
+                    if value == lastValue { break }
+                } else if producerDone.loadAcquire() != 0 {
+                    // Der letzte veroeffentlichte Auftrag muss noch sichtbar
+                    // sein; ohne Snapshot bedeutet dies, dass er bereits als
+                    // letzter konsistent konsumiert wurde.
+                    continue
+                }
+            }
+            consumer.fulfill()
+        }
+
+        wait(for: [producer, consumer], timeout: 10)
+        XCTAssertEqual(mismatch.loadRelaxed(), .max)
+    }
+
     /// Echte Producer-/Consumer-Konkurrenz: Jeder Uhr-Auftrag muss genau
     /// einmal und in Reihenfolge aus dem atomaren Sentinel kommen. Der Test
     /// laeuft auch unter TSan; die fruehere normale Swift-Variable meldete dort
@@ -563,4 +665,48 @@ final class CoordinatorSequencingTests: XCTestCase {
         XCTAssertEqual(state.endReachedRow, 2, "Dxx setzt die Zielzeile des Sprungs")
         withExtendedLifetime(hold) {}
     }
+
+    func testLoopElapsedTimeIncludesFramesRenderedSinceTransition() {
+        XCTAssertEqual(
+            RenderEngine.elapsedFramesAfterLoopTransition(
+                loopStartFrames: 4_000,
+                transitionFrame: 100_000,
+                renderedFrame: 101_470),
+            5_470)
+    }
+
+    // Mute und Solo liegen bei IT am logischen Pattern-Kanal, bei allen anderen
+    // Formaten an der Stimme. Setzen und Lesen muessen denselben Traeger
+    // treffen — sonst schaltet die Oberflaeche den einen stumm und liest den
+    // anderen aus, und der M/S-Schalter zeigt etwas anderes an, als zu hoeren
+    // ist. Die Auswahl lag frueher in vier Funktionen getrennt vor.
+#if canImport(AVFoundation) && canImport(Combine)
+    @MainActor
+    func testMuteAndSoloReadBackWhatWasSet() throws {
+        let coordinator = ModPlayerCoordinator()
+        coordinator.setMod(try ModParser.parse(data: makeMod(effectId: 0, effectData: 0)))
+
+        XCTAssertFalse(coordinator.isMuted(channelIndex: 0))
+        XCTAssertFalse(coordinator.isSoloed(channelIndex: 0))
+
+        coordinator.toggleMute(channelIndex: 0)
+        XCTAssertTrue(coordinator.isMuted(channelIndex: 0))
+        XCTAssertFalse(coordinator.isMuted(channelIndex: 1), "nur der gewaehlte Kanal")
+        XCTAssertFalse(coordinator.isSoloed(channelIndex: 0), "Mute darf Solo nicht mitsetzen")
+
+        coordinator.toggleSolo(channelIndex: 2)
+        XCTAssertTrue(coordinator.isSoloed(channelIndex: 2))
+        XCTAssertFalse(coordinator.isMuted(channelIndex: 2), "Solo darf Mute nicht mitsetzen")
+
+        coordinator.toggleMute(channelIndex: 0)
+        XCTAssertFalse(coordinator.isMuted(channelIndex: 0))
+
+        // Indizes ausserhalb des Kanalbereichs bleiben wirkungslos statt zu
+        // beenden.
+        coordinator.toggleMute(channelIndex: -1)
+        coordinator.toggleMute(channelIndex: 999)
+        XCTAssertFalse(coordinator.isMuted(channelIndex: -1))
+        XCTAssertFalse(coordinator.isSoloed(channelIndex: 999))
+    }
+#endif
 }

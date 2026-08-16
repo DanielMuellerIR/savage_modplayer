@@ -324,6 +324,14 @@ public enum ZipArchiveReader {
             // komplett abgelehnt statt still zurechtgebogen.
             let components = try safeRelativeComponents(for: record.name)
 
+            // Link und Verschluesselung machen das GESAMTE Archiv ungueltig,
+            // auch wenn der Eintrag ein Verzeichnis ist oder der Vorfilter ihn
+            // nicht entpacken wollte. Sonst koennte ein Import das Quellarchiv
+            // als vollstaendig verarbeitet entfernen, obwohl es verbotene
+            // Inhalte nur ausgeblendet hat.
+            if record.isSymbolicLink { throw ZipArchiveError.symbolicLinkEntry(record.name) }
+            if record.isEncrypted { throw ZipArchiveError.encryptedEntry(record.name) }
+
             if record.isDirectory {
                 // Leere Ordner braucht niemand; die Struktur entsteht ohnehin
                 // beim Anlegen der Dateien.
@@ -338,11 +346,6 @@ public enum ZipArchiveReader {
                 continue
             }
 
-            // Ab hier gilt der Eintrag als gewollt — deshalb sind Link und
-            // Verschluesselung jetzt harte Fehler statt stiller Auslassungen:
-            // der Nutzer soll erfahren, warum genau diese Datei fehlt.
-            if record.isSymbolicLink { throw ZipArchiveError.symbolicLinkEntry(record.name) }
-            if record.isEncrypted { throw ZipArchiveError.encryptedEntry(record.name) }
             guard record.isSupportedMethod else {
                 // Andere Verfahren (bzip2, LZMA, …) kommen in Modul-Sammlungen
                 // praktisch nicht vor und gelten hier als "uebersprungen" —
@@ -420,13 +423,20 @@ public enum ZipArchiveReader {
         var isDirectory: Bool { name.hasSuffix("/") }
         var isSupportedMethod: Bool { method == 0 || method == 8 }
 
+        /// Systeme, die laut ZIP APPNOTE (Abschnitt 4.4.2.2) in den oberen
+        /// 16 Bit der externen Attribute einen Unix-Dateimodus ablegen:
+        /// 3 = Unix, 19 = OS X (Darwin). Ein von macOS geschriebenes Archiv
+        /// traegt haeufig die 19 — wer nur die 3 prueft, uebersieht dessen
+        /// Symlinks.
+        private static let unixModeHostSystems: Set<UInt16> = [3, 19]
+
         /// Symbolische Links erkennt man an den oberen 16 Bit der externen
-        /// Attribute: dort steht bei Unix-Archiven der Dateimodus, und
+        /// Attribute: dort steht bei diesen Systemen der Dateimodus, und
         /// S_IFLNK ist 0xA000. Die unteren Bits sind DOS-Attribute und hier
         /// uninteressant. Das obere Byte von `versionMadeBy` sagt, welches
-        /// System das Archiv geschrieben hat (3 = Unix).
+        /// System das Archiv geschrieben hat.
         var isSymbolicLink: Bool {
-            guard versionMadeBy >> 8 == 3 else { return false }
+            guard Self.unixModeHostSystems.contains(versionMadeBy >> 8) else { return false }
             let unixMode = (externalAttributes >> 16) & 0xF000
             return unixMode == 0xA000
         }

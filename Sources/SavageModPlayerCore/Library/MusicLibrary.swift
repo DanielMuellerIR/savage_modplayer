@@ -62,6 +62,29 @@ public struct LibraryItem: Codable, Sendable, Hashable {
         if !components.isEmpty { components.removeLast() }
         return components
     }
+
+    // Gilt die Datei auf der Platte als unveraendert gegenueber diesem
+    // Indexeintrag?
+    //
+    // Die Heuristik: Groesse **und** Aenderungsdatum muessen passen, dann wird
+    // nicht neu gehasht. Zeitstempel gelten als gleich, wenn sie weniger als
+    // eine Sekunde auseinanderliegen — manche Dateisysteme speichern nur ganze
+    // Sekunden. Das kann eine Aenderung uebersehen, die Groesse und Zeitstempel
+    // exakt erhaelt; beim Ablegen ueber Finder oder Dateien-App kommt das
+    // praktisch nicht vor und waere den Preis nicht wert, jede Datei bei jedem
+    // Start komplett zu lesen.
+    //
+    // Ist eines der beiden Merkmale unbekannt (`nil`), gilt die Datei als
+    // veraendert — lieber einmal zu viel hashen als eine Aenderung verschlucken.
+    // Der Abgleich in `MusicLibrary.rescan` und die Dedupe-Pruefung in
+    // `LibraryImporter` haben diese Regel frueher getrennt umgesetzt; liefen sie
+    // auseinander, haette derselbe Bestand je nach Weg als geaendert oder als
+    // unveraendert gegolten.
+    func matchesFileOnDisk(size: Int64?, modifiedAt fileModifiedAt: Date?) -> Bool {
+        guard let size, size == fileSize else { return false }
+        guard let fileModifiedAt, let indexed = modifiedAt else { return false }
+        return abs(fileModifiedAt.timeIntervalSince(indexed)) < 1
+    }
 }
 
 // Der gespeicherte Index. `formatVersion` erlaubt spaetere Formatwechsel:
@@ -239,13 +262,9 @@ public final class MusicLibrary: @unchecked Sendable {
     // speichert ihn.
     //
     // Damit ein Abgleich ueber tausende Dateien nicht jedes Mal alles neu
-    // liest, gilt eine einfache Heuristik: Stimmen Groesse **und**
-    // Aenderungsdatum mit dem Indexeintrag ueberein, gilt die Datei als
-    // unveraendert und wird nicht neu gehasht. Weicht eines davon ab, wird
-    // gehasht. Das kann eine Aenderung uebersehen, die Groesse und Zeitstempel
-    // exakt erhaelt — dieser Fall kommt beim Ablegen ueber Finder oder
-    // Dateien-App praktisch nicht vor und waere hier nicht den Preis wert,
-    // jede Datei bei jedem Start komplett zu lesen.
+    // liest, wird nur gehasht, was sich laut Groesse und Aenderungsdatum
+    // geaendert haben koennte — die Regel dazu steht bei
+    // `LibraryItem.matchesFileOnDisk`.
     @discardableResult
     public func rescan(isCancelled: () -> Bool = { false }) throws -> RescanReport {
         try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
@@ -304,11 +323,11 @@ public final class MusicLibrary: @unchecked Sendable {
             guard PlaylistScanner.isModFile(fileURL) else { continue }
 
             seen.insert(relative)
-            let size = Int64(values?.fileSize ?? 0)
+            let size = values?.fileSize.map(Int64.init)
             let modified = values?.contentModificationDate
 
             if let known = item(withRelativePath: relative) {
-                if known.fileSize == size, Self.sameTimestamp(known.modifiedAt, modified) {
+                if known.matchesFileOnDisk(size: size, modifiedAt: modified) {
                     unchanged += 1
                     continue
                 }
@@ -359,13 +378,6 @@ public final class MusicLibrary: @unchecked Sendable {
             added: added, removed: removed, unchanged: unchanged, changed: changed,
             archivesFound: archives, wasCancelled: cancelled,
             enumerationError: enumerationError)
-    }
-
-    // Zeitstempel gelten als gleich, wenn sie weniger als eine Sekunde
-    // auseinanderliegen — manche Dateisysteme speichern nur ganze Sekunden.
-    private static func sameTimestamp(_ lhs: Date?, _ rhs: Date?) -> Bool {
-        guard let lhs, let rhs else { return false }
-        return abs(lhs.timeIntervalSince(rhs)) < 1
     }
 
     // MARK: - Entfernen
