@@ -108,9 +108,40 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
     }
 
-    // Update-Frequenz des VU-/Oszi-/Zeit-Ticks: 30 Hz für flüssige Oszilloskope,
-    // im Kompaktmodus nur ~5 Hz (kein Oszi sichtbar) — senkt die SwiftUI-Last stark.
-    private var vuUpdateInterval: TimeInterval { visualizersVisible ? 0.033 : 0.2 }
+    // Bildrate der Visualisierungen im Vollmodus, in Hz. 30 ist die Vorgabe und
+    // damit die volle Optik; wer lieber CPU spart, stellt sie herunter.
+    //
+    // Der Hebel ist gross: gemessen am 2026-08-23 auf einem Mac mit M5-Chip, mit demselben
+    // 4-Kanal-MOD, gleicher Fenstergroesse und stummer Ausgabe (verbrauchte
+    // CPU-Zeit ueber je 30 s) — 30 Hz: 22 %, 24 Hz: 20 %, 15 Hz: 18 %,
+    // 10 Hz: 14 % eines Kerns. Nicht der Audio-DSP, sondern das Durchreichen
+    // der Werte durch SwiftUI macht den Unterschied.
+    //
+    // Geklemmt auf 1…60 Hz: 0 wuerde einen Timer mit Intervall unendlich
+    // ergeben, ein sehr grosser Wert einen Timer, der den MainActor flutet.
+    @Published public var visualizerFrameRate: Double = 30 {
+        didSet {
+            guard oldValue != visualizerFrameRate, vuUpdateTimer != nil else { return }
+            startVUUpdates()
+        }
+    }
+
+    // Update-Frequenz des VU-/Oszi-/Zeit-Ticks: im Vollmodus die eingestellte
+    // Bildrate, im Kompaktmodus fest ~5 Hz (kein Oszi sichtbar) — das senkt die
+    // SwiftUI-Last stark und ist dort auch nicht sichtbar.
+    private var vuUpdateInterval: TimeInterval {
+        Self.visualizerUpdateInterval(
+            frameRate: visualizerFrameRate, visualizersVisible: visualizersVisible)
+    }
+
+    // Als eigene Funktion, damit sich die Klemmung ohne laufende Audio-Engine
+    // pruefen laesst.
+    nonisolated static func visualizerUpdateInterval(
+        frameRate: Double, visualizersVisible: Bool
+    ) -> TimeInterval {
+        guard visualizersVisible else { return 0.2 }
+        return 1.0 / min(60.0, max(1.0, frameRate))
+    }
 
     // New parameters for user controls
     @Published public var stereoSeparation: Float = 0.8 {
@@ -139,6 +170,10 @@ public final class ModPlayerCoordinator: ObservableObject {
     private var consumedEndPosition = -1
     private var consumedEndRow = 0
     private var consumedEndFrame = UInt64.max
+    // Der UI-Snapshot bleibt auf dem angeforderten Ziel, bis der Audioblock
+    // genau diese Seek-Sequenz angewandt und atomar veroeffentlicht hat.
+    private var pendingSeekSequence: UInt64?
+    private var pendingSeekTransport: RealtimePlaybackState.TransportSnapshot?
     
     private var audioEngine: AVAudioEngine?
     private var sourceNode: AVAudioSourceNode?
@@ -199,11 +234,21 @@ public final class ModPlayerCoordinator: ObservableObject {
     // gerade aus der Demoscene — haben ein leeres Titelfeld; frueher stand dann
     // stumpf "Unbekannter Track" oben. Der Dateiname ist fuer den Nutzer weit
     // aussagekraeftiger.
-    public func setMod(_ mod: Mod, fallbackName: String? = nil) {
+    //
+    // precomputedDuration: Die Spieldauer, falls der Aufrufer sie schon kennt.
+    // Sie zu ermitteln heisst, den Sequencer einmal ohne Audio bis zum
+    // Songende durchzutakten — bei einem grossen IT der teuerste Teil des
+    // Ladens. Weil dieser Coordinator auf dem MainActor lebt, wuerde die Probe
+    // hier die Oberflaeche blockieren. Wer im Hintergrund laedt, rechnet sie
+    // deshalb dort aus und reicht sie herein (so macht es die iPhone-App).
+    // Ohne Angabe wird sie wie bisher hier berechnet.
+    public func setMod(_ mod: Mod, fallbackName: String? = nil, precomputedDuration: Double? = nil) {
         stop()
         consumedEndPosition = -1
         consumedEndRow = 0
         consumedEndFrame = .max
+        pendingSeekSequence = nil
+        pendingSeekTransport = nil
         self.activeMod = mod
         // Header-Titel um Leerraum bereinigen; nur ein echter, nicht-leerer Titel
         // gewinnt, sonst der Dateiname-Fallback (und erst zuletzt der Default).
@@ -228,7 +273,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         // vortakten. Die fruehere Rows*Speed/BPM-Schaetzung ignorierte Bxx,
         // Pattern-Loops, Delays und Tempoaenderungen (Referenz-IT: 01:24 statt
         // korrekt 00:46). Die schnelle Tick-Probe ist von Blockgroessen frei.
-        self.visualizerState.totalDuration = RenderEngine.sequencedDuration(of: mod)
+        self.visualizerState.totalDuration = precomputedDuration ?? RenderEngine.sequencedDuration(of: mod)
 
         self.currentPosition = 0
         self.currentRow = 0
@@ -286,13 +331,9 @@ public final class ModPlayerCoordinator: ObservableObject {
         state.tick = self.speed - 1
         state.ticksPerRow = self.speed
         state.bpm = self.bpm
-        state.tempoMode = mod.itProperties?.openMPTExtensions?.tempoMode ?? .classic
-        let headerRowsPerBeat = mod.itProperties.map { $0.patternHighlight & 0xFF } ?? 4
-        state.rowsPerBeat = max(
-            1,
-            mod.itProperties?.openMPTExtensions?.rowsPerBeat
-                ?? (headerRowsPerBeat > 0 ? headerRowsPerBeat : 4)
-        )
+        let timing = RenderEngine.timingParameters(for: mod)
+        state.tempoMode = timing.tempoMode
+        state.rowsPerBeat = timing.rowsPerBeat
         state.restartPosition = max(
             0,
             min(mod.length - 1, mod.itProperties?.openMPTExtensions?.restartPosition ?? 0)
@@ -345,6 +386,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
         // Rekonstruiertes Global-Volume (Zeilen-Sprung) uebernehmen.
         if let gv = pendingGlobalVolume { state.globalVolume = Float(gv) }
+        state.publishTransportSnapshot()
         pendingStartPosition = nil
         pendingStartRow = nil
         pendingGlobalVolume = nil
@@ -381,17 +423,13 @@ public final class ModPlayerCoordinator: ObservableObject {
         engine.connect(sourceNode, to: lowPass, format: stereoFormat)
         engine.connect(lowPass, to: mixer, format: stereoFormat)
         
-        // iOS spezifisch: AudioSession aktivieren (Dummy-Aufruf auf macOS, funktioniert überall)
-        #if os(iOS)
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default)
-            try session.setActive(true)
-        } catch {
-            print("Fehler bei iOS AVAudioSession Aktivierung: \(error)")
-        }
-        #endif
-        
+        // Die AVAudioSession wird hier bewusst NICHT angefasst. Sie ist ein
+        // globaler Systemzustand und gehoert der App, nicht dem Replayer: Auf
+        // iOS setzt und aktiviert `AudioSessionController` sie, samt
+        // Puffergroesse, Unterbrechungen und Routenwechseln. Frueher stand hier
+        // ein zweiter setCategory/setActive-Aufruf, dessen einzige
+        // Fehlerbehandlung ein `print` war — zwei Stellen, die denselben
+        // Systemzustand setzen, und keine davon zustaendig.
         do {
             try engine.start()
             // Gespeicherte Lautstaerke auf den neuen Mixer anwenden, damit die
@@ -424,6 +462,8 @@ public final class ModPlayerCoordinator: ObservableObject {
         stopVUUpdates()
 
         self.playbackState = nil
+        pendingSeekSequence = nil
+        pendingSeekTransport = nil
 
         for ch in channels {
             ch.reset()
@@ -503,8 +543,13 @@ public final class ModPlayerCoordinator: ObservableObject {
     public func seek(toPosition: Int) {
         guard let mod = activeMod else { return }
         let pos = max(0, min(mod.length - 1, toPosition))
-        let params = RenderEngine.reconstructGlobalParams(mod, toPosition: pos, row: 0)
-        publishSeekParameters(speed: params.speed, bpm: params.bpm)
+        // Der Positionsslider veraendert nur die Position. Manuell gesetzte
+        // BPM/Speed und die aktuelle globale Lautstaerke bleiben wie vor der
+        // zeilengenauen Seek-Erweiterung erhalten.
+        let currentGlobalVolume = playbackState.map { seekTransport(for: $0).globalVolume }
+            ?? pendingGlobalVolume
+            ?? mod.initialGlobalVolume
+        let params = (speed: speed, bpm: bpm, globalVolume: currentGlobalVolume)
         guard let state = playbackState else {
             // Gestoppt: Position nur vormerken und in der UI anzeigen —
             // play() greift sie auf und beginnt an dieser Stelle.
@@ -529,15 +574,17 @@ public final class ModPlayerCoordinator: ObservableObject {
     // ueber die aktuelle Zeilendauer (Speed/BPM) in Pattern-Zeilen um und
     // springt zeilengenau — bei Tempo-Wechseln im Song eine Naeherung.
     public func seek(bySeconds delta: Double) {
-        guard playbackState != nil, let mod = activeMod else { return }
-        let effectiveBPM = Double(bpm > 0 ? bpm : 125)
-        let rowDuration = Double(max(1, speed)) * 60.0 / (effectiveBPM * 24.0)
+        guard let state = playbackState, let mod = activeMod else { return }
+        let transport = seekTransport(for: state)
+        let effectiveBPM = Double(transport.bpm > 0 ? transport.bpm : 125)
+        let rowDuration = Double(max(1, transport.ticksPerRow))
+            * 60.0 / (effectiveBPM * 24.0)
         guard rowDuration > 0 else { return }
 
         let currentRows = RenderEngine.cumulativeRows(
             mod,
-            upTo: currentPosition,
-            row: max(0, currentRow))
+            upTo: transport.position,
+            row: max(0, transport.row))
         var targetRows = currentRows + Int((delta / rowDuration).rounded())
         let totalRows = RenderEngine.cumulativeRows(mod, upTo: mod.length)
         targetRows = max(0, min(totalRows - 1, targetRows))
@@ -545,7 +592,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         seek(toPosition: target.position, row: target.row)
     }
 
-    private func requestSeek(
+    func requestSeek(
         state: RealtimePlaybackState,
         mod: Mod,
         position: Int,
@@ -555,34 +602,54 @@ public final class ModPlayerCoordinator: ObservableObject {
         globalVolume: Int
     ) {
         let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
-        let tempoMode = mod.itProperties?.openMPTExtensions?.tempoMode ?? .classic
-        let headerRowsPerBeat = mod.itProperties.map { $0.patternHighlight & 0xFF } ?? 4
-        let rowsPerBeat = max(
-            1,
-            mod.itProperties?.openMPTExtensions?.rowsPerBeat
-                ?? (headerRowsPerBeat > 0 ? headerRowsPerBeat : 4))
+        let timing = RenderEngine.timingParameters(for: mod)
         let outputsPerTick = SequencerCore.outputsPerTick(
-            tempoMode: tempoMode,
+            tempoMode: timing.tempoMode,
             bpm: bpm,
             ticksPerRow: speed,
-            rowsPerBeat: rowsPerBeat,
+            rowsPerBeat: timing.rowsPerBeat,
             sampleRate: sampleRate)
         let elapsedFrames = RenderEngine.elapsedFrames(
             for: mod, position: position, row: row,
             ticksPerRow: speed, outputsPerTick: outputsPerTick)
-        state.requestSeek(
+        // Ein Endsignal aus der alten Position darf weder den Seek stoppen noch
+        // den Playlist-Titel wechseln. Eine Transition, die der Audiothread
+        // genau jetzt noch veroeffentlicht, bleibt bis applySeek liegen; der
+        // Poller konsumiert waehrend `pendingSeekSequence` nichts.
+        _ = state.consumeEndTransition()
+        let sequence = state.requestSeek(
             position: position,
             row: row,
             ticksPerRow: speed,
             bpm: bpm,
             globalVolume: globalVolume,
             elapsedFrames: elapsedFrames)
+        pendingSeekSequence = sequence
+        pendingSeekTransport = RealtimePlaybackState.TransportSnapshot(
+            position: position,
+            row: row,
+            ticksPerRow: min(Int(UInt8.max), max(1, speed)),
+            bpm: min(Int(UInt16.max), max(1, bpm)),
+            globalVolume: min(Int(UInt8.max), max(0, globalVolume)))
 
         consumedEndPosition = -1
         consumedEndRow = 0
         consumedEndFrame = .max
         self.currentPosition = position
         self.currentRow = max(0, row)
+    }
+
+    // Fuer einen zweiten relativen Sprung im selben Audiopuffer gilt bereits
+    // das erste Seek-Ziel; danach der letzte vollstaendig veroeffentlichte
+    // Renderstand. Die 30-/5-Hz-UI-Spiegel sind dafuer zu alt.
+    func seekTransport(for state: RealtimePlaybackState)
+        -> RealtimePlaybackState.TransportSnapshot {
+        if let sequence = pendingSeekSequence,
+           !state.isSeekApplied(sequence),
+           let pendingSeekTransport {
+            return pendingSeekTransport
+        }
+        return state.transportSnapshot
     }
 
     private func publishSeekParameters(speed: Int, bpm: Int) {
@@ -618,17 +685,12 @@ public final class ModPlayerCoordinator: ObservableObject {
             row = 0
         }
         let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
-        let tempoMode = mod.itProperties?.openMPTExtensions?.tempoMode ?? .classic
-        let headerRowsPerBeat = mod.itProperties.map { $0.patternHighlight & 0xFF } ?? 4
-        let rowsPerBeat = max(
-            1,
-            mod.itProperties?.openMPTExtensions?.rowsPerBeat
-                ?? (headerRowsPerBeat > 0 ? headerRowsPerBeat : 4))
+        let timing = RenderEngine.timingParameters(for: mod)
         let outputsPerTick = SequencerCore.outputsPerTick(
-            tempoMode: tempoMode,
+            tempoMode: timing.tempoMode,
             bpm: bpm,
             ticksPerRow: speed,
-            rowsPerBeat: rowsPerBeat,
+            rowsPerBeat: timing.rowsPerBeat,
             sampleRate: sampleRate)
         let loopStartFrames = RenderEngine.elapsedFrames(
             for: mod, position: position, row: row,
@@ -746,24 +808,7 @@ public final class ModPlayerCoordinator: ObservableObject {
 
         // Read progress directly from shared state (100% lock-free, allocation-free)
         if let state = self.playbackState {
-            // Songende-Signal aus dem Renderblock auf den MainActor heben.
-            if let transition = state.consumeEndTransition() {
-                consumedEndFrame = transition.frame
-                consumedEndPosition = transition.position
-                consumedEndRow = transition.row
-                self.songEndPulse &+= 1
-            }
-
-            let pos = state.position
-            let row = state.rowIndex
-            let b = state.bpm
-            let sp = state.ticksPerRow
-            
-            // Only publish if changed to minimize UI relayout overhead
-            if self.currentPosition != pos { self.currentPosition = pos }
-            if self.currentRow != row { self.currentRow = row }
-            if self.bpm != b { self.bpm = b }
-            if self.speed != sp { self.speed = sp }
+            synchronizePlaybackState(state)
             
             let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
             // Liegt ein Uhr-Auftrag an (Track-Loop), zaehlt bereits dieser Wert.
@@ -776,6 +821,35 @@ public final class ModPlayerCoordinator: ObservableObject {
             vis.elapsedTime = Double(elapsed) / sampleRate
 
         }
+    }
+
+    // MainActor-Seite des Seek-Handshakes. Solange der Audioblock das Ziel noch
+    // nicht bestaetigt hat, bleiben UI-Ziel und altes Endsignal unangetastet.
+    // Nach der Bestaetigung stammt Position/Zeile/Tempo aus EINEM atomaren Wort.
+    func synchronizePlaybackState(_ state: RealtimePlaybackState) {
+        let seekIsPending = pendingSeekSequence.map { !state.isSeekApplied($0) } ?? false
+        guard !seekIsPending else { return }
+
+        if pendingSeekSequence != nil {
+            pendingSeekSequence = nil
+            pendingSeekTransport = nil
+        }
+        if let transition = state.consumeEndTransition() {
+            consumedEndFrame = transition.frame
+            consumedEndPosition = transition.position
+            consumedEndRow = transition.row
+            self.songEndPulse &+= 1
+        }
+
+        let transport = state.transportSnapshot
+        suppressRealtimeParameterWriteback = true
+        defer { suppressRealtimeParameterWriteback = false }
+        if self.currentPosition != transport.position {
+            self.currentPosition = transport.position
+        }
+        if self.currentRow != transport.row { self.currentRow = transport.row }
+        if self.bpm != transport.bpm { self.bpm = transport.bpm }
+        if self.speed != transport.ticksPerRow { self.speed = transport.ticksPerRow }
     }
     
     private func startVUUpdates() {

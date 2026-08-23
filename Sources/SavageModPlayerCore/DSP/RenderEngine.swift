@@ -28,12 +28,21 @@ public final class RealtimePlaybackState: Sendable {
     }
 
     struct SeekSnapshot: Sendable {
+        let sequence: UInt64
         let position: Int
         let row: Int
         let ticksPerRow: Int
         let bpm: Int
         let globalVolume: Int
         let elapsedFrames: UInt64
+    }
+
+    struct TransportSnapshot: Sendable {
+        let position: Int
+        let row: Int
+        let ticksPerRow: Int
+        let bpm: Int
+        let globalVolume: Int
     }
 
     // Der neutrale Vorstart steht direkt vor Zeile 0 der ersten Position. Ein
@@ -116,7 +125,11 @@ public final class RealtimePlaybackState: Sendable {
     private let seekSequenceStorage = LockFreeAtomicUInt64(0)
     private let seekTargetStorage = LockFreeAtomicUInt64(0)
     private let seekElapsedFramesStorage = LockFreeAtomicUInt64(0)
-    nonisolated(unsafe) private var appliedSeekSequence: UInt64 = 0
+    private let appliedSeekSequenceStorage = LockFreeAtomicUInt64(0)
+    // Position, Zeile und Tempo werden als EIN atomarer Snapshot an MainActor
+    // und Sperrbildschirm veroeffentlicht. Damit liest der Poller nie vier
+    // normale Swift-Felder waehrend der Audiothread sie gerade aendert.
+    private let publishedTransportStorage: LockFreeAtomicUInt64
     // Wird im Renderblock gesetzt, wenn der Song hinter die letzte Position laeuft
     // (Wrap auf 0). Der MainActor-Poller liest das Flag und meldet das Songende,
     // damit die UI den loopMode (none/track/playlist) auswerten kann.
@@ -142,7 +155,41 @@ public final class RealtimePlaybackState: Sendable {
         Int(Int64(bitPattern: endReachedRowStorage.loadAcquire()))
     }
 
-    public init() {}
+    public init() {
+        publishedTransportStorage = LockFreeAtomicUInt64(Self.packTransport(
+            position: 0, row: -1, ticksPerRow: 6, bpm: 125, globalVolume: 64))
+    }
+
+    @inline(__always)
+    private static func packTransport(
+        position: Int,
+        row: Int,
+        ticksPerRow: Int,
+        bpm: Int,
+        globalVolume: Int
+    ) -> UInt64 {
+        let packedRow = UInt64(UInt16(bitPattern: Int16(
+            max(Int(Int16.min), min(Int(Int16.max), row)))))
+        return UInt64(max(0, min(Int(UInt16.max), position)))
+            | (packedRow << 16)
+            | (UInt64(max(1, min(Int(UInt8.max), ticksPerRow))) << 32)
+            | (UInt64(max(1, min(Int(UInt16.max), bpm))) << 40)
+            | (UInt64(max(0, min(Int(UInt8.max), globalVolume))) << 56)
+    }
+
+    @inline(__always)
+    private static func unpackTransport(_ packed: UInt64) -> TransportSnapshot {
+        TransportSnapshot(
+            position: Int(packed & 0xFFFF),
+            row: Int(Int16(bitPattern: UInt16((packed >> 16) & 0xFFFF))),
+            ticksPerRow: Int((packed >> 32) & 0xFF),
+            bpm: Int((packed >> 40) & 0xFFFF),
+            globalVolume: Int((packed >> 56) & 0xFF))
+    }
+
+    var transportSnapshot: TransportSnapshot {
+        Self.unpackTransport(publishedTransportStorage.loadAcquire())
+    }
 
     // Der Audio-Callback konsumiert jeden Uhr-Auftrag mit EINEM atomaren
     // exchange. Ein gleichzeitig eintreffender Auftrag kann dadurch weder
@@ -152,6 +199,7 @@ public final class RealtimePlaybackState: Sendable {
         pendingElapsedFramesStorage.exchangeAcquiringAndReleasing(.max)
     }
 
+    @discardableResult
     func requestSeek(
         position: Int,
         row: Int,
@@ -159,20 +207,26 @@ public final class RealtimePlaybackState: Sendable {
         bpm: Int,
         globalVolume: Int,
         elapsedFrames: UInt64
-    ) {
-        let packed = UInt64(max(0, min(Int(UInt16.max), position)))
-            | (UInt64(max(0, min(Int(UInt16.max), row))) << 16)
-            | (UInt64(max(1, min(Int(UInt8.max), ticksPerRow))) << 32)
-            | (UInt64(max(1, min(Int(UInt16.max), bpm))) << 40)
-            | (UInt64(max(0, min(Int(UInt8.max), globalVolume))) << 56)
+    ) -> UInt64 {
+        let packed = Self.packTransport(
+            position: position,
+            row: row,
+            ticksPerRow: ticksPerRow,
+            bpm: bpm,
+            globalVolume: globalVolume)
 
         let current = seekSequenceStorage.loadRelaxed()
         let writingSequence = (current &+ 1) | 1
+        // Das Acquire des RMW haelt die folgenden Nutzdaten-Schreibvorgaenge
+        // hinter der ungeraden Sequenz. Ein zusaetzlicher seq_cst-Fence waere
+        // fuer den Ein-Schreiber-Seqlock redundant; ein reiner Release-Store
+        // boete diese Ordnung fuer nachfolgende Schreibvorgaenge dagegen nicht.
         _ = seekSequenceStorage.exchangeAcquiringAndReleasing(writingSequence)
-        LockFreeAtomicUInt64.sequentiallyConsistentFence()
         seekTargetStorage.storeRelaxed(packed)
         seekElapsedFramesStorage.storeRelaxed(elapsedFrames)
-        seekSequenceStorage.storeRelease(writingSequence &+ 1)
+        let publishedSequence = writingSequence &+ 1
+        seekSequenceStorage.storeRelease(publishedSequence)
+        return publishedSequence
     }
 
     @inline(__always)
@@ -180,7 +234,7 @@ public final class RealtimePlaybackState: Sendable {
         let firstSequence = seekSequenceStorage.loadAcquire()
         guard firstSequence != 0,
               firstSequence & 1 == 0,
-              firstSequence != appliedSeekSequence else { return nil }
+              firstSequence != appliedSeekSequenceStorage.loadRelaxed() else { return nil }
 
         let packed = seekTargetStorage.loadRelaxed()
         let elapsed = seekElapsedFramesStorage.loadRelaxed()
@@ -188,14 +242,33 @@ public final class RealtimePlaybackState: Sendable {
         let secondSequence = seekSequenceStorage.loadAcquire()
         guard firstSequence == secondSequence else { return nil }
 
-        appliedSeekSequence = firstSequence
         return SeekSnapshot(
+            sequence: firstSequence,
             position: Int(packed & 0xFFFF),
-            row: Int((packed >> 16) & 0xFFFF),
+            row: Int(Int16(bitPattern: UInt16((packed >> 16) & 0xFFFF))),
             ticksPerRow: Int((packed >> 32) & 0xFF),
             bpm: Int((packed >> 40) & 0xFFFF),
             globalVolume: Int((packed >> 56) & 0xFF),
             elapsedFrames: elapsed)
+    }
+
+    @inline(__always)
+    func publishTransportSnapshot() {
+        publishedTransportStorage.storeRelease(Self.packTransport(
+            position: position,
+            row: rowIndex,
+            ticksPerRow: ticksPerRow,
+            bpm: bpm,
+            globalVolume: Int(globalVolume)))
+    }
+
+    @inline(__always)
+    func markSeekApplied(_ sequence: UInt64) {
+        appliedSeekSequenceStorage.storeRelease(sequence)
+    }
+
+    func isSeekApplied(_ sequence: UInt64) -> Bool {
+        appliedSeekSequenceStorage.loadAcquire() == sequence
     }
 
     @inline(__always)
@@ -232,6 +305,12 @@ public final class RealtimePlaybackState: Sendable {
             frame: endReachedFrameStorage.loadRelaxed(),
             position: Int(Int64(bitPattern: endReachedPositionStorage.loadRelaxed())),
             row: Int(Int64(bitPattern: endReachedRowStorage.loadRelaxed())))
+        // Solange das Signal noch 1 ist, darf der Producer die Snapshot-Felder
+        // nicht anfassen. Deshalb neutralisieren wir sie VOR der Freigabe des
+        // Slots; danach koennte bereits die naechste Transition schreiben.
+        endReachedFrameStorage.storeRelaxed(.max)
+        endReachedPositionStorage.storeRelaxed(.max)
+        endReachedRowStorage.storeRelaxed(0)
         guard endReachedStorage.exchangeAcquiringAndReleasing(0) != 0 else {
             return nil
         }
@@ -368,6 +447,19 @@ public enum RenderEngine {
     nonisolated public static let maxChannels = 64
 
     nonisolated public static let itVoiceCapacity = ITPlaybackVoicePool.voiceCapacity
+
+    // OpenMPT-Timingparameter aus dem Modulkopf. Live-Start, Seek,
+    // Loop-Uhr und Offline-Zustand muessen dieselben Defaults verwenden.
+    nonisolated static func timingParameters(for mod: Mod)
+        -> (tempoMode: ITTempoMode, rowsPerBeat: Int) {
+        let tempoMode = mod.itProperties?.openMPTExtensions?.tempoMode ?? .classic
+        let headerRowsPerBeat = mod.itProperties.map { $0.patternHighlight & 0xFF } ?? 4
+        let rowsPerBeat = max(
+            1,
+            mod.itProperties?.openMPTExtensions?.rowsPerBeat
+                ?? (headerRowsPerBeat > 0 ? headerRowsPerBeat : 4))
+        return (tempoMode, rowsPerBeat)
+    }
 
     // Fester Format-Takt für die Periodenformel `hz = clock / periode`:
     // - S3M/IT: ST3-Clock 14.317056 MHz.
@@ -515,15 +607,27 @@ public enum RenderEngine {
 
         return { (frameCount, left, right) in
             let safeFrameCount = Int(frameCount)
+            var appliedSeekSequence: UInt64?
+
+            // UI-Auftraege hoechstens einmal pro Audioblock pruefen. Eine
+            // Blockgrenze ist fuer Seek/Uhr genau genug und spart im Normalfall
+            // zwei C11-Atomikaufrufe pro Audioframe.
+            if safeFrameCount > 0, let request = state.takePendingSeek() {
+                Self.applySeek(
+                    request,
+                    state: state,
+                    channels: dspChannels,
+                    sampleRate: sampleRate)
+                appliedSeekSequence = request.sequence
+            }
+            if safeFrameCount > 0 {
+                let requestedElapsedFrames = state.takePendingElapsedFrames()
+                if requestedElapsedFrames != .max {
+                    state.elapsedFrames = requestedElapsedFrames
+                }
+            }
 
             for frame in 0..<safeFrameCount {
-                if let request = state.takePendingSeek() {
-                    Self.applySeek(
-                        request,
-                        state: state,
-                        channels: dspChannels,
-                        sampleRate: sampleRate)
-                }
                 SequencerCore.advanceIfNeeded(
                     state: state,
                     channels: dspChannels,
@@ -532,13 +636,6 @@ public enum RenderEngine {
                 )
 
                 state.outputsUntilNextTick -= 1.0
-                // Offenen Uhr-Auftrag des Hauptthreads uebernehmen (Track-Loop).
-                // Nur ein Vergleich und ggf. zwei Zuweisungen — keine
-                // Allokation, kein Lock, damit die Renderblock-Invariante gilt.
-                let requestedElapsedFrames = state.takePendingElapsedFrames()
-                if requestedElapsedFrames != .max {
-                    state.elapsedFrames = requestedElapsedFrames
-                }
                 state.elapsedFrames += 1
 
                 // Mischen der Kanäle
@@ -660,6 +757,13 @@ public enum RenderEngine {
                 waveBuffer.masterWavesPointer[state.masterWaveWriteIndex] = (limitedL + limitedR) * 0.5
             }
             state.publishElapsedFrames()
+            state.publishTransportSnapshot()
+            if let appliedSeekSequence {
+                // Erst nach dem vollstaendigen Zielblock freigeben: Der
+                // MainActor sieht durch Acquire danach den passenden atomaren
+                // Transport-Snapshot und nie den Vor-Seek-Stand.
+                state.markSeekApplied(appliedSeekSequence)
+            }
         }
     }
 
@@ -708,6 +812,7 @@ public enum RenderEngine {
         state.resetEndTransition()
         _ = state.takePendingElapsedFrames()
         SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
+        state.outputsUntilNextTick = 0.0
         state.elapsedFrames = request.elapsedFrames
     }
 
@@ -821,13 +926,9 @@ public enum RenderEngine {
         state.tick = mod.initialSpeed - 1
         state.ticksPerRow = mod.initialSpeed
         state.bpm = mod.initialTempo
-        state.tempoMode = mod.itProperties?.openMPTExtensions?.tempoMode ?? .classic
-        let headerRowsPerBeat = mod.itProperties.map { $0.patternHighlight & 0xFF } ?? 4
-        state.rowsPerBeat = max(
-            1,
-            mod.itProperties?.openMPTExtensions?.rowsPerBeat
-                ?? (headerRowsPerBeat > 0 ? headerRowsPerBeat : 4)
-        )
+        let timing = timingParameters(for: mod)
+        state.tempoMode = timing.tempoMode
+        state.rowsPerBeat = timing.rowsPerBeat
         state.restartPosition = max(
             0,
             min(mod.length - 1, mod.itProperties?.openMPTExtensions?.restartPosition ?? 0)
@@ -836,6 +937,7 @@ public enum RenderEngine {
         state.outputsUntilNextTick = 0.0
         state.globalVolume = Float(mod.initialGlobalVolume)
         state.clockRateOverride = clockRateOverride(for: mod)
+        state.publishTransportSnapshot()
         return state
     }
 
@@ -843,7 +945,12 @@ public enum RenderEngine {
     // Samples zu mischen. Statt Millionen einzelner Audioframes werden nur die
     // Tick-Grenzen besucht; der gerundete Frame-Schritt bildet denselben
     // Restwert-Akkumulator wie der Live-/Offline-Renderblock nach.
-    nonisolated static func sequencedDuration(
+    //
+    // Oeffentlich, weil ein Aufrufer die Probe vorziehen koennen muss: Sie ist
+    // bei einem grossen IT der teuerste Teil des Ladens, und `setMod` laeuft
+    // auf dem MainActor. Wer im Hintergrund laedt, rechnet sie dort aus und
+    // reicht das Ergebnis als `precomputedDuration` an `setMod` weiter.
+    public nonisolated static func sequencedDuration(
         of mod: Mod,
         sampleRate: Double = 44_100,
         maximumSeconds: Double = 600

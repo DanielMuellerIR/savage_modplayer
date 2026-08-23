@@ -1,0 +1,20 @@
+// Bruecke von Swift zur zlib des Systems (DEFLATE — die Kompression, die in
+// praktisch jeder ZIP-Datei steckt).
+//
+// Warum ueberhaupt: Der eigene `ZipArchiveReader` dekomprimiert auf Apple-
+// Plattformen ueber das Framework `Compression`. Das gibt es unter Linux nicht,
+// und ohne Ersatz liefe dort weiter das externe `bsdtar` — samt Hilfsprozess
+// und ohne den Sicherheits-Vorfilter des eigenen Lesers. zlib ist die
+// naheliegende Gegenstelle: Sie liegt auf jedem Linux-System, und der Reader
+// braucht von ihr nur den streamenden Inflate.
+//
+// "[system]" sagt dem Compiler, dass es Systemcode ist und dessen Warnungen
+// nicht uns gehoeren. `link "z"` haengt beim Linken -lz an.
+//
+// Auf Apple-Plattformen wird dieses Modul gar nicht erst eingebunden (siehe
+// Package.swift) — dort bleibt es beim Framework `Compression`.
+module CZlib [system] {
+    header "shim.h"
+    link "z"
+    export *
+}

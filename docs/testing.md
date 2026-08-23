@@ -51,6 +51,26 @@ mit Exit-Code 2 enden. Beim `--stdout`-Smoke nur wenige KiB aus einer langen
 Anforderung lesen; die ersten Bytes müssen sofort kommen und ein geschlossener
 Consumer muss sauber als `outputClosed` enden.
 
+## CLI-Suiten
+
+- Exit-Codes, Zahlgrenzen und `--list`: `python3 Tests/cli_contract_tests.py`.
+- Echtzeit-Wiedergabe, Playlist, Tastatursteuerung und Ctrl-C:
+  `python3 Tests/cli_playback_tests.py`. Die Suite hängt ein Pseudoterminal an
+  stdin und spielt ein synthetisches Modul, dessen Sample nur Nullbytes enthält
+  — dadurch ist der Lauf lautlos. Ohne nutzbare Audio-Ausgabe überspringt sie
+  sich; ein Skip belegt keine funktionierende Wiedergabe.
+
+Die vier zeitabhängigen Tests (Tasten, Ctrl-C) brauchen eine Ausgabe, die im
+Echtzeittakt läuft. Ein ALSA-Nullgerät erfüllt das **nicht** — es verschluckt
+die Samples so schnell, wie der Renderer sie liefert, und die Playlist ist
+vorbei, bevor eine Taste ankommt. Der Probelauf in `setUpClass` misst das und
+überspringt sie dann. Für den vollen Linux-Beleg eine temporäre
+PipeWire-Null-Senke nehmen (Rezept im [Linux-Plan](../tasks/2026-07-05-linux-port/plan.md)).
+
+**Beide Suiten nehmen `.build/release` vor `.build/debug`.** Nach einer
+CLI-Änderung deshalb `swift build -c release --product savage-cli` laufen
+lassen, sonst prüfen sie stillschweigend das alte Binary.
+
 ## HTML5-Player
 
 - Nach Änderungen an `src/`, `modplayer.js`, `mod-player-worklet.js`, `VERSION`
@@ -71,6 +91,33 @@ Consumer muss sauber als `outputClosed` enden.
 `swift build` deckt Extension, Signatur und Bundle-Integration nicht ab.
 `python3 Tests/ui_source_tests.py` schützt zusätzlich die Pflichtbedienelemente
 des kompakten Footers; der sichtbare Fenster-Smoke bleibt trotzdem erforderlich.
+
+### CPU der Visualisierungen messen
+
+`bash Tests/measure_visualizer_cpu.sh <modul> [hz …]` misst die verbrauchte
+CPU-Zeit der laufenden App über ein festes Fenster — stumm und ohne Fokus.
+Pflicht vor und nach jeder Optimierung am 30-Hz-Pfad; ohne festes Vorgehen sind
+zwei Messungen nicht vergleichbar.
+
+**Momentanwerte von `%CPU` taugen dafür nicht.** In einem Versuch streuten sie
+für denselben Zustand zwischen 11 % und 25 %, und eine Messreihe stellte die
+Reihenfolge der Bildraten sogar auf den Kopf. Die über 30 Sekunden verbrauchte
+CPU-Zeit war dagegen auf ein paar Zehntelprozent reproduzierbar.
+
+### Startlauf-Smoke
+
+`bash Tests/launch_argument_smoke.sh` prüft nach jedem App-Build, ob beim Start
+überhaupt ein Fenster erscheint und ob ein übergebenes Modul im Player landet —
+für Datei, Ordner, unbekanntes Argument, `--autoplay` und den Weg über
+LaunchServices („Öffnen mit“). Das Skript braucht weder Bedienungshilfen- noch
+Bildschirmaufnahme-Rechte: Es zählt Fenster über `CGWindowListCopyWindowInfo`
+und liest das geladene Modul aus der Voreinstellung `savage.lastPlayed`. Der
+Lauf bleibt stumm und stellt die Voreinstellungen danach wieder her.
+
+Pflicht bei allem, was den App-Start betrifft: `AppMain.swift`,
+`MainView.onAppear`, `.onOpenURL` und `LaunchArguments`. Ein reiner
+`swift test`-Lauf sieht diesen Fehler nicht — die Argumentlogik war korrekt,
+das Fenster fehlte trotzdem.
 
 Headless prüfen:
 
@@ -116,6 +163,23 @@ heißt also wirklich warnungsfrei. Das vollständige Protokoll liegt unter
 `run-tests.sh` sucht sich ohne `SIMULATOR_NAME` das erste verfügbare iPhone.
 Einzelne Suiten über `TEST_FILTER=SavageModPlayerTests/<Klasse>`.
 
+Im Simulator liegen unter anderem:
+
+- `PlaybackLoadingTests` — der Ladepfad läuft asynchron, ein neuer Auftrag
+  überholt den alten, kaputte Titel werden übersprungen. Der Nachweis, dass
+  `select` sofort zurückkehrt, ist bewusst kein Zeittest: Ein frisch erzeugter
+  Task kann nicht laufen, solange die Testmethode den MainActor synchron hält.
+- `CoordinationWatchdogTests` — der Wächter über einem koordinierten
+  Lesevorgang: abbrechen bei Nutzerabbruch, abbrechen bei Stillstand,
+  durchlaufen lassen bei Fortschritt, und nach `finish()` kein Wächter mehr.
+  Dass ein realer, hängender File Provider daraufhin loslässt, belegt nur ein
+  Gerätetest mit einem solchen Anbieter.
+- `OpenWithTests` — „Öffnen mit …" für Datei und Archiv, doppeltes Öffnen,
+  unspielbare Datei und der Kaltstart-Fall (Datei trifft während des
+  Bibliotheksabgleichs ein). Beide Suiten arbeiten auf einer Bibliothek mit
+  eigener Wurzel im Temp-Verzeichnis, nicht im echten `Documents/`, und laden
+  nur — der Simulator bleibt still.
+
 Für einen hörbaren Smoke mit aufwendigen XM-/IT-Modulen den Simulator als
 Release-Build starten:
 
@@ -133,6 +197,26 @@ Der Kern (`ZipArchiveReader`, `MusicLibrary`, `LibraryImporter`,
 `LibraryReset`) wird **nicht** dort geprüft, sondern in der normalen
 SwiftPM-Suite mit `swift test` — plattformneutral und ohne Simulator. Im
 Simulator läuft nur, was ohne iOS nicht prüfbar ist.
+
+### iPad-Layout ansehen
+
+Das zweispaltige Layout hängt an der horizontalen Größenklasse, nicht am Gerät.
+Prüfen lässt es sich ohne Bedienung:
+
+```
+xcrun simctl boot "iPad Pro 11-inch (M4)"
+bash ios/scripts/build-simulator.sh
+xcrun simctl install "iPad Pro 11-inch (M4)" ios/build/DerivedData/Build/Products/Debug-iphonesimulator/SavageModPlayer.app
+xcrun simctl launch "iPad Pro 11-inch (M4)" com.viben.SavageModPlayer
+xcrun simctl io "iPad Pro 11-inch (M4)" screenshot /tmp/ipad.png
+```
+
+Testinhalt kommt am einfachsten direkt in den Container:
+`xcrun simctl get_app_container … data` liefert den Pfad, Module gehören nach
+`Documents/`. **Nicht** über die Voreinstellungs-Datei im Container arbeiten —
+`cfprefsd` des Simulators hält den Stand und überschreibt ihn wieder. Ein von
+außen gesetzter „zuletzt gespielt"-Wert kommt so nicht in der App an; dass die
+Wiederherstellung trotzdem stimmt, decken `PlaybackLoadingTests` ab.
 
 ### Grenzen des Simulators
 

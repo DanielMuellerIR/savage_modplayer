@@ -11,6 +11,14 @@ struct SettingsView: View {
     // haelt beide Stellen automatisch synchron.
     @AppStorage("savage.autoplayFolder") private var autoplayFolderPath: String = ""
 
+    // Bildrate der Visualisierungen im Vollmodus. Gleicher Schluessel wie in
+    // MainView, das den Wert an den Coordinator weiterreicht.
+    @AppStorage("savage.visualizerHz") private var visualizerHz: Double = 30
+
+    // Die angebotenen Stufen. 30 ist die Vorgabe (volle Optik), 10 der
+    // sparsamste sinnvolle Wert — darunter ruckeln die Oszilloskope sichtbar.
+    private static let frameRates: [Double] = [30, 24, 15, 10]
+
     var body: some View {
         Form {
             Section {
@@ -31,6 +39,17 @@ struct SettingsView: View {
                     }
                 }
                 Text("Aus diesem Ordner (inklusive Unterordnern und Zip-/7z-Archiven) füllt der Player beim Start die Playlist und beginnt zu spielen. Änderungen wirken ab dem nächsten Start.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+
+            Section {
+                Picker("Bildrate der Visualisierungen:", selection: $visualizerHz) {
+                    ForEach(Self.frameRates, id: \.self) { rate in
+                        Text(rate == 30 ? "30 Hz (Standard)" : "\(Int(rate)) Hz").tag(rate)
+                    }
+                }
+                Text("Wie oft Pegel, Oszilloskope und Spielzeit neu gezeichnet werden. Nicht der Klang hängt daran, sondern die Rechenlast der Oberfläche: Auf einem Mac mit M5-Chip kostete dieselbe Wiedergabe bei 30 Hz rund 22 % eines Kerns, bei 15 Hz rund 18 % und bei 10 Hz rund 14 %. Die Änderung wirkt sofort. Im kompakten Fenster bleibt es unabhängig davon bei 5 Hz, weil dort keine Oszilloskope zu sehen sind.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }

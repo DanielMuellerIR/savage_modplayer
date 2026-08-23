@@ -49,9 +49,13 @@
 - Quick Look rendert höchstens 60 Sekunden WAV. Appex zuerst mit Entitlements,
   danach die App ohne `--deep` signieren. Parserfehler liefern eine endliche
   Textvorschau.
-- `ZipArchiveReader` streamt blockweise; Speicherbedarf darf nicht mit der
+- `ZipArchiveReader` liest `.zip` auf **allen** Plattformen (seit 1.6.10);
+  `bsdtar` ist nur noch für `.7z` auf macOS und Linux zuständig und damit
+  optional. Der Reader streamt blockweise; Speicherbedarf darf nicht mit der
   Archivgröße wachsen. Zip-Slip, Symlinks, Verschlüsselung, Zip64 und
-  unplausible Kompressionsverhältnisse werden **abgelehnt, nicht bereinigt**.
+  unplausible Kompressionsverhältnisse machen das **ganze Archiv** ungültig —
+  abgelehnt, nicht bereinigt. Den DEFLATE-Strom liefert auf Apple das Framework
+  `Compression`, unter Linux die zlib (`Sources/CZlib`).
 - `Sources/SavageModPlayerCore/Library/` bleibt plattformneutral. **Stabile IDs
   sind relative Pfade.** Der Index ist nur Cache; Wahrheit ist `Documents/`, das
   auch über Finder-Dateifreigabe verändert werden kann.
@@ -105,14 +109,16 @@ Die vollständigen Befehle, Fixture-Regeln und Quick-Look-Fallen stehen in
 | Änderung | Pflichtprüfung |
 |---|---|
 | Swift allgemein | gezielter Test, vollständiges `swift test`, `git diff --check` |
+| `savage-cli` | `swift build -c release --product savage-cli`, danach `python3 Tests/cli_contract_tests.py` und `python3 Tests/cli_playback_tests.py` |
 | App/Core/Quick Look | zusätzlich `bash build_app.sh` |
+| App-Start (`AppMain`, `onAppear`, `onOpenURL`, `LaunchArguments`) | zusätzlich `bash Tests/launch_argument_smoke.sh` |
 | `RenderEngine`, `Audio/`, `Package.swift`, Parser-Kern | zusätzlich Linux-Lauf (Docker, siehe Linux-Plan) — der Build dort ist der einzige Beleg für Plattformneutralität |
 | Audio-Renderpfad angefasst | `savage-cli`-WAVs über den lokalen MOD-Korpus byteidentisch zu vorher (Baseline vor der Änderung erzeugen) |
 | gemeinsamer MOD-DSP | `DSPChannelTimingTests`, Sequencer-Tests und `node Tests/js/worklet-timing.mjs` |
 | MOD/S3M/XM/IT-Parser oder -DSP | passende Format-Suite plus lokale Realweltdateien, falls vorhanden |
 | `Archive/`, `Library/`, `PlaylistScanner` | zusätzlich `ZipArchiveReaderTests`, `MusicLibraryTests`, `LibraryImporterTests` und Linux-Lauf |
 | iOS-App (`ios/`) | `bash ios/scripts/build-simulator.sh` und `bash ios/scripts/run-tests.sh`; Hintergrundwiedergabe und Sperrbildschirm sind **nur am Gerät** belegbar, nie aus dem Simulator behaupten |
-| Webquelle/Version | `python3 build.py`, generierten HTML-Diff prüfen, Browser-Smoke bei UI-Verhalten |
+| Webquelle/Version | `python3 build.py`, `node Tests/js/pattern-bounds.mjs`, generierten HTML-Diff prüfen, Browser-Smoke bei UI-Verhalten |
 | Quick Look | Build/Signatur/PluginKit headless; Finder-Leertaste als manueller Endtest |
 | Release | volle Suite, App-/Appex-Signatur, DMG/Notary nur bei Auftrag, EN/DE-Doku konsistent |
 
@@ -136,10 +142,22 @@ Aus realen Fehlern bestätigte Fallen:
   ist kein Ersatz für eine Prüfung. Vor dem Parsen muss der vollständige Bereich
   in der Eingabe liegen, sonst gilt das sauber endende Präfix einer
   abgeschnittenen Datei — etwa eines XM — fälschlich als gültig.
+- **`Data`-Slices nie als nullbasiert behandeln.** Ein `Data`-Ausschnitt kann einen
+  `startIndex` ungleich null haben; dieselben Bytes werden dann fehlinterpretiert
+  oder der Prozess stürzt ab. Eingaben an öffentlichen Parser-Grenzen entweder auf
+  nullbasierte Daten umbasieren oder durchgehend relativ zu `startIndex`
+  adressieren; Tests müssen auch echte Slices übergeben.
 - **Ein fehlgeschlagener Dateisystem-Scan leert keinen Index.** Liefert ein
   Verzeichnis-Enumerator `nil` oder unvollständige Ergebnisse, ist das kein
   leerer Bestand. Den alten Index bis zum vollständigen Neuaufbau behalten oder
   fehlgeschlagene Teilbäume mit dem bekannten Bestand zusammenführen.
+- **Ein positionales Startargument kostet der Mac-App ihr Fenster.** AppKit
+  deutet es als „diese Datei öffnen“; auf diesem Startweg erzeugt SwiftUI sein
+  Fenster nicht, und ohne Fenster greift auch `.onOpenURL` nicht. Die App
+  schaltet das in `SavageModPlayerApp.init()` über die Voreinstellung
+  `NSTreatUnknownArgumentsAsOpen` ab. Eigene Schalter bleiben trotzdem besser
+  `-Schlüssel Wert`-Argumente. Der Beleg ist ein Startlauf, kein Unittest:
+  `bash Tests/launch_argument_smoke.sh`.
 - **Ein Quellarchiv erst nach vollständiger Übernahme löschen.** Ein entpacktes
   Archiv darf erst verschwinden, wenn alle unterstützten Inhalte einschließlich
   verschachtelter Archive übernommen sind. Ein einzelner importierter

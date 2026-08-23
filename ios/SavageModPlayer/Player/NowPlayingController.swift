@@ -50,8 +50,13 @@ final class NowPlayingController {
     // Wird bei jedem Fernsteuerungs-Befehl aufgerufen. Setzt die PlaybackEngine.
     var onCommand: ((Command) -> Void)?
 
-    // Angemeldete Befehls-Empfaenger, damit sie wieder abgemeldet werden koennen.
-    private var commandTokens: [(command: MPRemoteCommand, token: Any)] = []
+    // Angemeldete Befehls-Empfaenger. Sie stecken in einem eigenen Halter, weil
+    // `MPRemoteCommandCenter` global ist und dem System gehoert: Wird diese
+    // Klasse freigegeben, ohne dass jemand `deactivate()` gerufen hat, blieben
+    // ihre Empfaenger sonst fuer immer angemeldet. Sie liefen zwar ins Leere
+    // (`[weak self]`), meldeten dem System aber weiterhin Erfolg. In Tests, die
+    // mehrere Instanzen erzeugen, sammelt sich das an.
+    private let commandTokens = RemoteCommandTokens()
 
     // Fertig gezeichnete Titelbilder je Formatkuerzel. Das Zeichnen kostet
     // spuerbar Zeit; bei einem Ordner mit hunderten Titeln waere es Verschwendung,
@@ -102,9 +107,6 @@ final class NowPlayingController {
 
     // Alle Befehls-Empfaenger wieder abmelden.
     func deactivate() {
-        for entry in commandTokens {
-            entry.command.removeTarget(entry.token)
-        }
         commandTokens.removeAll()
     }
 
@@ -157,8 +159,7 @@ final class NowPlayingController {
             }
             return .success
         }
-        let token = command.addTarget(handler: handler)
-        commandTokens.append((command, token))
+        commandTokens.add(command, token: command.addTarget(handler: handler))
     }
 
     // MARK: - Anzeige
@@ -306,4 +307,84 @@ final class NowPlayingController {
             )
         }
     }
+}
+
+// MARK: - Halter fuer die angemeldeten Befehls-Empfaenger
+
+// Meldet die Empfaenger garantiert wieder ab: entweder per `removeAll()` oder
+// spaetestens, wenn dieser Halter freigegeben wird.
+//
+// Warum ein eigener Typ und kein Array in der Klasse darueber: Ein `deinit`
+// einer @MainActor-isolierten Klasse darf deren Zustand nicht mehr anfassen.
+// Dieser Halter ist an keinen Actor gebunden und kann es deshalb.
+//
+// `@unchecked Sendable` ist gedeckt: Jeder Zugriff auf `entries` liegt hinter
+// dem Lock, und die Abmeldung selbst passiert immer auf dem Hauptthread —
+// `MPRemoteCommand` gehoert dem System und wird sonst nur von dort angefasst.
+private final class RemoteCommandTokens: @unchecked Sendable {
+
+    // Eintraege, die den Thread wechseln duerfen: Sie werden danach nur noch
+    // abgemeldet, und niemand sonst haelt sie dann noch.
+    private struct Carried: @unchecked Sendable {
+        let entries: [(command: MPRemoteCommand, token: Any)]
+    }
+
+    private let lock = NSLock()
+    private var entries: [(command: MPRemoteCommand, token: Any)] = []
+
+    // Wie viele Empfaenger dieser Prozess gerade angemeldet hat. Das System
+    // gibt darueber keine Auskunft, deshalb zaehlt der Halter selbst mit —
+    // sonst liesse sich das garantierte Abmelden nicht pruefen.
+    private nonisolated(unsafe) static var liveCount = 0
+    private static let countLock = NSLock()
+
+    static var registeredCount: Int {
+        countLock.lock()
+        defer { countLock.unlock() }
+        return liveCount
+    }
+
+    private static func changeCount(by delta: Int) {
+        countLock.lock()
+        liveCount += delta
+        countLock.unlock()
+    }
+
+    func add(_ command: MPRemoteCommand, token: Any) {
+        lock.lock()
+        entries.append((command, token))
+        lock.unlock()
+        Self.changeCount(by: 1)
+    }
+
+    func removeAll() {
+        lock.lock()
+        let pending = entries
+        entries = []
+        lock.unlock()
+        Self.detach(Carried(entries: pending))
+    }
+
+    deinit {
+        // Ohne Lock: Beim Freigeben haelt niemand sonst mehr eine Referenz.
+        Self.detach(Carried(entries: entries))
+    }
+
+    private static func detach(_ carried: Carried) {
+        guard !carried.entries.isEmpty else { return }
+        changeCount(by: -carried.entries.count)
+        if Thread.isMainThread {
+            for entry in carried.entries { entry.command.removeTarget(entry.token) }
+        } else {
+            // `deinit` laeuft auf dem Thread, der die letzte Referenz freigibt.
+            DispatchQueue.main.async {
+                for entry in carried.entries { entry.command.removeTarget(entry.token) }
+            }
+        }
+    }
+}
+
+// Nur zum Pruefen: Wie viele Fernsteuerungs-Empfaenger sind gerade angemeldet?
+extension NowPlayingController {
+    static var registeredCommandCount: Int { RemoteCommandTokens.registeredCount }
 }

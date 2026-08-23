@@ -40,6 +40,28 @@ public class ModParser {
     // 31 Instrumente (ab Offset 952) und Ur-Soundtracker (ab Offset 472).
     private static let orderTableEntries = 128
 
+    // Eine Rechnung fuer Heuristik und Parser: Beide muessen dieselben Pattern-
+    // und Samplegrenzen meinen. Alle Faktoren sind bereits durch das Format
+    // begrenzt (maximal 512 gespeicherte Patterns und 31 UInt16-Samplelaengen),
+    // deshalb koennen diese Summen auf den unterstuetzten 64-Bit-Plattformen
+    // nicht ueberlaufen.
+    private static func declaredDataEnds(
+        data: Data,
+        instrumentCount: Int,
+        patternsOffset: Int,
+        storedPatternCount: Int,
+        storedPatternBytes: Int
+    ) -> (patternsEnd: Int, samplesEnd: Int) {
+        let patternsEnd = patternsOffset + storedPatternCount * storedPatternBytes
+        var totalSampleBytes = 0
+        for i in 0..<instrumentCount {
+            let offset = 20 + i * 30
+            totalSampleBytes += 2 * Int(
+                UInt16(data[offset + 22]) << 8 | UInt16(data[offset + 23]))
+        }
+        return (patternsEnd, patternsEnd + totalSampleBytes)
+    }
+
     // Signatur (Offset 1080) auf Layout mappen. Kein Treffer und keine
     // plausible 15-Sample-Struktur -> invalidSignature.
     private static func detectLayout(data: Data) throws -> Layout {
@@ -108,23 +130,26 @@ public class ModParser {
 
         // Instrument-Header: Volume 0..64, Finetune-Byte 0 (das Feld gab es
         // im Ur-Soundtracker nicht), Sample-Länge in plausiblem Rahmen.
-        var totalSampleBytes = 0
         for i in 0..<15 {
             let offset = 20 + i * 30
             let length = 2 * Int(UInt16(data[offset + 22]) << 8 | UInt16(data[offset + 23]))
             guard data[offset + 24] & 0xF0 == 0 else { return false }
             guard Int(data[offset + 25]) <= 64 else { return false }
             guard length <= 65536 else { return false }
-            totalSampleBytes += length
         }
 
+        let ends = declaredDataEnds(
+            data: data,
+            instrumentCount: 15,
+            patternsOffset: 600,
+            storedPatternCount: maxPattern + 1,
+            storedPatternBytes: 1024)
         // Die deklarierten Patterns müssen vollständig in der Datei liegen.
-        let patternsEnd = 600 + (maxPattern + 1) * 1024
-        guard data.count >= patternsEnd else { return false }
+        guard data.count >= ends.patternsEnd else { return false }
         // Die Heuristik darf bis zu 1024 fehlende Samplebytes noch als
         // Soundtracker-Struktur ERKENNEN. `parse` erzwingt danach trotzdem das
         // vollständige deklarierte Samplefenster und lehnt eine Kürzung ab.
-        guard patternsEnd + totalSampleBytes <= data.count + 1024 else { return false }
+        guard ends.samplesEnd <= data.count + 1024 else { return false }
 
         return true
     }
@@ -192,25 +217,18 @@ public class ModParser {
         // Pattern- und Samplefenster sind deklarierte Binärstruktur. Fehlende
         // Bytes dürfen nicht als leere Noten oder gekürzte PCM-Daten erfunden
         // werden; Trailerbytes hinter dem vollständigen Fenster bleiben erlaubt.
-        let (patternByteCount, patternSizeOverflow) = storedPatternCount
-            .multipliedReportingOverflow(by: storedPatternBytes)
-        let (patternsEnd, patternEndOverflow) = patternsOffset
-            .addingReportingOverflow(patternByteCount)
-        guard !patternSizeOverflow, !patternEndOverflow, patternsEnd <= data.count else {
+        let ends = declaredDataEnds(
+            data: data,
+            instrumentCount: layout.instrumentCount,
+            patternsOffset: patternsOffset,
+            storedPatternCount: storedPatternCount,
+            storedPatternBytes: storedPatternBytes)
+        let patternsEnd = ends.patternsEnd
+        guard patternsEnd <= data.count else {
             throw ParserError.truncatedPatternData
         }
 
-        var totalSampleBytes = 0
-        for i in 0..<layout.instrumentCount {
-            let offset = 20 + i * 30
-            let length = 2 * Int(UInt16(data[offset + 22]) << 8 | UInt16(data[offset + 23]))
-            let (nextTotal, sampleSizeOverflow) = totalSampleBytes.addingReportingOverflow(length)
-            guard !sampleSizeOverflow else { throw ParserError.truncatedSampleData }
-            totalSampleBytes = nextTotal
-        }
-        let (samplesEnd, sampleEndOverflow) = patternsEnd
-            .addingReportingOverflow(totalSampleBytes)
-        guard !sampleEndOverflow, samplesEnd <= data.count else {
+        guard ends.samplesEnd <= data.count else {
             throw ParserError.truncatedSampleData
         }
 

@@ -147,7 +147,7 @@ Kompatibilitätsmeldungen entstehen aus einer Capability-Analyse. `cwtv` identif
 | Parser | `ModuleLoader` plus projekteigene MOD-/S3M-/XM-/IT-Parser (`SavageModPlayerCore`) | `modplayer.js` |
 | DSP / Mixer | Projekteigener Sequencer und DSP via `AVAudioSourceNode`, bis 64 logische Kanäle / 256 IT-Voices | `mod-player-worklet.js` (AudioWorklet) |
 | UI | SwiftUI + Canvas (`Sources/SavageModPlayerApp` auf macOS, `ios/SavageModPlayer` auf iOS) | Vanilla JS + CSS Grid |
-| Archive | `bsdtar` auf macOS und Linux, projekteigener `ZipArchiveReader` auf iOS | — |
+| Archive | `.zip` überall über den projekteigenen `ZipArchiveReader`; `.7z` nur auf macOS und Linux über `bsdtar` | — |
 | Bibliothek | `SavageModPlayerCore/Library` (Index, Import, Zurücksetzen) — von der iPhone-App genutzt | — |
 | Quick Look | `quicklook/PreviewProvider.swift` (Appex, WAV-Offline-Render) | — |
 
@@ -165,6 +165,13 @@ bash build_app.sh                 # → "Savage Mod Player.app" (inkl. Quick-Loo
 (`quicklook/`) und legt sie im App-Bundle unter `Contents/PlugIns/` ab.
 
 Die App befüllt die Playlist beim Start aus dem Autoplay-Ordner, der im Einstellungs-Fenster (Cmd+,) konfiguriert ist. Ist keiner gesetzt, sucht sie nach einem `audio/`-Verzeichnis neben der Anwendung und lädt dort gefundene `.mod`-/`.s3m`-/`.xm`-/`.it`-Dateien (oder `mod.*`-Dateien) automatisch in die Playlist. Diese Dateien sind nur lokale Testdaten und gehören nicht ins Git-Repository.
+
+Im selben Fenster steht die Bildrate der Visualisierungen: 30 Hz (Vorgabe, volle
+Optik), 24, 15 oder 10 Hz. Daran hängt nicht der Klang, sondern die Rechenlast
+der Oberfläche — auf einem Mac mit M5-Chip kostete dieselbe Wiedergabe bei 30 Hz rund 22 %
+eines Kerns und bei 10 Hz rund 14 %. Die Änderung wirkt sofort; im kompakten
+Fenster bleibt es unabhängig davon bei 5 Hz, weil dort keine Oszilloskope zu
+sehen sind.
 
 Für Release-Builds signiert `build_app.sh` automatisch mit der Developer-ID
 `Developer ID Application: Daniel Mueller (9QSWKSR4NQ)`, sofern sie im
@@ -225,6 +232,7 @@ savage-cli song.mod -o out.wav -s 30         # 30 s als WAV rendern
 savage-cli song.mod --play                   # Echtzeit-Wiedergabe (CoreAudio / ALSA)
 savage-cli song.mod --stdout | aplay -f S16_LE -c2 -r44100   # rohes PCM in einen Player
 savage-cli --list audio/                     # spielbare Module eines Ordners auflisten
+savage-cli --list audio/ --play              # den ganzen Ordner als Playlist abspielen
 ```
 
 `--stdout` streamt rohes 16-Bit-Stereo-PCM (Little Endian) in begrenzten Blöcken
@@ -234,8 +242,16 @@ sofort beginnen, ohne den ganzen Song zu puffern. Streaming lässt sich nicht mi
 `--seconds` akzeptiert 0...600 Sekunden (0 bedeutet Songende mit 600-Sekunden-
 Kappung), `--rate` 8.000...192.000 Hz; nicht-endliche oder außerhalb liegende
 Werte enden mit Exit-Code 2. `--list` gibt einen Pfad je Zeile aus und endet mit Exit-Code 1,
-wenn nichts Spielbares gefunden wurde. `--normalize` hebt den Pegel wie Quick
-Look an; für rohe Vergleiche weglassen.
+wenn nichts Spielbares gefunden wurde; zusammen mit `--play` wird der Ordner
+stattdessen als Playlist abgespielt — in Pfadreihenfolge, unlesbare Module
+werden übersprungen. `--normalize` hebt den Pegel wie Quick Look an; für rohe
+Vergleiche weglassen.
+
+Läuft `--play` an einem Terminal, steuern einzelne Tasten die Wiedergabe:
+Leertaste oder `p` pausiert und setzt fort, `n` oder Pfeil rechts springt zum
+nächsten Titel, `b` oder Pfeil links zurück, `q` beendet. Ohne Terminal (Pipe,
+Cron, CI) läuft die Wiedergabe einfach durch. Ctrl-C schließt die Audio-Ausgabe
+und endet mit Exit-Code 130.
 
 #### Linux
 
@@ -245,24 +261,44 @@ ausgeblendet.
 
 ```bash
 docker run --rm -v "$PWD":/src -w /src swift:6.0 \
-  bash -c "apt-get update -qq && apt-get install -y -qq libasound2-dev libarchive-tools && swift build && swift test"
+  bash -c "apt-get update -qq && apt-get install -y -qq libasound2-dev zlib1g-dev libarchive-tools && swift build && swift test"
 ```
 
 `libasound2-dev` liefert die ALSA-Header für die Linux-Audioausgabe;
-`libarchive-tools` liefert `bsdtar`, mit dem der Playlist-Scanner `.zip`/`.7z`
-liest. Ohne das Paket werden Archive ignoriert und zwei Tests übersprungen; alles
-Übrige funktioniert.
+`zlib1g-dev` liefert die zlib, mit der der eigene `ZipArchiveReader` unter Linux
+`.zip` entpackt (auf Apple-Plattformen übernimmt das Framework `Compression`).
+`libarchive-tools` liefert `bsdtar` — seit 1.6.10 nur noch für `.7z` nötig. Ohne
+das Paket läuft alles weiter, nur `.7z` wird übersprungen.
 
 `--play` nutzt die Audio-Ausgabe der Plattform — AVAudioEngine auf macOS, ALSA
 unter Linux (braucht `libasound2-dev` zum Bauen). Der Wiedergabepfad liefert
 sample-identisch dasselbe wie der Offline-Renderer; beide holen aus derselben
 Engine.
 
+##### Auf dem Desktop installieren
+
+```bash
+bash linux/build-static.sh            # statisches savage-cli im Container bauen
+bash linux/install.sh                 # nach ~/.local, ohne root
+bash linux/install.sh --uninstall     # wieder entfernen
+```
+
+`install.sh` legt `savage-cli` in `~/.local/bin` und den Eintrag
+`savage-cli.desktop` in `~/.local/share/applications` ab; ein anderes Ziel geht
+über `--prefix`. Damit taucht der Player im Menü auf und lässt sich als
+Anwendung für MOD-, S3M-, XM- und IT-Dateien wählen. Der Eintrag startet im
+Terminal — das ist Absicht, denn die Tastensteuerung braucht eines. Die vier
+Dateitypen sind bei freedesktop.org bereits definiert; der Eintrag meldet sich
+nur dafür an, statt eigene zu erfinden.
+
+Das statische Binary ist rund 70 MB groß und läuft ohne installierte
+Swift-Laufzeit. Ein AppImage gibt es bewusst nicht: Dafür bräuchte es
+`appimagetool`, das nicht aus den Paketquellen kommt.
+
 Der Render ist je Plattform deterministisch, aber **nicht** bitgleich *zwischen*
 den Plattformen: `tanh` im Limiter rundet in glibc und Darwin-libm
 unterschiedlich, wodurch rund 0,01 % der Samples um ein einzelnes LSB abweichen —
 etwa 115 dB unter dem Signal und damit weit unter der Hörschwelle.
-Tastatursteuerung und Playlist-Wiedergabe fehlen noch.
 
 ### HTML5-Bonusplayer
 

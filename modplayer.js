@@ -117,7 +117,8 @@ export class Mod {
 
     // Höchste verwendete Pattern-Nummer bestimmt die Größe. Bei leerer
     // Playlist (length === 0) liefert Math.max(...[]) -Infinity und wuerde
-    // alle Folgeoffsets vergiften — deshalb auf 0 absichern.
+    // alle Folgeoffsets vergiften. parseModBuffer lehnt diesen Fall vorher ab;
+    // der Fallback schuetzt nur noch eine direkte `new Mod(...)`-Nutzung.
     const maxPatternIndex = this.patternTable.length > 0
       ? Math.max(...Array.from(this.patternTable))
       : 0;

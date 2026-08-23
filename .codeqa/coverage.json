@@ -1,0 +1,685 @@
+{
+  "schema_version": 1,
+  "project": "savage_modplayer",
+  "campaign": {
+    "id": "20260815T134201005857+0200",
+    "token_budget": 1500000,
+    "status": "complete",
+    "started_at": "2026-08-15T13:42:01+02:00",
+    "tokens_spent": 582231,
+    "finished_at": "2026-08-15T15:04:11+02:00",
+    "finish_reason": "all-current"
+  },
+  "campaign_history": [],
+  "scope": {
+    "paths": [
+      "Sources",
+      "Tests",
+      "ios",
+      "quicklook",
+      "src",
+      "tools",
+      ".github",
+      "Package.swift",
+      "build.py",
+      "build_app.sh",
+      "build_dmg.sh",
+      "install.sh",
+      "notarize-lib.sh",
+      "publish_github.sh",
+      "release.sh",
+      "modplayer.js",
+      "mod-player-worklet.js"
+    ],
+    "exclusions": [
+      {
+        "path": "Sources/CALSA",
+        "reason": "reiner Systemheader-Shim fuer libasound"
+      },
+      {
+        "path": "ios/SavageModPlayer.xcodeproj",
+        "reason": "Xcode-verwaltetes Projektformat, kein handgepflegter Quellcode"
+      },
+      {
+        "path": "ios/SavageModPlayer/Resources",
+        "reason": "Assets, Lokalisierungskatalog und Plists — Ressourcen, kein Logikcode"
+      }
+    ]
+  },
+  "areas": [
+    {
+      "id": "core-dsp-engine",
+      "paths": [
+        "Sources/SavageModPlayerCore/DSP/RenderEngine.swift",
+        "Sources/SavageModPlayerCore/DSP/RenderBlock.swift",
+        "Sources/SavageModPlayerCore/DSP/SequencerCore.swift",
+        "Sources/SavageModPlayerCore/DSP/ModuleRenderer.swift",
+        "Sources/SavageModPlayerCore/DSP/LockFreeAtomicUInt64.swift",
+        "Sources/SavageModPlayerCore/DSP/VisualizerState.swift",
+        "Sources/CSavageAtomics",
+        "Tests/SavageModPlayerTests/ModuleRendererLimitTests.swift",
+        "Tests/SavageModPlayerTests/ModuleRendererFloatCaptureTests.swift",
+        "Tests/SavageModPlayerTests/ModuleRendererInterpolationTests.swift",
+        "Tests/SavageModPlayerTests/StereoRenderBuffer.swift"
+      ],
+      "risk": "critical",
+      "priority": 1,
+      "reason": "Plattformneutrale Renderschnittstelle, harte Invariante gegen AVFoundation/Combine; eine Engine speist App, CLI und iOS",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:00:02+02:00",
+        "observed_head": "6b7be00ffaec54c6b172eef30f71dc0fbbd4ee7d",
+        "content_sha256": "bd37a08457d84ffc2807f536c060e2f64ed6584b2a554e697e91e4cdc737b6c8",
+        "file_count": 13,
+        "review": "full",
+        "outcome": "improved",
+        "summary": "Korrektheitsfund: drei ungeschuetzte Zugriffe auf patternTable[0] bei leerer Playlist (SequencerCore.patternRowCount, SequencerCore.advanceRow, RenderEngine.reconstructGlobalParams) beendeten den Prozess. Reproduziert, behoben, mit permanentem Test abgesichert. Nicht ueber eine defekte Datei erreichbar — alle vier Parser werfen emptySong —, wohl aber ueber die oeffentliche Mod-API, die auch die eigenen Tests so nutzen; SequencerTraceSnapshot schuetzte denselben Fall bereits. Bewusst NICHT geaendert: die Solo-Erkennung laeuft je Frame ueber alle logischen Kanaele statt einmal je Callback — ein Rueckbau waere etwa 2 Prozent Audio-Thread, und der Backlog haelt bereits fest, dass spekulative Audio-DSP-Optimierung in dieser Groessenordnung nicht lohnt. RenderCapture.channelCount wird nirgends gelesen, dokumentiert aber das Stems-Layout fuer Aufrufer und bleibt deshalb stehen. LockFreeAtomicUInt64, RenderBlock, VisualizerState und die WAV-Serialisierung ohne Befund.",
+        "tests": [
+          "swift test (vollstaendig): 354 Testfaelle, 0 Fehler, Exit 0",
+          "swift test --filter 'ModuleRendererLimitTests|ModuleRendererFloatCaptureTests|ModuleRendererInterpolationTests|CoordinatorSequencingTests|DSPChannelTimingTests': 52 Testfaelle, 0 Fehler",
+          "savage-cli Byte-Vergleich gegen Baseline-Worktree: 22/22 MOD-Dateien byteidentisch — der Renderpfad wurde angefasst, das ist der Verhaltensbeleg",
+          "node Tests/js/worklet-timing.mjs und node Tests/js/pattern-bounds.mjs: gruen (Sequencer beruehrt, deshalb Pflicht)",
+          "bash build_app.sh: App und Quick-Look-Appex gebaut und signiert",
+          "git diff --check: sauber",
+          "Linux-Lauf NICHT ausgefuehrt: kein Container-Runtime auf diesem Mac. Betrifft hier RenderEngine und damit laut Pflichtmatrix ausdruecklich einen Linux-pflichtigen Pfad — der Beleg fehlt und wird nicht behauptet."
+        ]
+      }
+    },
+    {
+      "id": "core-parser-common",
+      "paths": [
+        "Sources/SavageModPlayerCore/Parser/ModuleModels.swift",
+        "Sources/SavageModPlayerCore/Parser/ModuleLoader.swift",
+        "Sources/SavageModPlayerCore/SongPositionScale.swift",
+        "Tests/SavageModPlayerTests/ModuleModelsTests.swift",
+        "Tests/SavageModPlayerTests/PatternRowCountTests.swift",
+        "Tests/SavageModPlayerTests/LengthOneModuleTests.swift"
+      ],
+      "risk": "critical",
+      "priority": 1,
+      "reason": "Gemeinsames Datenmodell und inhaltsbasierter Dispatch: jede Fehlannahme wirkt in allen vier Formaten und im DSP",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:24:03+02:00",
+        "observed_head": "8771f87a9ebd83713bf483337f482585b21fb26c",
+        "content_sha256": "c16d9bf042f39161f52fcffb6b61c51b1e67a45e9eea1a43e77dd5dd5de7a005",
+        "file_count": 6,
+        "review": "delta-plus-boundaries",
+        "outcome": "improved",
+        "summary": "Delta ist ausschliesslich der Diff des Querschnitts-Funds parser-slice-safety: ModuleLoader.parse normalisiert die Eingabe ueber das neue Data.rebasedToZero auf startIndex 0, bevor es die vier canParse-Pruefungen und den gewaehlten Parser aufruft. Die Grenzen des Bereichs sind unveraendert — Mod, Note, Sample, Instrument und SongPositionScale wurden nicht angefasst.",
+        "tests": [
+          "swift test (vollstaendig): 358 Testfaelle, 0 Fehler, Exit 0",
+          "savage-cli Byte-Vergleich: 22/22 MOD-Dateien byteidentisch"
+        ]
+      }
+    },
+    {
+      "id": "core-archive",
+      "paths": [
+        "Sources/SavageModPlayerCore/Archive",
+        "Tests/SavageModPlayerTests/ZipArchiveReaderTests.swift"
+      ],
+      "risk": "critical",
+      "priority": 2,
+      "reason": "Verarbeitet nicht vertrauenswuerdige Archive: Zip-Slip, Symlinks, Zip-Bomben; Streamingzwang gegen Speicherwachstum",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:04:24+02:00",
+        "observed_head": "64ff2181b869267301e2e46cb0abfed063f4341c",
+        "content_sha256": "3c89eff292e257d8573933810845ee4df47649077bf0aeaad30c5eed738124f8",
+        "file_count": 2,
+        "review": "full",
+        "outcome": "improved",
+        "summary": "Sicherheitsfund: Die Symlink-Erkennung akzeptierte nur versionMadeBy-Hostsystem 3 (Unix). ZIP APPNOTE 4.4.2.2 fuehrt daneben 19 (OS X/Darwin), das denselben Unix-Dateimodus in den oberen 16 Bit der externen Attribute ablegt — ein von macOS gepacktes Archiv schleuste seinen Symlink-Eintrag deshalb an der Pruefung vorbei und bekam ihn als normale Datei mit dem Linkziel als Inhalt geschrieben; inspect() meldete ihn als unterstuetzt. Kein Ausbruch aus dem Zielordner, weil der Reader nie einen Symlink anlegt, aber die Projektregel ablehnen-statt-bereinigen galt fuer Darwin-Archive nicht. Behoben und mit einem Spiegel des bestehenden Unix-Tests abgesichert. Sonst ohne Befund: alle readUInt16/readUInt32-Aufrufe liegen nachweislich hinter passenden Laengen-Guards, EOCD-Suche, ZIP64-Ablehnung, Digital-Signature-Record, Zip-Slip-Pfadpruefung samt Symlink-Aufloesung des Elternordners, O_EXCL-Kollisionsschutz, laufende Verhaeltnispruefung gegen tatsaechlich verbrauchte Eingabebytes und die Autorelease-Pools gegen Speicherwachstum sind stimmig und breit getestet.",
+        "tests": [
+          "swift test --filter 'ZipArchiveReaderTests|MusicLibraryTests|LibraryImporterTests': 76 Testfaelle, 0 Fehler (laut Pflichtmatrix fuer Archive/ verlangt)",
+          "swift test (vollstaendig): 355 Testfaelle, 0 Fehler, Exit 0",
+          "bash build_app.sh: App und Quick-Look-Appex gebaut und signiert",
+          "git diff --check: sauber",
+          "Linux-Lauf NICHT ausgefuehrt: kein Container-Runtime auf diesem Mac. Die Pflichtmatrix verlangt ihn fuer Archive/; der Beleg fehlt. Sachlich beruehrt die Aenderung Linux nicht, weil die ganze Datei hinter canImport(Compression) liegt und dort gar nicht uebersetzt wird — das ist Begruendung, kein Beleg."
+        ]
+      }
+    },
+    {
+      "id": "core-dsp-channel",
+      "paths": [
+        "Sources/SavageModPlayerCore/DSP/DSPChannel.swift",
+        "Sources/SavageModPlayerCore/DSP/ITPatternChannelState.swift",
+        "Tests/SavageModPlayerTests/DSPChannelTimingTests.swift"
+      ],
+      "risk": "critical",
+      "priority": 2,
+      "reason": "Groesste Einzeldatei (2199 Zeilen), Echtzeit-Pfad ohne Allokationen, gemeinsamer Kern mit dem JS-Worklet",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:26:39+02:00",
+        "observed_head": "b1dd017a042043f2599f0aa3ec5f854aecdc95b5",
+        "content_sha256": "8b3c5eb4df50cdd2cf92d8abc73de545902f8f01d9e29fae5e79d5f0b680bb7e",
+        "file_count": 3,
+        "review": "full",
+        "outcome": "reviewed-clean",
+        "summary": "Kein Befund, der eine Aenderung rechtfertigt. Geprueft und durchgaengig abgesichert: alle Sample-Leser (getNearestSample, getInterpolatedSample, getInterpolatedSampleLooped) pruefen Groesse, Endlichkeit und Index; die IT-Notemap greift nur ueber itSamplePool.indices.contains auf den Pool zu; s3mPeriod, itLinearPeriod und itAmigaPeriod klemmen den Halbtonbereich, sodass ein korrupter Notenwert 0 statt eines Tabellenzugriffs liefert; alle Huellkurven-Indizes aus dem Dateikopf werden vor jedem points-Zugriff gegen die Punktzahl geprueft; die drei Divisionen mit variablem Nenner sind bewacht (autoVibSweepStep nur bei sweep > 0, envelopeValue bricht bei dx <= 0 ab, die Periodenrechnung nur bei effPeriod > 0 und mit NaN-/Inf-Abfang); der IT-Filternenner kann im geklemmten Resonanzbereich 0...127 nicht null werden. Zusaetzlich maschinell geprueft, ob reset() alle 145 Instanzvariablen erfasst: die 16 Treffer sind bis auf panning berechnete Eigenschaften oder lokale Variablen, und panning setzt RenderEngine.configure nach jedem reset ohnehin neu. Bewusst NICHT zusammengezogen: die fuenf Volume-Slide-Varianten (Standard, S3M, IT, IT-Kanal, Fine) sehen aehnlich aus, bilden aber verschiedene Trackerregeln ab; ITPatternChannelState.primeDoublePortamentoMemory haelt die Volume-Column-Bereiche 105...114 und 115...124 absichtlich getrennt lesbar.",
+        "tests": [
+          "swift test --filter 'DSPChannelTimingTests|CoordinatorSequencingTests|ITPlaybackTests|ITVoicePoolTests|MultiFormatTests': 110 Testfaelle, 0 Fehler",
+          "node Tests/js/worklet-timing.mjs: gruen (gemeinsamer MOD-DSP, laut Pflichtmatrix erforderlich)",
+          "swift test (vollstaendig, unveraenderter Stand): 358 Testfaelle, 0 Fehler, Exit 0 — der Bereich wurde nicht veraendert"
+        ]
+      }
+    },
+    {
+      "id": "core-dsp-coordinator",
+      "paths": [
+        "Sources/SavageModPlayerCore/DSP/ModPlayerCoordinator.swift",
+        "Sources/SavageModPlayerCore/DSP/ITPlaybackVoicePool.swift",
+        "Tests/SavageModPlayerTests/CoordinatorSequencingTests.swift",
+        "Tests/SavageModPlayerTests/ITVoicePoolTests.swift",
+        "Tests/SavageModPlayerTests/ITPlaybackTests.swift",
+        "Tests/SavageModPlayerTests/ITInstrumentPlaybackTests.swift",
+        "Tests/SavageModPlayerTests/ITSoundDetailTests.swift",
+        "Tests/SavageModPlayerTests/ITOpenMPTPlaybackBehaviourTests.swift",
+        "Tests/SavageModPlayerTests/ITIntegrationTests.swift",
+        "Tests/SavageModPlayerTests/SeekToRowTests.swift"
+      ],
+      "risk": "critical",
+      "priority": 2,
+      "reason": "Hoechste Aenderungsrate der letzten 60 Commits; verbindet Sequencer, Voice-Pool und Plattform-Audio",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:32:05+02:00",
+        "observed_head": "9a84755696711e6d7e815325332e5a24409d8aae",
+        "content_sha256": "1b693d2b82e7dcf6044436650a2c4e4c2ee40a56c60f261c2292dd2c4ae05063",
+        "file_count": 10,
+        "review": "full",
+        "outcome": "improved",
+        "summary": "Vierfache Duplikation der Mute-/Solo-Auswahl in toggleMute, toggleSolo, isMuted und isSoloed zusammengefuehrt (muteState(at:) plus das schmale Protokoll ChannelMuteState). Die Auswahl ist korrektheitsrelevant: IT fuehrt beide Schalter am logischen Pattern-Kanal, alle anderen Formate an der Stimme, und Lesen und Schreiben muessen denselben Traeger treffen. Der bis dahin ungetestete Weg ist jetzt ueber die oeffentliche API abgesichert. Korrektheitsreview sonst ohne Befund: channelCount wird in setMod auf die Stimmenzahl begrenzt, alle Kanalzugriffe liegen damit im Bereich; die Uhr wird ueber pendingElapsedFrames als atomarer Auftrag an den Renderblock uebergeben statt direkt geschrieben; das Songende-Signal wird als vollstaendiger Snapshot mit Acquire/Release konsumiert; der VU-Timer laeuft bewusst im RunLoop-Mode common, damit Anzeigen waehrend eines Maus-Drags nicht einfrieren. Offen und ausdruecklich NICHT hier angefasst: play() verwaltet zusaetzlich die iOS-AVAudioSession, die die iOS-App in AudioSessionController bereits fuehrt. Das ist der im Strukturbild genannte Schichtungsverstoss und steht im Backlog; ein Rueckbau ist nur am Geraet ehrlich belegbar und gehoert deshalb nicht in diese Kampagne.",
+        "tests": [
+          "swift test --filter CoordinatorSequencingTests/ITVoicePoolTests/ITPlaybackTests/SeekToRowTests: 51 Testfaelle, 0 Fehler",
+          "swift test (vollstaendig): 359 Testfaelle, 0 Fehler, Exit 0",
+          "bash build_app.sh: App und Quick-Look-Appex gebaut und signiert",
+          "git diff --check: sauber",
+          "Kein WAV-Byte-Vergleich noetig: die Aenderung liegt ausserhalb des Renderblocks und beruehrt nur MainActor-Bedienpfade"
+        ]
+      }
+    },
+    {
+      "id": "core-library",
+      "paths": [
+        "Sources/SavageModPlayerCore/Library",
+        "Tests/SavageModPlayerTests/MusicLibraryTests.swift",
+        "Tests/SavageModPlayerTests/LibraryImporterTests.swift"
+      ],
+      "risk": "critical",
+      "priority": 2,
+      "reason": "Datenintegritaet des Nutzerbestands; dokumentierte Fallen zu leeren Indizes und zu frueh geloeschten Archiven",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:41:32+02:00",
+        "observed_head": "d2781ad6af1740d50b9efbac962169cee7765f8f",
+        "content_sha256": "6f24b8166fa66f25375706427381b176edfeea79915c50bae1c9fcb40decbd27",
+        "file_count": 5,
+        "review": "delta-plus-boundaries",
+        "outcome": "improved",
+        "summary": "Delta ist eine Zeile: LibraryImporter.maxArchiveDepth verweist jetzt auf PlaylistScanner.maxArchiveDepth, statt die 3 ein zweites Mal auszuschreiben. Der eigene Kommentar verlangte diese Uebereinstimmung bereits. Verhalten unveraendert.",
+        "tests": [
+          "swift test --filter LibraryImporterTests: laeuft im vollstaendigen Lauf mit, 0 Fehler",
+          "swift test (vollstaendig): 361 Testfaelle, 0 Fehler, Exit 0"
+        ]
+      }
+    },
+    {
+      "id": "core-parser-mod-s3m",
+      "paths": [
+        "Sources/SavageModPlayerCore/Parser/ModParser.swift",
+        "Sources/SavageModPlayerCore/Parser/S3MParser.swift",
+        "Tests/SavageModPlayerTests/ModParserTests.swift",
+        "Tests/SavageModPlayerTests/MultiFormatTests.swift"
+      ],
+      "risk": "critical",
+      "priority": 2,
+      "reason": "Laengengefuehrte Binaerparser fuer nicht vertrauenswuerdige Dateien; Bounds-Fehler sind Speichersicherheit",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:24:03+02:00",
+        "observed_head": "8771f87a9ebd83713bf483337f482585b21fb26c",
+        "content_sha256": "e236d1e9272cc79d1e28fb5c5140470d44fdfa0cde38e088c96ace9a348e151c",
+        "file_count": 4,
+        "review": "delta-plus-boundaries",
+        "outcome": "improved",
+        "summary": "Delta ist ausschliesslich der Diff des Querschnitts-Funds parser-slice-safety: ModParser.parse und S3MParser.parse normalisieren ihre Eingabe ueber Data.rebasedToZero, S3MParser.canParse rechnet jetzt relativ zu data.startIndex. Die Parserlogik selbst ist unveraendert; der neue Test testParsingIsIndependentOfDataStartIndex in MultiFormatTests vergleicht MOD und S3M bei Slice-Abstand 100 und 1200 gegen den Originalpuffer.",
+        "tests": [
+          "swift test --filter 'MultiFormatTests|ModParserTests|XMParserTests|ITParserTests': 86 Testfaelle, 0 Fehler",
+          "swift test (vollstaendig): 358 Testfaelle, 0 Fehler, Exit 0",
+          "savage-cli Byte-Vergleich: 22/22 MOD-Dateien byteidentisch; node Tests/js/worklet-timing.mjs gruen"
+        ]
+      }
+    },
+    {
+      "id": "core-parser-xm",
+      "paths": [
+        "Sources/SavageModPlayerCore/Parser/XMParser.swift",
+        "Tests/SavageModPlayerTests/XMParserTests.swift"
+      ],
+      "risk": "critical",
+      "priority": 2,
+      "reason": "Binaerparser mit variablen Headerlaengen; dokumentierte Falle abgeschnittener Dateien",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:19:37+02:00",
+        "observed_head": "9e095bcaeebcbaa18395403e031a43cb7d2c7928",
+        "content_sha256": "536788bfa88aec08f386d945c1e19c10728c8b8bb6adcba761c75876a110c670",
+        "file_count": 2,
+        "review": "full",
+        "outcome": "reviewed-clean",
+        "summary": "Kein Befund, der eine Aenderung rechtfertigt — XMParser ist in diesem Repo die Referenz fuer laengengefuehrtes Parsen: checkedEnd erzwingt jedes deklarierte Fenster (Pattern-Daten, Instrumentkopf, Sample-Koepfe, gesamtes PCM) vollstaendig vor dem ersten Feldzugriff, Zellen werden vor dem Lesen gegen die Pattern-Grenze geprueft, unvollstaendige Pattern-Daten gelten als Korruption statt als stiller Rest, die Schwelle instrumentSize >= 241 verhindert das Lesen der zweiten Kopfhaelfte aus Sample-Bytes, und Zellen-, Sample- und PCM-Budgets sind ueberlaufgeprueft. Nachgeprueft und ebenfalls sauber: unbegrenzte Huellkurven-Indizes aus dem Header sind in DSPChannel durchgaengig bounds-geprueft, unbegrenzte Loop-Werte klemmt wrapLoopedSampleIndexIfNeeded, und ein Keymap-Byte ausserhalb des Samplebereichs faengt Instrument.sample(forNote:) ab. Der Review hat dafuer einen bereichsuebergreifenden Fund geliefert: XMParser rechnet relativ zu data.startIndex, ModParser und S3MParser nicht — als Querschnitts-Fund parser-slice-safety notiert.",
+        "tests": [
+          "swift test --filter XMParserTests: laeuft im vollstaendigen Lauf mit, 0 Fehler",
+          "swift test (vollstaendig, Stand dieses Bereichs): 357 Testfaelle, 0 Fehler, Exit 0 — der Bereich wurde nicht veraendert"
+        ]
+      }
+    },
+    {
+      "id": "cli",
+      "paths": [
+        "Sources/SavageCLI"
+      ],
+      "risk": "high",
+      "priority": 3,
+      "reason": "Einzige headless Schnittstelle; 590 Zeilen Argumentbehandlung mit dokumentierten Exit-Code-Zusagen und ohne eigene Testdatei",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:35:05+02:00",
+        "observed_head": "c9157db97b39d0d49b6c114af147caa8d789d474",
+        "content_sha256": "eb48b5a5593d2dfc31bdf30b7115ba7b6886c7043fbc4d160698ae69e3922812",
+        "file_count": 1,
+        "review": "full",
+        "outcome": "improved",
+        "summary": "Der Bereich war der einzige ohne eigene Testdatei, obwohl docs/testing.md fuer ihn einen ausdruecklichen Vertrag festhaelt. Die Argumentpruefung selbst ist korrekt: alle Zahlparameter gehen ueber Double mit isFinite-Pruefung, nan und inf fallen damit ebenso durch wie negative Werte und Werte oberhalb der Grenze, und die Pruefung liegt vor Parse und Render. Unvereinbare Kombinationen (stdout mit normalize, stdout mit out, play mit out/stdout/normalize/rate) werden ebenfalls vorab abgelehnt. Belegt und automatisiert: Tests/cli_contract_tests.py prueft elf ungueltige Werte auf Exit 2, die dokumentierten Grenzen 0 und 600 Sekunden sowie 8000 und 192000 Hz auf Exit 0, fehlende Werte, unbekannte Optionen, unvereinbare Kombinationen und die Trennung von Argumentfehler (2) und Laufzeitfehler (1). Der Test wurde per Gegenprobe validiert: mit aufgeweichter Untergrenze fuer die Samplerate wird er rot, danach wieder gruen. Er laeuft in CI direkt nach dem Release-Build und ueberspringt sich sauber, wenn kein savage-cli gebaut ist.",
+        "tests": [
+          "python3 Tests/cli_contract_tests.py: 6 Testfaelle, OK (neu)",
+          "Gegenprobe: mit testweise aufgeweichter Untergrenze fuer --rate schlaegt der Test fehl (0 statt 2); nach Wiederherstellung gruen",
+          "python3 Tests/context_hygiene_tests.py: 6 Testfaelle OK; python3 Tests/build_script_tests.py: 4 Testfaelle OK",
+          "git diff --check: sauber"
+        ]
+      }
+    },
+    {
+      "id": "core-audio",
+      "paths": [
+        "Sources/SavageModPlayerCore/Audio",
+        "Tests/SavageModPlayerTests/ModulePCMSourceTests.swift"
+      ],
+      "risk": "high",
+      "priority": 3,
+      "reason": "Formatfreie Ausgabeschicht mit bewusster Kopie in vicious_sidplayer; Echtzeit- gegen Offlinepfad",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:44:25+02:00",
+        "observed_head": "b003645bacb3087fabd28f870b129710b93f066e",
+        "content_sha256": "301047bacc0817a636df6efb4a50c1ededc6534b22bec7ca3795f090cf343897",
+        "file_count": 7,
+        "review": "full",
+        "outcome": "improved",
+        "summary": "Kleine Vereinfachung: ModulePCMSource.renderBlock begrenzte die Chunk-Groesse mit drei Termen, von denen nur zwei unabhaengig waren — die Restanforderung des Sinks stand doppelt. Verhalten belegt unveraendert (stdout-Strom und Datei-Render byteidentisch, 529200 Bytes). Der Echtzeit-Vertrag der Schicht haelt: alle Puffer entstehen in init oder start, im Renderpfad wird nichts alloziert; der AVAudioSourceNode-Block faengt bewusst kein self ein, sondern nur rohe Zeiger, Zahlen, den Sendable-Renderblock und ein Semaphor, und nimmt keinen Lock — die Locks liegen ausschliesslich in den Lebenszykluspfaden start und stop. Songende, Nutzerstopp und Geraetefehler sind ueber PCMSinkFinishReason unterscheidbar, damit das CLI sinnvolle Exit-Codes setzen kann. Ausdruecklich NICHT angefasst: die Schicht ist laut AGENTS eine bewusste Kopie aus vicious_sidplayer und wird erst nach Bewaehrung in beiden Repos extrahiert; strukturelle Eingriffe muessten dort mitgezogen werden und gehoeren nicht in diese Kampagne.",
+        "tests": [
+          "swift test --filter ModulePCMSourceTests/ModuleRendererLimitTests: 9 Testfaelle, 0 Fehler",
+          "savage-cli --stdout gegen Datei-Render desselben Moduls: 529200 Bytes byteidentisch",
+          "swift test (vollstaendig): 361 Testfaelle, 0 Fehler, Exit 0",
+          "git diff --check: sauber",
+          "Linux-Lauf NICHT ausgefuehrt: kein Container-Runtime auf diesem Mac. Die Pflichtmatrix verlangt ihn fuer Audio/; der ALSA-Sink ist damit nicht gegengebaut worden."
+        ]
+      }
+    },
+    {
+      "id": "core-parser-it",
+      "paths": [
+        "Sources/SavageModPlayerCore/Parser/ITParser.swift",
+        "Sources/SavageModPlayerCore/Parser/ITOpenMPTExtensionParser.swift",
+        "Sources/SavageModPlayerCore/Parser/ITSampleDecompressor.swift",
+        "Sources/SavageModPlayerCore/Parser/ITCapabilities.swift",
+        "Tests/SavageModPlayerTests/ITParserTests.swift",
+        "Tests/SavageModPlayerTests/ITInstrumentParserTests.swift",
+        "Tests/SavageModPlayerTests/ITSampleParserTests.swift",
+        "Tests/SavageModPlayerTests/ITSampleDecompressorTests.swift",
+        "Tests/SavageModPlayerTests/ITOpenMPTCompatibilityTests.swift"
+      ],
+      "risk": "critical",
+      "priority": 3,
+      "reason": "Groesster Parserblock (3500+ Zeilen) mit eigener Bitstrom-Dekompression",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:49:30+02:00",
+        "observed_head": "7d910a8031168323486d309c1a5f098c0fee8fa6",
+        "content_sha256": "fde90439e23d74d570cac90f952539d5fc435fc4e9d783374d6346b7c16cf851",
+        "file_count": 9,
+        "review": "full",
+        "outcome": "improved",
+        "summary": "Korrektheitsfund und zugleich Korrektur einer frueheren Aussage dieser Kampagne: Beim Bereich core-parser-xm hatte ich festgehalten, ITParser rechne konsequent relativ zu data.startIndex. Das gilt nur fuer seinen eigenen Reader — ITOpenMPTExtensionParser, an den er weiterreicht, adressiert seine Chunks absolut. Ein Slice aus einem groesseren Puffer beendete den Prozess deshalb mit SIGTRAP, sobald der startIndex ueber den Chunk-Offsets lag; direkt am Extension-Parser belegt (ohne Slice erfolgreich, mit startIndex 100 Absturz). ITParser.parse normalisiert seine Eingabe jetzt wie ModParser und S3MParser, die Annahme ist am Extension-Parser dokumentiert, und ein Test prueft beide Wege gegen den Originalpuffer. Sonst ohne Befund: der Reader wirft bei Ueberschreitung statt still 0 zu liefern und ist damit der strengste der vier Parser; ITSampleDecompressor begrenzt Bitbreite, Blocklaenge und Blockende durchgaengig und kann weder endlos laufen noch ueberlaufen, weil jede Runde entweder Frames erzeugt oder am Blockende wirft; Ordertabelle, Instrument- und Samplezahlen sowie Patternzeilen liegen hinter eigenen Obergrenzen.",
+        "tests": [
+          "swift test --filter IT-Suiten (Parser, OpenMPT-Kompatibilitaet, Sample, Instrument, Decompressor): 54 Testfaelle, 1 uebersprungen (lokales Korpus fehlt), 0 Fehler",
+          "Gegenprobe: ohne die Normalisierung beendet testParsingIsIndependentOfDataStartIndex den Prozess mit Signal 5; mit ihr gruen",
+          "swift test (vollstaendig): 362 Testfaelle, 0 Fehler, Exit 0",
+          "savage-cli Byte-Vergleich: 22/22 MOD-Dateien byteidentisch",
+          "git diff --check: sauber",
+          "Linux-Lauf NICHT ausgefuehrt: kein Container-Runtime auf diesem Mac (Parser-Kern ist laut Pflichtmatrix Linux-pflichtig)."
+        ]
+      }
+    },
+    {
+      "id": "core-playlist",
+      "paths": [
+        "Sources/SavageModPlayerCore/Playlist",
+        "Sources/SavageModPlayerCore/PreviewCacheIdentity.swift",
+        "Tests/SavageModPlayerTests/PlaylistScannerTests.swift",
+        "Tests/SavageModPlayerTests/PreviewCacheIdentityTests.swift"
+      ],
+      "risk": "high",
+      "priority": 3,
+      "reason": "Hohe Aenderungsrate; Scanner entpackt Archive und speist App, CLI und Quick Look",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:41:32+02:00",
+        "observed_head": "d2781ad6af1740d50b9efbac962169cee7765f8f",
+        "content_sha256": "68d1c2bd885bea66b1c5b57ad269b92359b6c779066aad283e3a8ef1904e3eda",
+        "file_count": 4,
+        "review": "full",
+        "outcome": "improved",
+        "summary": "Korrektheitsfund: Die Archiv-Tiefengrenze stand in der Bedingung des Archiv-Zweigs statt darin. Ein Archiv jenseits der dritten Ebene erfuellte die Bedingung nicht mehr und fiel in den Modul-Zweig darunter; weil die Amiga-Namenskonvention mod.<name> greift, landete ein mod.sammlung.zip als unspielbare Moduldatei in der Playlist — genau der Fall, den die Reihenfolge Archive-zuerst verhindern soll. Mit vierfach verschachtelten Archiven reproduziert, behoben und mit zwei Tests abgesichert (zu tief wird uebersprungen, innerhalb der Grenze wird weiterhin ausgepackt). Die Tiefe 3 lag als nackte Zahl doppelt vor, obwohl der Kommentar im LibraryImporter ihre Uebereinstimmung verlangt; sie steht jetzt als PlaylistScanner.maxArchiveDepth an einer Stelle. Sonst ohne Befund: der bsdtar-Pfad prueft Eintragszahl und entpackte Groesse in einer streamenden Vorabprobe, bevor das Ziel waechst, leert die Pipe asynchron gegen Blockieren, ist im 50-ms-Takt abbrechbar und liest den terminationStatus erst nach waitUntilExit; PreviewCacheIdentity und der Baum-Aufbau sind unauffaellig.",
+        "tests": [
+          "swift test --filter PlaylistScannerTests: 8 Testfaelle, 0 Fehler (zwei neu)",
+          "Gegenprobe: mit zurueckgenommener Korrektur meldet der neue Test mod.inner.zip als eingesammelt und wird rot; nach Wiederherstellung gruen",
+          "swift test (vollstaendig): 361 Testfaelle, 0 Fehler, Exit 0",
+          "bash build_app.sh: App und Quick-Look-Appex gebaut und signiert",
+          "git diff --check: sauber",
+          "Linux-Lauf NICHT ausgefuehrt: kein Container-Runtime auf diesem Mac. Die Pflichtmatrix verlangt ihn fuer PlaylistScanner; der Beleg fehlt und wird nicht behauptet."
+        ]
+      }
+    },
+    {
+      "id": "ios-library",
+      "paths": [
+        "ios/SavageModPlayer/Library",
+        "ios/SavageModPlayerTests/LibraryImportIntegrationTests.swift"
+      ],
+      "risk": "high",
+      "priority": 3,
+      "reason": "Import, Dateiabgleich und File-Provider-Zugriff; Backlog nennt fehlendes Zeitlimit im FileProviderReader",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:55:28+02:00",
+        "observed_head": "76043aeec9c85baf22ef6f7d0a8822cfa2560547",
+        "content_sha256": "d7ca5662a984c5b87cf5b0b22fddf4e298f0135b0caf6c19fdda9ee3c88c49ff",
+        "file_count": 6,
+        "review": "full",
+        "outcome": "reviewed-clean",
+        "summary": "Kein Befund, der eine Aenderung rechtfertigt. Zwei Verdachtsmomente gezielt nachgegangen und beide ausgeraeumt: Erstens sieht resolveLibrary nach einer klassischen Actor-Reentrancy aus, weil zwischen der Pruefung auf eine vorhandene Bibliothek und der Zuweisung ein await liegt — zwei gleichzeitige Aufrufer koennten je eine eigene MusicLibrary bauen und danach beide den Index schreiben. Erreichbar ist das nicht: jeder oeffentliche Einstieg (refresh, Import, unpackPendingArchives, resetLibrary, Start) prueft !isBusy, und beginOperation setzt das Flag synchron auf dem MainActor, bevor der Task ueberhaupt entsteht. Zwischen Pruefung und Flag liegt kein Suspensionspunkt, ein zweiter Vorgang kann also nicht anlaufen. Zweitens der Backlog-Punkt zu FileProviderReader: die Wartestufe hat inzwischen sehr wohl ein Zeitlimit und wertet das Abbruchflag aus, und die Frist verlaengert sich bei Fortschritt. Was weiterhin fehlt, ist ein Wachhund um coordinator.coordinate selbst — dieser Aufruf ist synchron, ohne Zeitlimit und ohne Abbruchpruefung, ein haengender fremder File Provider blockiert den Bibliotheks-Worker also dauerhaft. Der Backlog-Eintrag beschreibt das korrekt und haelt ebenso korrekt fest, dass ein Rueckbau nur mit einem realen File-Provider-Szenario ehrlich belegbar ist. Genau deshalb bleibt er hier unangetastet: eine Aenderung an diesem Nebenlaeufigkeitspfad ohne Nachweis waere Spekulation, und iOS-Isolationsfehler aeussern sich in diesem Projekt als SIGTRAP.",
+        "tests": [
+          "bash ios/scripts/build-simulator.sh: Exit 0, keine Warnungen im eigenen Quellbaum",
+          "bash ios/scripts/run-tests.sh: 16 Testfaelle im Simulator, 0 Fehler (TEST SUCCEEDED)",
+          "swift test (vollstaendig): 362 Testfaelle, 0 Fehler — der plattformneutrale Kern der Bibliothek wird dort geprueft, nicht im Simulator",
+          "Hintergrundwiedergabe, Sperrbildschirm und Speicherverhalten beim Import grosser Archive sind im Simulator NICHT belegbar und werden nicht behauptet."
+        ]
+      }
+    },
+    {
+      "id": "ios-player",
+      "paths": [
+        "ios/SavageModPlayer/Player",
+        "ios/SavageModPlayer/AppModel.swift",
+        "ios/SavageModPlayer/PlayerSettings.swift",
+        "ios/SavageModPlayer/SavageModPlayerApp.swift",
+        "ios/SavageModPlayer/SharedTypes.swift",
+        "ios/SavageModPlayerTests/ProjectSkeletonTests.swift",
+        "ios/SavageModPlayer/Info.plist"
+      ],
+      "risk": "high",
+      "priority": 3,
+      "reason": "Bekannte Swift-6-Isolationsfallen (SIGTRAP); Backlog nennt MainActor-Blockade beim Modul-Laden",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:56:41+02:00",
+        "observed_head": "0ab3ee2517468f1fbf8f410f7fec5296ce26d0c1",
+        "content_sha256": "4d10d3a44a9bfd6b7fc088038e0e830a4fd88912e4428927701cfa38e462f481",
+        "file_count": 9,
+        "review": "full",
+        "outcome": "reviewed-clean",
+        "summary": "Kein Befund, der eine Aenderung in dieser Kampagne rechtfertigt — wohl aber zwei Praezisierungen zu offenen Backlog-Punkten. Erstens Modul-Laden auf dem MainActor: bestaetigt und sogar etwas schwerer als dort beschrieben. loadModule liest, parst und uebergibt synchron, und setMod laesst zusaetzlich RenderEngine.sequencedDuration einmal den ganzen Song durchticken. Das ist ein Umbau am Nebenlaeufigkeitspfad, der laut Backlog wegen der Swift-6-Isolationsfallen mit Bedacht und mit Simulator-Tests umzusetzen ist; er gehoert in einen eigenen Auftrag, nicht als Beifang ans Ende einer QA-Kampagne. Zweitens NowPlayingController: der Punkt stimmt, seine Tragweite ist aber kleiner als der Eintrag nahelegt. activate() meldet zuerst sauber ab, und in der ausgelieferten App gibt es genau eine Instanz, die PlaybackEngine als private let haelt und die den Prozess ueberlebt — wirkungslose Handler im globalen MPRemoteCommandCenter sammeln sich also praktisch nur, wenn mehrere Engines entstehen, das heisst in Tests. Ein deinit waere zudem nicht geschenkt: die Klasse ist MainActor-isoliert, deinit ist es nicht, und genau solche Konstruktionen loesen in diesem Projekt SIGTRAP aus. Positiv geprueft: die Combine-Sinks auf Systembenachrichtigungen nutzen receive(on: DispatchQueue.main) beziehungsweise heben ihre Arbeit ausdruecklich per Task auf den MainActor, und die security-scoped Zugriffe sind sauber gepaart.",
+        "tests": [
+          "bash ios/scripts/build-simulator.sh: Exit 0, keine Warnungen im eigenen Quellbaum",
+          "bash ios/scripts/run-tests.sh: 16 Testfaelle im Simulator, 0 Fehler (TEST SUCCEEDED)",
+          "Der Bereich wurde nicht veraendert; beide Laeufe belegen den unveraenderten Stand.",
+          "Hintergrundwiedergabe, Sperrbildschirm-Steuerung, AirPods, eingehender Anruf und Route-Change sind laut docs/testing.md nur am Geraet belegbar und wurden NICHT geprueft."
+        ]
+      }
+    },
+    {
+      "id": "ios-ui",
+      "paths": [
+        "ios/SavageModPlayer/UI",
+        "ios/SavageModPlayerTests/ScenePhaseVisualizerTests.swift"
+      ],
+      "risk": "medium",
+      "priority": 4,
+      "reason": "Sichtbarkeitsabhaengige Visualisierungen und Bibliotheksbaum; Backlog nennt Queue-Ersetzung ohne Filterkontext",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:57:33+02:00",
+        "observed_head": "b7e9c4c56b74ce03cb8f007355818bf798ce31de",
+        "content_sha256": "8d7b84a947d2f6239450739a4361c0449b9262f5c7b9d39793dd1bf673130e25",
+        "file_count": 9,
+        "review": "full",
+        "outcome": "reviewed-clean",
+        "summary": "Kein Befund, der eine Aenderung in dieser Kampagne rechtfertigt. Der Backlog-Punkt zur Player-Queue ist bestaetigt: RootView ruft bei jeder Aenderung von library.tracks setQueue mit der Gesamtbibliothek auf, der Filterkontext einer aus Suche oder Favoriten gestarteten Wiedergabe geht dabei verloren. setQueue haelt immerhin den laufenden Titel an seinem Platz, wenn er in der neuen Liste steht. Das zu aendern hiesse aber, das Abspielverhalten umzudefinieren (welche Auswahl gilt weiter, wenn sich der gefilterte Bestand aendert?) — eine Verhaltensaenderung, keine QA-Bereinigung, und der Backlog fuehrt sie zu Recht unter optionalem Feinschliff. Zusaetzlich geprueft und ausdruecklich verneint: die gleichnamigen Dateien VisualizerViews.swift und SettingsView.swift in Mac- und iOS-App sind KEINE Duplikate. Ausser dem Namen SettingsView teilen sie kein einziges Symbol; es sind zwei eigenstaendige Umsetzungen fuer unterschiedliche Plattform-Idiome. Ein Zusammenziehen waere genau das, was diese Kampagne ablehnt: gleiche Syntax, verschiedene Sache. Die sichtbarkeitsabhaengigen Visualisierungen sind durch ScenePhaseVisualizerTests mit neun Faellen abgedeckt.",
+        "tests": [
+          "bash ios/scripts/build-simulator.sh: Exit 0, keine Warnungen im eigenen Quellbaum",
+          "bash ios/scripts/run-tests.sh: 16 Testfaelle im Simulator, 0 Fehler, darunter ScenePhaseVisualizerTests mit 9 Faellen",
+          "Der Bereich wurde nicht veraendert; beide Laeufe belegen den unveraenderten Stand."
+        ]
+      }
+    },
+    {
+      "id": "mac-app-ui",
+      "paths": [
+        "Sources/SavageModPlayerApp",
+        "Tests/ui_source_tests.py"
+      ],
+      "risk": "medium",
+      "priority": 4,
+      "reason": "19 SwiftUI-Dateien um eine geteilte MainView; typischer Ort fuer duplizierte Ansichtslogik",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T15:00:21+02:00",
+        "observed_head": "e6f25223dd69b47e6846734288bad554dcab918d",
+        "content_sha256": "ba712fcf4a59f80dca36b5683f898e7bfc775fb48b1436766d98770c91249694",
+        "file_count": 21,
+        "review": "full",
+        "outcome": "improved",
+        "summary": "Duplikation zusammengefuehrt: Die beiden VU-Darstellungen (VUMeterView und die Kanalspalten in ChannelScopesCanvas) schrieben dieselben vier LED-Schwellen samt Farben und dieselbe Inaktiv-Farbe getrennt aus. Ein Nachziehen der Stufen haette zwei Pegelanzeigen mit unterschiedlicher Optik nebeneinander ergeben. Die Stufen liegen jetzt als VUPalette in Theme.swift — genau dort, wo Color.accent(_:) laut Kommentar bereits denselben Schritt fuer den Akzentton gemacht hat. Die Ausdruecke wurden woertlich uebernommen, die Farben sind also unveraendert. Maschineller Duplikationsscan ueber alle 19 SwiftUI-Dateien: ausser diesem Paar und makeBody (ButtonStyle-Protokollanforderung, keine Duplikation) teilt kein Funktionsname mehrere Dateien. Die Aufteilung von MainView in Erweiterungsdateien ist damit sauber. Testgrenze ausdruecklich: eine Farbaenderung liesse sich headless nicht bemerken; belegt sind Bau, Signatur und die UI-Quelltests, nicht die Optik. Ein sichtbarer Fenster-Smoke braucht GUI-Zustimmung und wurde nicht durchgefuehrt — er ist hier auch nicht noetig, weil die Ausdruecke Zeichen fuer Zeichen dieselben geblieben sind.",
+        "tests": [
+          "python3 Tests/ui_source_tests.py: 2 Testfaelle, OK (schuetzt die Pflichtbedienelemente des kompakten Footers)",
+          "swift test (vollstaendig): 362 Testfaelle, 0 Fehler, Exit 0",
+          "bash build_app.sh: App und Quick-Look-Appex gebaut und signiert",
+          "git diff --check: sauber",
+          "Kein sichtbarer Fenster-Smoke: braucht GUI-Zustimmung. Die Farbausdruecke wurden woertlich uebernommen, eine optische Aenderung ist damit ausgeschlossen."
+        ]
+      }
+    },
+    {
+      "id": "quicklook",
+      "paths": [
+        "quicklook"
+      ],
+      "risk": "medium",
+      "priority": 4,
+      "reason": "Sandboxed Extension mit eigener Fehlerbehandlung und 60-Sekunden-Grenze",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:51:40+02:00",
+        "observed_head": "5afd580611a0565ca8578a0a4deb7c560515b649",
+        "content_sha256": "b157d9e81ee102e0bf6f69c8b725fce8d88ace59434d2b507b68fe5f4ea733a4",
+        "file_count": 2,
+        "review": "full",
+        "outcome": "improved",
+        "summary": "Kleiner, aber echter Ressourcenfund: Das Alters-Aufraeumen des Vorschau-Verzeichnisses lief nur beim erfolgreichen Rendern. Fehlertexte tragen je einen eigenen UUID-Namen, sodass wiederholtes Leertasten auf defekten Modulen je Druck eine Datei im Sandbox-Container hinterliess, die nie jemand entfernte. Der Durchgang liegt jetzt in pruneOldPreviews und laeuft auf beiden Wegen, mit unveraenderter 24-Stunden-Grenze. Sonst ohne Befund: die Cache-Identitaet wird aus genau den eingelesenen Bytes abgeleitet statt danach erneut aus Pfad und Attributen, die WAV wird atomar geschrieben und erst dann umbenannt, sodass parallele Finder-Anfragen nie eine halbfertige Datei sehen, und ein Parserfehler liefert eine endliche Textvorschau statt eines haengenden Ladeindikators. Testblocker, ausdruecklich benannt: quicklook/ ist kein SwiftPM-Ziel, sondern wird von build_app.sh per swiftc mit den Core-Quellen in ein Modul uebersetzt — es gibt keine Testnaht fuer die Extension. Belegt ist deshalb nur Bau, striktes codesign --verify und plutil-Lint; der sichtbare Endtest mit der Finder-Leertaste braucht GUI-Zustimmung und wurde nicht durchgefuehrt.",
+        "tests": [
+          "bash build_app.sh: App und Quick-Look-Appex gebaut und signiert",
+          "codesign --verify --strict: Appex gueltig, Designated Requirement erfuellt",
+          "plutil -lint der Appex-Info.plist: OK",
+          "swift test (vollstaendig): 362 Testfaelle, 0 Fehler, Exit 0",
+          "Kein Unit-Test moeglich: quicklook/ ist kein SwiftPM-Ziel. Der sichtbare Finder-Endtest braucht GUI-Zustimmung und wurde nicht durchgefuehrt."
+        ]
+      }
+    },
+    {
+      "id": "web-player",
+      "paths": [
+        "src",
+        "modplayer.js",
+        "mod-player-worklet.js",
+        "Tests/js"
+      ],
+      "risk": "medium",
+      "priority": 4,
+      "reason": "Zweite Umsetzung desselben 4-Kanal-MOD-DSP; Paritaet zu Swift ist harte Projektinvariante",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:53:38+02:00",
+        "observed_head": "29916ba3416a704e2eb045cd6a2327901a50a83b",
+        "content_sha256": "d124da636c7416d6c97e058441e7992a3a1beab25a75de6bee993abf3ead22d7",
+        "file_count": 10,
+        "review": "full",
+        "outcome": "reviewed-clean",
+        "summary": "Kein weiterer Befund. Die eine echte Schwaeche dieses Bereichs — das ungepruefte Playlist-Laengenbyte in modplayer.js — wurde bereits als Querschnitts-Fund mod-order-table-bound behoben, weil sie die Swift-Seite gleichermassen betraf; dieser Bereichsdurchgang hat nichts darueber hinaus gefunden. Geprueft: Pattern und Instrument klemmen ihre Offsets ausdruecklich und bilden das defensive Verhalten von ModParser nach (ein nicht mehr vollstaendig enthaltenes Pattern wird zu 64 leeren Zeilen statt zu einer RangeError); parseModBuffer verlangt 1084 Byte und laesst nur die vier echten 4-Kanal-Signaturen zu, statt Multichannel mit falschen Strides zu lesen. Sicherheitsseitig durchgesehen: von aussen kommende Strings sind Instrumentnamen und Fehlertexte, beide laufen durch escapeHtml; das Pattern-Raster wird ausschliesslich aus Zahlen gebaut und enthaelt keine Dateidaten. Web-Compliance geprueft: das ausgelieferte Einzeldatei-Bundle enthaelt keinen einzigen externen Verweis — keine CDN-Skripte, keine Fremdfonts, keine Remote-Bilder. Impressum und Datenschutz sind hier nicht faellig, weil das Repo den Browserplayer nirgends als oeffentlich gehostete Anwendung verlinkt; sollte er einmal gehostet werden, gilt die Regel und der Hinweis gehoert ins gerenderte DOM. Die bewusste Beschraenkung auf klassische 4-Kanal-MODs bleibt unangetastet.",
+        "tests": [
+          "node --check fuer modplayer.js, mod-player-worklet.js und src/app.js: ok",
+          "node Tests/js/worklet-timing.mjs: gruen (Paritaet zu DSPChannel.swift)",
+          "node Tests/js/pattern-bounds.mjs: gruen",
+          "python3 build.py und anschliessender git diff --exit-code: savage-mod-player.html ist aktuell (dieselbe Pruefung wie in CI)",
+          "Kein Browser-Smoke durchgefuehrt: der Bereich wurde in diesem Durchgang nicht veraendert, und ein sichtbarer Test braucht GUI-Zustimmung."
+        ]
+      }
+    },
+    {
+      "id": "build-and-tooling",
+      "paths": [
+        "Package.swift",
+        "build.py",
+        "build_app.sh",
+        "build_dmg.sh",
+        "install.sh",
+        "notarize-lib.sh",
+        "publish_github.sh",
+        "release.sh",
+        ".github",
+        "tools",
+        "Tests/build_script_tests.py",
+        "Tests/context_hygiene_tests.py",
+        "Tests/reference_compare_tests.py",
+        "ios/scripts",
+        "Tests/cli_contract_tests.py"
+      ],
+      "risk": "medium",
+      "priority": 5,
+      "reason": "Signatur-, Notary- und Veroeffentlichungspfade; Fehler hier wirken nach aussen, aber der Code ist stabil",
+      "state": "completed",
+      "last_run": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T15:01:17+02:00",
+        "observed_head": "bed14a5e41c1f96bc4ce8eb30761d2560717fc5d",
+        "content_sha256": "1f0c7462db21df137e986e92dd63d399c7c8fc92a72a443d4f179a69501b59aa",
+        "file_count": 17,
+        "review": "full",
+        "outcome": "reviewed-clean",
+        "summary": "Kein Befund. Die Aenderung, die diesen Bereich in dieser Kampagne betrifft — der neue CI-Schritt fuer Tests/cli_contract_tests.py — entstand im Bereich cli und ist dort gebucht. Geprueft und in Ordnung: alle ausfuehrbaren Skripte setzen set -euo pipefail; notarize-lib.sh setzt bewusst nichts, weil es ausschliesslich gesourct wird und install.sh wie release.sh ihre Strenge vorher setzen (Zeile 19 beziehungsweise 23, source erst danach) — eine eigene Setzung wuerde dem Aufrufer seine aufzwingen. Die beiden set-plus-e-Bloecke in den iOS-Skripten sind lehrbuchmaessig geklammert: abschalten, Status in einer Variablen sichern, wieder einschalten, danach auswerten und den Exit-Code weiterreichen. Die Schutzregel um /Applications und das angeheftete Notary-Ticket ist durch build_script_tests.py als Quelltest abgesichert, der ausdruecklich nichts baut und nichts installiert.",
+        "tests": [
+          "python3 Tests/build_script_tests.py: OK",
+          "python3 Tests/context_hygiene_tests.py: OK",
+          "python3 Tests/ui_source_tests.py: OK",
+          "python3 Tests/cli_contract_tests.py: OK",
+          "python3 Tests/reference_compare_tests.py: 16 Testfaelle, OK",
+          "bash build_app.sh und die beiden iOS-Skripte liefen im Verlauf der Kampagne mehrfach erfolgreich"
+        ]
+      }
+    }
+  ],
+  "architecture": {
+    "campaign_id": "20260815T134201005857+0200",
+    "recorded_at": "2026-08-15T13:44:37+02:00",
+    "observed_head": "630110e919e3e652cf9262036d566995eec6d1b0",
+    "summary": "SavageModPlayerCore traegt Parser, DSP, Ausgabeschicht und Bibliothek ohne SwiftUI/AppKit/UIKit; alle vier Clients (macOS-App, iOS-App, savage-cli, Quick Look) rendern ueber RenderEngine.createRenderBlock. Die beobachtbare Zustandsschicht (ModPlayerCoordinator, TransportState, VisualizerState) liegt bewusst im Kern hinter canImport(Combine), damit sich Mac- und iOS-App dieselben View-Modelle teilen. Gespannt ist die Schichtung an zwei Stellen: ModPlayerCoordinator verwaltet in play() direkt die iOS-AVAudioSession und damit App-Politik, die die iOS-App in AudioSessionController bereits fuehrt; und dieselbe Klasse buendelt auf 1114 Zeilen UI-Zustand, CoreAudio-Anbindung, Sequenzerticks und Instrument-Vorschau.",
+    "paradigm": "Schichtenmodell mit plattformneutralem Kern und duennen Plattform-Clients",
+    "fit": "gespannt",
+    "recommendation": "Kein Paradigmenwechsel. Das Schichtenmodell traegt und ist durch Linux- und CLI-Baeume belegt; ein Umbau waere teuer ohne Gegenwert. Lohnend sind zwei lokale Rueckbauten innerhalb der Kampagne: die AVAudioSession-Verwaltung aus dem Kern in die iOS-App ziehen (steht bereits im Backlog, Verhalten nur am Geraet abschliessend belegbar) und die Verantwortungen von ModPlayerCoordinator trennen. Beides bleibt Bereichsarbeit und braucht keinen eigenen Architekturauftrag."
+  },
+  "themes": [
+    {
+      "id": "mod-order-table-bound",
+      "summary": "Das Laengenbyte der MOD-Playlist (Offset 950) wird in beiden Umsetzungen ungeprueft uebernommen, obwohl die Playlist physisch nur 128 Eintraege fasst. Swift ist in dieser Kampagne behoben; modplayer.js:108 liest weiterhin 'new Uint8Array(modfile, 952, this.length)' und zieht bei einem Laengenbyte ueber 128 die Signaturbytes M.K. (77, 46, 75, 46) und danach Pattern-Daten als Playlist-Eintraege herein. Damit weichen Swift- und JS-Wiedergabe fuer solche Dateien voneinander ab — die Projektinvariante verlangt einen konsistenten gemeinsamen 4-Kanal-MOD-Kern.",
+      "evidence": [
+        "modplayer.js",
+        "Sources/SavageModPlayerCore/Parser/ModParser.swift"
+      ],
+      "priority": 4,
+      "state": "completed",
+      "noted_at": "2026-08-15T14:13:20+02:00",
+      "campaign_id": "20260815T134201005857+0200",
+      "started_at": "2026-08-15T14:35:27+02:00",
+      "completed": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:36:14+02:00",
+        "observed_head": "17dc06c52884838527220703a1b6e660381a43b7",
+        "summary": "modplayer.js begrenzt das Laengenbyte jetzt wie ModParser.swift auf die 128 Eintraege der Playlist. Beide Umsetzungen lesen dieselbe defekte Datei damit wieder gleich. savage-mod-player.html wurde mit build.py neu erzeugt; der Diff besteht aus genau dieser einen Zeile.",
+        "tests": [
+          "node --check modplayer.js und mod-player-worklet.js: ok",
+          "node Tests/js/worklet-timing.mjs und Tests/js/pattern-bounds.mjs: gruen",
+          "Gegenprobe mit synthetischem MOD (Laengenbyte 200): 128 Eintraege ohne Signaturbytes; ohne Grenze waeren es 200 mit 77, 46, 75, 46 an Position 128 bis 131",
+          "python3 build.py: Bundle neu erzeugt, Diff semantisch geprueft (eine Zeile)",
+          "python3 Tests/context_hygiene_tests.py: 6 Testfaelle OK"
+        ]
+      }
+    },
+    {
+      "id": "parser-slice-safety",
+      "summary": "ModuleLoader.parse ist oeffentlich und nimmt beliebige Data-Werte an. XMParser und ITParser rechnen konsequent relativ zu data.startIndex und vertragen deshalb Slices; ModParser (data[470], data[952], data.subdata(in: 0..<20)) und S3MParser (func byte nutzt data[o], data.subdata(in: 0..<28)) indizieren absolut. Belegt an einem minimalen M.K.-MOD: ohne Slice length=1, als Slice mit startIndex 100 falsch geparst (invalidSignature statt Erfolg), als Slice mit startIndex 1200 beendet der Prozess mit SIGTRAP, weil die festen Offsets unter dem startIndex liegen. Ein Aufrufer, der ein Modul aus einem groesseren Puffer herausschneidet, trifft das sofort.",
+      "evidence": [
+        "Sources/SavageModPlayerCore/Parser/ModParser.swift",
+        "Sources/SavageModPlayerCore/Parser/S3MParser.swift"
+      ],
+      "priority": 1,
+      "state": "completed",
+      "noted_at": "2026-08-15T14:19:37+02:00",
+      "campaign_id": "20260815T134201005857+0200",
+      "started_at": "2026-08-15T14:19:43+02:00",
+      "completed": {
+        "campaign_id": "20260815T134201005857+0200",
+        "completed_at": "2026-08-15T14:23:46+02:00",
+        "observed_head": "8771f87a9ebd83713bf483337f482585b21fb26c",
+        "summary": "Data.rebasedToZero normalisiert die Eingabe an den betroffenen oeffentlichen Einstiegen (ModuleLoader.parse, ModParser.parse, S3MParser.parse) einmal auf startIndex 0; S3MParser.canParse rechnet jetzt wie ITParser.canParse relativ zum startIndex, weil ModuleLoader es vor der Normalisierung aufruft. Bewusst nicht beide Parser auf Basisadressierung umgerechnet — das waeren rund zwanzig Stellen mit entsprechendem Regressionsrisiko fuer einen Fehler ohne heutigen Aufrufer. Der Normalfall aus Data(contentsOf:) hat startIndex 0 und wird nicht kopiert.",
+        "tests": [
+          "swift test --filter 'MultiFormatTests|ModParserTests|XMParserTests|ITParserTests': 86 Testfaelle, 0 Fehler; neuer Test testParsingIsIndependentOfDataStartIndex prueft MOD und S3M bei Abstand 100 und 1200 gegen den Originalpuffer",
+          "swift test (vollstaendig): 358 Testfaelle, 0 Fehler, Exit 0",
+          "savage-cli Byte-Vergleich: 22/22 MOD-Dateien byteidentisch",
+          "node Tests/js/worklet-timing.mjs: gruen",
+          "bash build_app.sh: App und Quick-Look-Appex gebaut und signiert"
+        ]
+      }
+    }
+  ]
+}

@@ -1,10 +1,15 @@
 import XCTest
 @testable import SavageModPlayerCore
 
-// Der ZIP-Reader existiert nur dort, wo es das Compression-Framework gibt.
-// Unter Linux entfaellt damit auch diese Suite.
+// Der ZIP-Reader braucht einen streamenden DEFLATE-Dekomprimierer: auf Apple
+// das Framework Compression, unter Linux die zlib. Nur wo beides fehlt,
+// entfaellt auch diese Suite.
+#if canImport(Compression) || canImport(CZlib)
 #if canImport(Compression)
 import Compression
+#else
+import CZlib
+#endif
 
 // Tests fuer den eigenen ZIP-Reader. Alle Archive entstehen hier im Test aus
 // von Hand geschriebenen Bytes — es liegt kein einziges Archiv und keine
@@ -189,12 +194,14 @@ final class ZipArchiveReaderTests: XCTestCase {
         return url
     }
 
-    // Raw-Deflate erzeugen. Apples COMPRESSION_ZLIB ist genau das Format ohne
-    // zlib-Rahmen, das auch in einer ZIP-Datei steht.
+    // Raw-Deflate erzeugen — das Format ohne zlib-Rahmen, das in einer ZIP-Datei
+    // steht. Apples COMPRESSION_ZLIB meint genau das; bei zlib selbst verlangt
+    // man es mit einem negativen Fenster-Parameter.
     private func deflateRaw(_ data: Data) throws -> Data {
         guard !data.isEmpty else { return Data() }
         let capacity = data.count + 64 * 1024
         var output = Data(count: capacity)
+#if canImport(Compression)
         let written = output.withUnsafeMutableBytes { destination -> Int in
             data.withUnsafeBytes { source -> Int in
                 compression_encode_buffer(
@@ -204,6 +211,26 @@ final class ZipArchiveReaderTests: XCTestCase {
                 )
             }
         }
+#else
+        var input = [UInt8](data)
+        var stream = z_stream()
+        guard deflateInit2_(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -MAX_WBITS, 8,
+                            Z_DEFAULT_STRATEGY, ZLIB_VERSION,
+                            Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
+            throw XCTSkip("Deflate-Testdaten ließen sich nicht erzeugen")
+        }
+        defer { deflateEnd(&stream) }
+        let written = output.withUnsafeMutableBytes { destination -> Int in
+            input.withUnsafeMutableBufferPointer { source -> Int in
+                stream.next_in = source.baseAddress
+                stream.avail_in = uInt(source.count)
+                stream.next_out = destination.bindMemory(to: UInt8.self).baseAddress
+                stream.avail_out = uInt(capacity)
+                guard deflate(&stream, Z_FINISH) == Z_STREAM_END else { return 0 }
+                return capacity - Int(stream.avail_out)
+            }
+        }
+#endif
         guard written > 0 else {
             throw XCTSkip("Deflate-Testdaten ließen sich nicht erzeugen")
         }

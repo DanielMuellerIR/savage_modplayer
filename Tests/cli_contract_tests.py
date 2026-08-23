@@ -134,6 +134,43 @@ class CLIContractTests(unittest.TestCase):
             capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, EXIT_ARGUMENT)
 
+    def test_list_prints_one_path_per_line(self):
+        folder = Path(self._tempdir.name) / "liste"
+        (folder / "unterordner").mkdir(parents=True, exist_ok=True)
+        for name in ("b.mod", "a.mod", "unterordner/c.mod"):
+            (folder / name).write_bytes(_minimal_mod())
+        (folder / "notiz.txt").write_text("kein Modul")
+        result = subprocess.run(
+            [str(self.binary), "--list", str(folder)],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, EXIT_OK)
+        printed = result.stdout.split()
+        self.assertEqual(len(printed), 3, result.stdout)
+        self.assertEqual(printed, sorted(printed), "Ausgabe muss nach Pfad sortiert sein")
+        self.assertNotIn("notiz.txt", result.stdout)
+
+    def test_list_on_an_empty_folder_is_a_runtime_error(self):
+        empty = Path(self._tempdir.name) / "leer-liste"
+        empty.mkdir(exist_ok=True)
+        result = subprocess.run(
+            [str(self.binary), "--list", str(empty)],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, EXIT_RUNTIME)
+
+    def test_list_on_a_file_is_a_runtime_error(self):
+        result = subprocess.run(
+            [str(self.binary), "--list", str(self.module)],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, EXIT_RUNTIME)
+
+    def test_list_together_with_an_input_file_is_rejected(self):
+        """Vorher gewann still --list und die Datei verschwand kommentarlos."""
+        result = subprocess.run(
+            [str(self.binary), str(self.module), "--list", self._tempdir.name],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, EXIT_ARGUMENT)
+        self.assertIn("--list", result.stderr)
+
     def test_missing_input_file_is_a_runtime_error_not_an_argument_error(self):
         """Der Unterschied zaehlt: 1 heisst Laufzeit, 2 heisst Aufruf."""
         result = subprocess.run(

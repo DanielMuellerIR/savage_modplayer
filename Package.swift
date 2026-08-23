@@ -54,13 +54,27 @@ let package = Package(
                 .apt(["libasound2-dev"])
             ]
         ),
+        // zlib (nur Linux; siehe Sources/CZlib/module.modulemap). Auf Apple
+        // uebernimmt das Framework Compression, dort wird dieses Modul nicht
+        // eingebunden. Braucht auf dem Build-Rechner das Paket zlib1g-dev.
+        .systemLibrary(
+            name: "CZlib",
+            path: "Sources/CZlib",
+            pkgConfig: "zlib",
+            providers: [
+                .apt(["zlib1g-dev"])
+            ]
+        ),
         .target(
             name: "SavageModPlayerCore",
             dependencies: [
                 "CSavageAtomics",
                 // Nur der Linux-Build zieht ALSA herein — auf macOS laeuft die
                 // Ausgabe ueber AVAudioEngine und CALSA wird nie angefasst.
-                .target(name: "CALSA", condition: .when(platforms: [.linux]))
+                .target(name: "CALSA", condition: .when(platforms: [.linux])),
+                // Dasselbe fuer zlib: Der ZIP-Leser nutzt auf Apple das
+                // Framework Compression und nur unter Linux die Systembibliothek.
+                .target(name: "CZlib", condition: .when(platforms: [.linux]))
             ],
             path: "Sources/SavageModPlayerCore"
         ),
@@ -72,7 +86,13 @@ let package = Package(
         ),
         .testTarget(
             name: "SavageModPlayerTests",
-            dependencies: ["SavageModPlayerCore"],
+            dependencies: [
+                "SavageModPlayerCore",
+                // Die ZIP-Tests erzeugen ihre Archive selbst und brauchen dafuer
+                // einen Raw-Deflate-Encoder: auf Apple das Framework
+                // Compression, unter Linux die zlib.
+                .target(name: "CZlib", condition: .when(platforms: [.linux]))
+            ],
             path: "Tests/SavageModPlayerTests"
         )
     ]

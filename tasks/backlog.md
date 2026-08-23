@@ -1,6 +1,6 @@
 # Aktiver Projekt-Backlog
 
-Stand: 2026-08-16 · Version 1.6.8.
+Stand: 2026-08-23 · Version 1.6.10.
 
 Diese Datei ist die einzige aktive Projektliste. Erledigte Chronik liegt in
 Release Notes, abgeschlossenen Tasks und `archive/`.
@@ -16,97 +16,70 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
    anspruchsvollen IT-Modul. Bis dahin gilt keiner dieser Punkte als verifiziert.
    Fällt dabei der IO-Puffer auf: Startwert sind 10 ms in
    `AudioSessionController`, der Ist-Wert ist über `ioBufferDuration` auslesbar.
-1. **GUI-Smoke für Dateiargument untersuchen.** Ein früherer Lauf mit
-   `open --args <mod>` zeigte kein Hauptfenster, während der Autoplay-Ordnerpfad
-   funktionierte. Mit einer rechtlich unbedenklichen lokalen Datei reproduzieren,
-   App-Lifecycle und Argumentdispatch trennen, headless Tests ergänzen und danach
-   einen freigegebenen GUI-Smoke durchführen. *Hinweis: intern
-   `knowledge/swiftui-cli-args-fenster.md` beschreibt exakt dieses Symptom
-   (AppKit deutet unbekannte positionale Argumente als Datei-Öffnen) — vor der
-   Analyse lesen, das könnte die Ursache schon nennen.*
-2. **Linux-Port Phase 2 abschließen.** Echtzeit-Wiedergabe läuft
-   (`savage-cli --play`, ALSA); es fehlen Tastatursteuerung (Pause, nächster
-   Titel, Quit) und Playlist-Wiedergabe über `--list`. Details:
-   [Linux-Plan](2026-07-05-linux-port/plan.md).
-3. **iOS: Modul-Laden vom MainActor holen.** `PlaybackEngine.loadModule` liest,
-   parst und übergibt synchron auf dem Hauptthread (`Data(contentsOf:)`,
-   `ModuleLoader.parse`, `setMod` samt Dauerprobe). Große Module und
-   Cloud-Dateien frieren die Oberfläche ein und können den Watchdog auslösen.
-   Umbau: Lesen/Parsen/Dauerberechnung als abbrechbarer Hintergrundauftrag,
-   nur das Ergebnis des noch aktuellen Ladeauftrags auf dem MainActor
-   übernehmen. Betrifft auch die Skip-Schleife in `activateTrack` und
-   `rebuildAfterMediaServicesReset`; wegen der Swift-6-Isolationsfallen
-   (SIGTRAP, siehe AGENTS) mit Bedacht und mit Simulator-Tests umsetzen.
-4. **iOS: „Öffnen mit …" umsetzen oder Deklaration entfernen.** `Info.plist`
-   registriert MOD/S3M/XM/IT/ZIP als Dokumenttypen, aber es gibt keinen
-   `onOpenURL`-Handler — eine übergebene Datei startet nur die App und wird
-   verworfen. Security-scoped importieren und abspielen; andernfalls die
-   Dokumenttypen streichen.
 
 ## Optionaler Feinschliff
 
-- **iOS-Review-Nachschliff (Code-Review 2026-08-02):**
-  - Player-Queue mit Filterkontext: `RootView` ersetzt bei jeder Änderung von
-    `LibraryStore.tracks` die Queue durch die Gesamtbibliothek — auch wenn die
-    Wiedergabe bewusst aus Suche oder Favoriten gestartet wurde. Queue-Quelle
-    samt Filter merken und Bibliotheksänderungen nur innerhalb der aktiven
-    Auswahl abgleichen.
-  - `FileProviderReader`: die synchrone `NSFileCoordinator`-Koordination hat
-    kein Zeitlimit und ignoriert nach dem letzten Vorab-Check das Abbruchflag;
-    ein hängender fremder File Provider blockiert den Bibliotheks-Worker
-    dauerhaft. Watchdog mit `coordinator.cancel()` plus Stall-Timeout —
-    ehrlich nur mit realem File-Provider-Szenario belegbar.
-  - `NowPlayingController`: `deactivate()` wird außerhalb von `activate()` nie
-    aufgerufen; neue Instanzen (vor allem in Tests) sammeln wirkungslose
-    Handler im globalen `MPRemoteCommandCenter`. Tokens in einen Halter mit
-    garantiertem Teardown verschieben.
-  - `Info.plist`-Dokumenttypnamen (`UTTypeDescription`/`CFBundleTypeName`)
-    sind nur deutsch; über `InfoPlist.xcstrings` auch englisch lokalisieren.
-  - AVAudioSession-Doppelverwaltung auflösen: `ModPlayerCoordinator.play()`
-    setzt und aktiviert die iOS-Session zusätzlich zum
-    `AudioSessionController` der App (Fehlerbehandlung nur per `print`).
-    Session-Verwaltung ausschließlich in der App bündeln und den
-    iOS-Block im Core entfernen; Verhalten am Gerät gegenprüfen.
+- **Wächter über dem koordinierten Lesen am Gerät gegenprüfen.** Der
+  `FileProviderReader` bricht eine hängende `NSFileCoordinator`-Koordination
+  seit 1.6.10 ab (Abbruchflag und Stall-Timeout, `CoordinationWatchdogTests`
+  belegt die Entscheidungslogik). Dass ein realer, hängender fremder File
+  Provider daraufhin wirklich loslässt, zeigt nur ein Gerätetest mit einem
+  solchen Anbieter. Damit ist der iOS-Review-Nachschliff vom 2026-08-02
+  vollständig umgesetzt.
 
-- **Visualizer-Bildrate als Opt-in-Einstellung.** Default bleibt 30 Hz und damit
-  volle Optik. Optionen etwa 30/24/15/10 Hz speisen den Full-Mode-
-  `vuUpdateInterval`; CPU-Gewinn auf demselben Host/Modul vor und nach der
-  Änderung messen. Compact bleibt 5 Hz.
-- **Full-Mode-`@Published`-Churn:** Erst messen, dann gegebenenfalls Uhr und
-  Visualizer-Datenpfad trennen. Ziel 2–4 % Gewinn ohne reduzierte 30-Hz-Optik;
-  keine spekulative Audio-DSP-Optimierung, weil diese nur etwa 3–4 % ausmachte.
-- **Seltene XM-Semantik:** Pxy-Effekt-Memory ergänzen; lineare/Amiga-XM und die
-  bestehenden Effect-Memory-Regeln dürfen dabei nicht regressieren.
+- **Full-Mode-`@Published`-Churn: gemessen, Trennung von Uhr und Visualizer
+  lohnt nicht.** Der Vorschlag war, Spielzeit und Oszilloskop-Puffer in
+  getrennte `ObservableObject`s zu legen, damit die Zeitanzeige nicht 30-mal
+  pro Sekunde neu zeichnet. Umgesetzt und gemessen (1.6.10, Mac mit M5-Chip, 4-Kanal-MOD,
+  stumm, je 30 s CPU-Zeit): vorher 22,3 / 21,4 / 23,9 %, nachher 20,6 / 23,2 /
+  23,3 / 21,8 % eines Kerns. Kein Gewinn über dem Rauschen; die Änderung ist
+  deshalb wieder draußen, statt eine wirkungslose Umstellung quer durch Core,
+  Mac und iOS stehen zu lassen.
+
+  Was die Messung stattdessen zeigt: Die reine Wiedergabe kostet 3,6 %
+  (`savage-cli --play`, derselbe Titel). Von den 22 % der App sind also rund
+  18 Prozentpunkte Oberfläche, und davon hängen etwa 8 an der Bildrate allein
+  (die Einstellung dazu kam mit 1.6.10). Der Rest verteilt sich über den
+  übrigen SwiftUI-Baum — wer da weiter will, braucht ein Profil, keine
+  Vermutung. Gemessen wird mit `Tests/measure_visualizer_cpu.sh`.
 - **Audioqualität:** optionale Anti-Click-Hüllkurve und JavaScript-
   Sampleinterpolation nur mit hörbarem A/B-, Timing- und Swift-Paritätsnachweis.
 - **PCMSink-Extraktion:** Die Ausgabeschicht liegt als bewusste Kopie in
   savage_modplayer und vicious_sidplayer. Erst wenn sie sich in beiden bewährt
   hat, lohnt ein gemeinsames Paket — bis dahin Änderungen beidseitig abgleichen.
-- **Linux-GUI / Phase 3:** MPRIS2, `.desktop`-Datei, statisches Binary/AppImage.
-  Ein natives Linux-GUI ist ausdrücklich kein Ziel.
-- **ZIP-Reader auch auf macOS und Linux nutzen.** Der eigene
-  `ZipArchiveReader` läuft heute nur auf iOS; macOS und Linux entpacken weiter
-  über `bsdtar`. Ein Umstieg würde die externe Abhängigkeit loswerden und den
-  Vorfilter auch dort wirksam machen, kostet aber `.7z`-Unterstützung — deshalb
-  nur mit einer bewussten Entscheidung dazu, was mit `.7z` passiert.
-- **`.7z` auf iOS.** Aktuell nicht unterstützt und als solches gemeldet. Nur
+- **MPRIS2 für Linux.** Der Desktop-Teil von Phase 3 ist mit 1.6.10 erledigt
+  (`.desktop`-Eintrag, Installer, statisches Binary — siehe
+  [Linux-Plan](2026-07-05-linux-port/plan.md)). Offen bleibt die Steuerung über
+  den Desktop-Mediaplayer. Sie braucht eine D-Bus-Anbindung und damit ein
+  weiteres `systemLibrary`-Ziel (libdbus oder sd-bus) — eine bewusste
+  Entscheidung, und ohne laufende Desktop-Sitzung auf dem Testhost nicht
+  ehrlich belegbar. Ein AppImage bleibt ebenfalls offen: `appimagetool` kommt
+  nicht aus den Paketquellen. Ein natives Linux-GUI ist ausdrücklich kein Ziel.
+- **`.7z` auf iOS.** Aktuell nicht unterstützt und als solches gemeldet — seit
+  1.6.10 ist `.7z` auch auf Mac und Linux der einzige Grund, `bsdtar` überhaupt
+  zu installieren. Nur
   angehen, wenn im realen Bestand tatsächlich `.7z` auftaucht; ein eigener
   LZMA-Dekoder ist ein spürbarer Brocken.
 - **Zip64.** Der ZIP-Reader lehnt Zip64-Archive mit klarer Meldung ab, statt
   falsche Offsets zu lesen. Erst umsetzen, wenn ein Archiv über 4 GB oder mit
   mehr als 65535 Einträgen real auftritt.
-- **iPad-Layout.** Das Projekt baut universal (`TARGETED_DEVICE_FAMILY = 1,2`),
-  die Oberfläche ist aber fürs iPhone-Hochformat entworfen. Ein eigenes
-  iPad-Layout ist offen, aber kein Versprechen.
+- **iPad-Feinschliff.** Das zweispaltige Grundlayout steht seit 1.6.10
+  (Bibliothek links, Wiedergabe rechts, umgeschaltet über die Größenklasse).
+  Was darüber hinaus möglich wäre: Tastaturkürzel für die Wiedergabe, Drag &
+  Drop von Modulen aus der Dateien-App in die Bibliothek, und ein Blick darauf,
+  ob die Visualisierungen die zusätzliche Breite gut nutzen. Alles offen, nichts
+  davon versprochen.
 
 ## Nicht offen
 
 Compact-Header/Layout, UI-Plan 1–10, IT M0–M10, Capability-Härtung sowie
-Linux-Port Phase 0 und 1 (Core + CLI bauen, testen und spielen unter Linux) sind
-abgeschlossen. Die iOS-App aus
+Linux-Port Phase 0 bis 2 (Core + CLI bauen, testen und spielen unter Linux;
+Tastatursteuerung und Playlist über `--list --play`) sind abgeschlossen. Die iOS-App aus
 [2026-07-26-ios-app/plan.md](2026-07-26-ios-app/plan.md) ist gebaut (Phasen 0–7);
 offen bleibt daraus nur der Gerätetest oben. WAV-Export auf iOS ist eine
-bewusste Auslassung und kein offener Punkt. Der Ubuntu-CI-Job baut und testet Core/CLI mit ALSA- und
+bewusste Auslassung und kein offener Punkt. Das Laden eines Titels läuft seit
+1.6.10 abbrechbar im Hintergrund, und „Öffnen mit …" übernimmt die Datei in die
+Bibliothek und spielt sie ab. Der Ubuntu-CI-Job baut und testet Core/CLI mit ALSA- und
 Archiv-Abhängigkeiten; XM unterstützt lineare und Amiga-Perioden gemäß Headerflag.
 Auch der Dropout-Nachweis auf echter Audiohardware ist erbracht
 (2026-07-16, `parec` über eine PipeWire-Null-Senke: keine Aussetzer, RMS-Faktor

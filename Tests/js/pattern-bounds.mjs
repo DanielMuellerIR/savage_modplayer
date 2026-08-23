@@ -6,9 +6,10 @@
 // MOD-Datei kann mehr Patterns deklarieren, als tatsächlich Bytes vorhanden
 // sind. Früher warf `new Uint8Array(modfile, offset, 1024)` dann eine
 // RangeError ("Invalid typed array length: 1024"), die im async Drop-Handler
-// unbehandelt blieb. Der Konstruktor liefert jetzt 64 leere Rows (wie der
-// Swift-Parser). Live gegen eine echte, gekürzte MOD verifiziert; dieser Test
-// verwendet eine selbst-erzeugte MOD-Struktur, um unabhängig von den
+// unbehandelt blieb. Der kompakte Browserplayer liefert fuer diesen historischen
+// Fall bewusst 64 leere Rows; der native Swift-Parser lehnt dasselbe deklarierte,
+// aber unvollstaendige Patternfenster streng ab. Dieser Test verwendet eine
+// selbst-erzeugte MOD-Struktur, um unabhängig von den
 // (gitignorierten) audio/-Dateien zu bleiben.
 //
 // Aufruf (headless): node Tests/js/pattern-bounds.mjs  → Exit 0 = grün.

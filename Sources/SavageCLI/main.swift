@@ -10,13 +10,16 @@ import SavageModPlayerCore
 // Nutzung:
 //   savage-cli <datei> [--out <pfad.wav>] [--seconds N] [--rate R]
 //              [--normalize] [--no-interp] [--info] [--pattern N] [--quiet]
-//              [--stdout] [--list <ordner>]
+//              [--stdout] [--play]
+//   savage-cli --list <ordner> [--play]
 //
 // Ohne --out schreibt der Renderer neben die Eingabe (<datei>.wav). --info gibt
 // nur die Modul-Struktur aus (kein Render). --normalize hebt den Pegel an (wie
 // Quick Look); für rohe Vergleiche weglassen. --stdout schreibt rohes PCM nach
 // stdout (Pipe-Wiedergabe, z.B. `savage-cli x.mod --stdout | aplay ...`).
-// --list scannt einen Ordner und listet die spielbaren Module.
+// --list scannt einen Ordner und listet die spielbaren Module; zusammen mit
+// --play wird der Ordner stattdessen als Playlist abgespielt. An einem Terminal
+// steuern Leertaste/p, n, b und q die laufende Wiedergabe.
 
 struct Options {
     var input: String?
@@ -131,6 +134,12 @@ func parseArgs(_ argv: [String]) throws -> Options {
             throw CLIError.incompatibleOptions("--play und --rate (Echtzeit nutzt die Geraete-Samplerate)")
         }
     }
+    // Eingabedatei UND --list zusammen: Vorher gewann still --list und die Datei
+    // verschwand kommentarlos. Ein Aufruf, dessen eine Haelfte wirkungslos ist,
+    // gehoert abgelehnt statt halb ausgefuehrt.
+    if o.listDir != nil, let input = o.input {
+        throw CLIError.incompatibleOptions("--list und die Eingabedatei \(input)")
+    }
     return o
 }
 
@@ -139,6 +148,7 @@ func printUsageAndExit() -> Never {
     savage-cli — headless Tracker-Modul-Renderer (MOD/S3M/XM/IT)
 
     savage-cli <datei> [optionen]
+    savage-cli --list <ordner> [--play] [optionen]
       -o, --out <pfad>     WAV-Ausgabepfad (Standard: <datei>.wav)
       -s, --seconds N      Renderdauer 0...600 s (0 = ganzer Song, max. 600 s)
       -r, --rate R         Samplerate 8000...192000 Hz (Standard 44100)
@@ -148,11 +158,19 @@ func printUsageAndExit() -> Never {
           --pattern N      Pattern an Order-Position N als Text ausgeben
       -q, --quiet          keine Fortschrittsausgabe
           --stdout         rohes PCM (s16le, stereo) nach stdout statt in eine Datei
-          --list <ordner>  Ordner rekursiv nach spielbaren Modulen durchsuchen
+          --list <ordner>  Ordner rekursiv nach spielbaren Modulen durchsuchen;
+                           mit --play wird der Ordner als Playlist abgespielt
           --play           Echtzeit-Wiedergabe (macOS: AVAudioEngine, Linux: ALSA)
 
-    Beispiel (Linux):
+    Tasten waehrend --play (nur an einem Terminal):
+      Leertaste, p   Pause / weiter
+      n, Pfeil →     naechster Titel
+      b, Pfeil ←     vorheriger Titel
+      q              beenden
+
+    Beispiele:
       savage-cli song.mod --stdout | aplay -f S16_LE -c2 -r44100
+      savage-cli --list ~/mods --play
 
     """.utf8))
     exit(2)
@@ -397,8 +415,9 @@ do {
     exit(2)
 }
 
-// --list: Ordner scannen und spielbare Module ausgeben (ein Pfad je Zeile, damit
-// die Ausgabe pipe-/skriptfreundlich bleibt). Braucht keine Eingabedatei.
+// --list: Ordner scannen. Ohne --play werden die Treffer nur ausgegeben (ein
+// Pfad je Zeile, damit die Ausgabe pipe-/skriptfreundlich bleibt); mit --play
+// werden sie der Reihe nach abgespielt. Beides braucht keine Eingabedatei.
 if let listDir = opts.listDir {
     let dirURL = URL(fileURLWithPath: listDir)
     var isDir: ObjCBool = false
@@ -406,28 +425,42 @@ if let listDir = opts.listDir {
         FileHandle.standardError.write(Data("Fehler: Kein Ordner: \(listDir)\n".utf8))
         exit(1)
     }
-    // Direkt enumerieren statt collectEntries: kein Entpacken, kein TempDir —
-    // --list soll nur zeigen, was da ist, und nichts auf die Platte schreiben.
-    guard let enumerator = FileManager.default.enumerator(
-        at: dirURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
-    ) else {
+    guard let modules = playableModules(in: dirURL) else {
         FileHandle.standardError.write(Data("Fehler: Ordner nicht lesbar: \(listDir)\n".utf8))
         exit(1)
     }
-    var count = 0
-    var paths: [String] = []
-    while let fileURL = enumerator.nextObject() as? URL {
-        if PlaylistScanner.isModFile(fileURL) {
-            paths.append(fileURL.path)
-            count += 1
+    if opts.play {
+        guard !modules.isEmpty else {
+            FileHandle.standardError.write(Data("Fehler: Keine spielbaren Module in \(listDir)\n".utf8))
+            exit(1)
         }
+        log("\(modules.count) spielbare Module in \(listDir)", quiet: opts.quiet)
+        exit(runRealtimePlayback(
+            modules: modules,
+            seconds: opts.seconds,
+            useInterpolation: opts.interpolation,
+            quiet: opts.quiet
+        ))
     }
-    for path in paths.sorted() { print(path) }
-    log("\(count) spielbare Module in \(listDir)", quiet: opts.quiet)
-    exit(count > 0 ? 0 : 1)
+    for url in modules { print(url.path) }
+    log("\(modules.count) spielbare Module in \(listDir)", quiet: opts.quiet)
+    exit(modules.isEmpty ? 1 : 0)
 }
 
 guard let inputPath = opts.input else { printUsageAndExit() }
+
+// --play mit einer einzelnen Datei laeuft durch denselben Wiedergabepfad wie
+// eine Playlist — eine Liste mit einem Eintrag. Das steht vor dem Einlesen
+// weiter unten, weil der Wiedergabepfad Lesen und Parsen selbst uebernimmt und
+// die Datei sonst zweimal gelesen wuerde.
+if opts.play {
+    exit(runRealtimePlayback(
+        modules: [URL(fileURLWithPath: inputPath)],
+        seconds: opts.seconds,
+        useInterpolation: opts.interpolation,
+        quiet: opts.quiet
+    ))
+}
 
 let inputURL = URL(fileURLWithPath: inputPath)
 guard let data = try? Data(contentsOf: inputURL) else {
@@ -447,59 +480,6 @@ if opts.infoOnly || opts.dumpPattern != nil {
     printInfo(mod)
     if let p = opts.dumpPattern { print(""); dumpPattern(mod, orderIndex: p) }
     exit(0)
-}
-
-// --play: Echtzeit-Wiedergabe ueber die Audio-Ausgabe der Plattform. Laeuft ueber
-// dieselbe Engine wie Offline-Render und App — nur die Ausgabe ist eine andere
-// (AVAudioEngine auf macOS, ALSA auf Linux). Blockiert bis Songende oder Ctrl-C.
-if opts.play {
-    let format = PCMSinkFactory.preferredFormat(channels: 2)
-    let frameLimit: UInt64?
-    do {
-        // Wie im Offline-Pfad gilt der dokumentierte Vertrag von --seconds
-        // auch hier: 0 = ganzer Song, aber hoechstens 600 s. Ohne dieses
-        // Limit spielte ein Modul ohne erreichbares Endsignal unbegrenzt.
-        // Aber: Die Live-Ausgabe streamt, also gilt hier bewusst das
-        // Live-Budget ohne die Offline-Sampleraten-Obergrenze — sonst wuerde
-        // ein Ausgabegeraet mit mehr als 192 kHz die Wiedergabe verhindern.
-        frameLimit = try ModuleRenderer.liveFrameLimit(
-            sampleRate: format.sampleRate,
-            maxDurationSeconds: opts.seconds > 0 ? opts.seconds : 600.0
-        )
-    } catch {
-        FileHandle.standardError.write(Data("Wiedergabe-Fehler: \(error.localizedDescription)\n".utf8))
-        exit(1)
-    }
-    let source = ModulePCMSource(
-        mod: mod,
-        format: format,
-        maxFrames: frameLimit,
-        useInterpolation: opts.interpolation
-    )
-    let sink = PCMSinkFactory.makeDefault(format: format)
-    log(
-        "Spiele '\(mod.name.isEmpty ? inputURL.lastPathComponent : mod.name)' "
-        + "(\(mod.format), \(mod.channelCount) ch) @ \(Int(format.sampleRate)) Hz … Ctrl-C beendet.",
-        quiet: opts.quiet
-    )
-    do {
-        try sink.start(render: source.renderBlock())
-    } catch {
-        FileHandle.standardError.write(Data("Wiedergabe-Fehler: \(error.localizedDescription)\n".utf8))
-        exit(1)
-    }
-    let reason = sink.waitUntilFinished()
-    switch reason {
-    case .sourceFinished, .stopped, .outputClosed:
-        log("Wiedergabe beendet (\(reason)).", quiet: opts.quiet)
-        exit(0)
-    case .failed(let detail):
-        FileHandle.standardError.write(Data("Wiedergabe abgebrochen: \(detail)\n".utf8))
-        exit(1)
-    case .notStarted:
-        FileHandle.standardError.write(Data("Wiedergabe startete nicht.\n".utf8))
-        exit(1)
-    }
 }
 
 let maxDuration = opts.seconds > 0 ? opts.seconds : 600.0

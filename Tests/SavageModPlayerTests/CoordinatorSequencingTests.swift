@@ -241,7 +241,7 @@ final class CoordinatorSequencingTests: XCTestCase {
     /// auch nachdem der VU-Poller mehrfach gelaufen ist.
     @MainActor
     func testTempoSteppersPersistThroughVUPoll() async throws {
-        let mod = ModParser.generateDemoMod()
+        let mod = try ModParser.parse(data: makeMod(effectId: 0, effectData: 0))
         let coordinator = ModPlayerCoordinator()
         coordinator.setMod(mod)
         coordinator.play()
@@ -258,6 +258,13 @@ final class CoordinatorSequencingTests: XCTestCase {
 
         XCTAssertEqual(coordinator.bpm, 140, "Stepper-BPM darf nicht vom VU-Poll ueberschrieben werden")
         XCTAssertEqual(coordinator.speed, 4, "Stepper-Speed darf nicht vom VU-Poll ueberschrieben werden")
+
+        coordinator.seek(toPosition: 1)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(coordinator.bpm, 140,
+                       "Positionsslider darf die manuelle BPM-Aenderung nicht verwerfen")
+        XCTAssertEqual(coordinator.speed, 4,
+                       "Positionsslider darf die manuelle Speed-Aenderung nicht verwerfen")
 
         coordinator.stop()
     }
@@ -401,10 +408,12 @@ final class CoordinatorSequencingTests: XCTestCase {
     /// keine Engine — derselbe Block wie App, WAV-Export und Quick Look.
     private func makeBlockAndState(
         mod: Mod,
-        sampleRate: Double = 44100.0
+        sampleRate: Double = 44100.0,
+        existingState: RealtimePlaybackState? = nil
     ) -> (block: ModuleRenderBlock, state: RealtimePlaybackState, hold: [AnyObject]) {
         let channels = RenderEngine.makeRenderChannels(for: mod)
-        let state = RenderEngine.makeRenderState(for: mod, sampleRate: sampleRate)
+        let state = existingState
+            ?? RenderEngine.makeRenderState(for: mod, sampleRate: sampleRate)
         let channelCount = channels.count
         let peaks = UnsafeMutablePointer<Float>.allocate(capacity: channelCount)
         peaks.initialize(repeating: 0, count: channelCount)
@@ -420,6 +429,52 @@ final class CoordinatorSequencingTests: XCTestCase {
         // Puffer und Kanaele muessen den Block ueberleben; der Aufrufer haelt sie.
         return (block, state, [vu, wave] + channels)
     }
+
+#if canImport(AVFoundation) && canImport(Combine)
+    /// Ein altes Songende darf den Seek nicht ueber den MainActor-Poller
+    /// ueberholen. Bis zum Audioblock bleibt der Ziel-Snapshot sichtbar; danach
+    /// uebernimmt der Poller genau den atomar veroeffentlichten Renderstand.
+    @MainActor
+    func testPendingSeekKeepsTargetAndDiscardsOldEndTransition() {
+        let mod = makeTraceMod()
+        let state = RenderEngine.makeRenderState(for: mod, sampleRate: 44_100)
+        let coordinator = ModPlayerCoordinator()
+        state.publishEndTransition(frame: 1_000, position: 0, row: 3)
+
+        coordinator.requestSeek(
+            state: state,
+            mod: mod,
+            position: 1,
+            row: 4,
+            speed: 8,
+            bpm: 150,
+            globalVolume: 32)
+        coordinator.synchronizePlaybackState(state)
+
+        XCTAssertEqual(coordinator.songEndPulse, 0)
+        XCTAssertEqual(coordinator.currentPosition, 1)
+        XCTAssertEqual(coordinator.currentRow, 4)
+        let pending = coordinator.seekTransport(for: state)
+        XCTAssertEqual(pending.position, 1)
+        XCTAssertEqual(pending.row, 4)
+        XCTAssertEqual(pending.ticksPerRow, 8)
+        XCTAssertEqual(pending.bpm, 150)
+
+        let (block, _, hold) = makeBlockAndState(
+            mod: mod, existingState: state)
+        let buffer = StereoRenderBuffer(capacity: 64)
+        block(64, buffer.left, buffer.right)
+        coordinator.synchronizePlaybackState(state)
+
+        XCTAssertEqual(coordinator.songEndPulse, 0)
+        XCTAssertEqual(coordinator.currentPosition, 1)
+        XCTAssertEqual(coordinator.currentRow, 4)
+        XCTAssertEqual(coordinator.speed, 8)
+        XCTAssertEqual(coordinator.bpm, 150)
+        XCTAssertFalse(state.endReached)
+        withExtendedLifetime(hold) {}
+    }
+#endif
 
     /// Der Hauptthread darf `elapsedFrames` nicht selbst schreiben — der
     /// Renderblock erhoeht denselben Zaehler pro Frame, und ein direkter
@@ -486,8 +541,8 @@ final class CoordinatorSequencingTests: XCTestCase {
         block(1, buffer.left, buffer.right)
 
         XCTAssertEqual(state.position, 1)
-        XCTAssertEqual(state.rowIndex, 2)
-        XCTAssertEqual(state.tick, 7)
+        XCTAssertEqual(state.rowIndex, 3, "der erste Frame muss die Zielzeile laden")
+        XCTAssertEqual(state.tick, 0)
         XCTAssertEqual(state.ticksPerRow, 8)
         XCTAssertEqual(state.bpm, 150)
         XCTAssertEqual(state.globalVolume, 32)
@@ -496,6 +551,40 @@ final class CoordinatorSequencingTests: XCTestCase {
         XCTAssertFalse(channels[0].playing)
         XCTAssertEqual(state.elapsedFrames, 9_001)
         XCTAssertEqual(state.publishedElapsedFrames, 9_001)
+    }
+
+    func testConsumedEndTransitionNeutralizesFallbackMetadata() throws {
+        let state = RealtimePlaybackState()
+        state.publishEndTransition(frame: 12_345, position: 7, row: 11)
+
+        let transition = try XCTUnwrap(state.consumeEndTransition())
+
+        XCTAssertEqual(transition.frame, 12_345)
+        XCTAssertEqual(transition.position, 7)
+        XCTAssertEqual(transition.row, 11)
+        XCTAssertEqual(state.endReachedFrame, .max)
+        XCTAssertEqual(state.endReachedPosition, -1)
+        XCTAssertEqual(state.endReachedRow, 0)
+    }
+
+    func testSeekSnapshotClampsToItsPublishedFieldWidths() throws {
+        let state = RealtimePlaybackState()
+        state.requestSeek(
+            position: 70_000,
+            row: 40_000,
+            ticksPerRow: 300,
+            bpm: 70_000,
+            globalVolume: 300,
+            elapsedFrames: 123)
+
+        let request = try XCTUnwrap(state.takePendingSeek())
+
+        XCTAssertEqual(request.position, Int(UInt16.max))
+        XCTAssertEqual(request.row, Int(Int16.max))
+        XCTAssertEqual(request.ticksPerRow, Int(UInt8.max))
+        XCTAssertEqual(request.bpm, Int(UInt16.max))
+        XCTAssertEqual(request.globalVolume, Int(UInt8.max))
+        XCTAssertEqual(request.elapsedFrames, 123)
     }
 
     func testSeekSnapshotStressNeverMixesTwoRequests() {
@@ -533,10 +622,14 @@ final class CoordinatorSequencingTests: XCTestCase {
                     }
                     if value == lastValue { break }
                 } else if producerDone.loadAcquire() != 0 {
-                    // Der letzte veroeffentlichte Auftrag muss noch sichtbar
-                    // sein; ohne Snapshot bedeutet dies, dass er bereits als
-                    // letzter konsistent konsumiert wurde.
-                    continue
+                    // Nach Producer-Ende genau einen letzten Versuch machen.
+                    // Bleibt er leer, muss der letzte konsistente Snapshot
+                    // bereits konsumiert worden sein.
+                    guard let finalRequest = state.takePendingSeek() else { break }
+                    if finalRequest.position != lastValue {
+                        mismatch.storeRelaxed(UInt64(finalRequest.position))
+                    }
+                    break
                 }
             }
             consumer.fulfill()
@@ -707,6 +800,48 @@ final class CoordinatorSequencingTests: XCTestCase {
         coordinator.toggleMute(channelIndex: 999)
         XCTAssertFalse(coordinator.isMuted(channelIndex: -1))
         XCTAssertFalse(coordinator.isSoloed(channelIndex: 999))
+    }
+
+    /// Eine vorab ermittelte Spieldauer wird uebernommen statt neu berechnet.
+    ///
+    /// Hintergrund (2026-08-23): Die Dauerprobe taktet den Sequencer einmal
+    /// komplett durch und ist bei einem grossen Modul der teuerste Teil des
+    /// Ladens. `setMod` laeuft auf dem MainActor, also rechnet die iPhone-App
+    /// sie im Hintergrund aus und reicht sie herein. Dieser Test haelt beide
+    /// Haelften des Vertrags fest: ohne Angabe wird gerechnet, mit Angabe wird
+    /// der uebergebene Wert genommen.
+    @MainActor
+    func testPrecomputedDurationIsUsedAsGiven() {
+        let mod = ModParser.generateDemoMod()
+        let computed = RenderEngine.sequencedDuration(of: mod)
+        XCTAssertGreaterThan(computed, 0, "Das Demomodul muss eine messbare Dauer haben")
+
+        let withoutHint = ModPlayerCoordinator()
+        withoutHint.setMod(mod)
+        XCTAssertEqual(withoutHint.visualizerState.totalDuration, computed, accuracy: 0.0001)
+
+        // Ein bewusst falscher Wert belegt, dass die Angabe wirklich gewinnt —
+        // mit dem korrekten Wert waere der Test nicht unterscheidbar.
+        let withHint = ModPlayerCoordinator()
+        withHint.setMod(mod, precomputedDuration: computed + 42)
+        XCTAssertEqual(withHint.visualizerState.totalDuration, computed + 42, accuracy: 0.0001)
+    }
+
+    /// Die Bildrate der Visualisierungen wird auf 1…60 Hz geklemmt.
+    ///
+    /// Hintergrund (2026-08-23): Die Bildrate ist seit 1.6.10 einstellbar. 0 Hz
+    /// ergaebe ein Timer-Intervall von unendlich, ein sehr grosser Wert einen
+    /// Timer, der den MainActor flutet — beides waere aus einer verstellten
+    /// Voreinstellung heraus erreichbar.
+    func testVisualizerIntervalIsClampedToASensibleRange() {
+        let interval = ModPlayerCoordinator.visualizerUpdateInterval
+        XCTAssertEqual(interval(30, true), 1.0 / 30.0, accuracy: 0.00001)
+        XCTAssertEqual(interval(10, true), 0.1, accuracy: 0.00001)
+        XCTAssertEqual(interval(0, true), 1.0, accuracy: 0.00001, "0 Hz wird auf 1 Hz geklemmt")
+        XCTAssertEqual(interval(-5, true), 1.0, accuracy: 0.00001)
+        XCTAssertEqual(interval(1000, true), 1.0 / 60.0, accuracy: 0.00001, "Obergrenze 60 Hz")
+        XCTAssertEqual(interval(30, false), 0.2, accuracy: 0.00001,
+                       "Im Kompaktmodus bleibt es bei 5 Hz, unabhaengig von der Einstellung")
     }
 #endif
 }

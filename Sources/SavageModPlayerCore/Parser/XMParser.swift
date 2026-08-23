@@ -506,7 +506,10 @@ public class XMParser {
             patterns: patterns,
             channelCount: numChannels,
             format: .xm,
-            initialSpeed: defaultTempo > 0 ? defaultTempo : 6,
+            // Der lockfreie Seek-Snapshot speichert Speed in einem Byte. XM
+            // deklariert das Headerfeld zwar als Word, Tracker-Effekte und die
+            // uebrigen Formate liefern hier aber hoechstens 255.
+            initialSpeed: defaultTempo > 0 ? min(255, defaultTempo) : 6,
             initialTempo: defaultBPM >= 32 ? defaultBPM : 125,
             initialGlobalVolume: 64,
             channelPannings: [Float](repeating: 0.5, count: numChannels), // XM-Kanal-Default = Mitte

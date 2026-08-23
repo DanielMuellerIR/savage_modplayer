@@ -55,7 +55,7 @@ extension MainView {
                 // Sofort losspielen, wenn der Aufrufer es will (App-Start) oder die
                 // Headless-/Agent-Steuerung "--autoplay [filter]" gesetzt ist —
                 // Letzteres auch fuer Screenshots und Smoke-Tests ohne Klicks.
-                if autoPlay || CommandLine.arguments.contains("--autoplay") {
+                if autoPlay || LaunchArguments.autoplayRequested(CommandLine.arguments) {
                     self.selectPlaylistSong(at: startIndex, autoPlay: true)
                 } else {
                     self.currentPlaylistIndex = startIndex
@@ -67,16 +67,11 @@ extension MainView {
     }
 
     // Liefert den Playlist-Index des ersten Titels, dessen Name den optionalen
-    // "--autoplay <filter>"-Parameter enthaelt (nil ohne Filter/Treffer).
+    // "--autoplay <filter>"-Parameter enthaelt (nil ohne Filter/Treffer). Den
+    // Filter selbst liest LaunchArguments aus der Argumentliste.
     nonisolated private static func autoplayFilterIndex(in urls: [URL]) -> Int? {
-        let args = CommandLine.arguments
-        guard let flagIndex = args.firstIndex(of: "--autoplay") else { return nil }
-        let next = flagIndex + 1
-        if next < args.count, !args[next].hasPrefix("--") {
-            let filter = args[next].lowercased()
-            return urls.firstIndex(where: { $0.lastPathComponent.lowercased().contains(filter) })
-        }
-        return nil
+        guard let filter = LaunchArguments.autoplayFilter(CommandLine.arguments) else { return nil }
+        return urls.firstIndex(where: { $0.lastPathComponent.lowercased().contains(filter) })
     }
 
     // Pro Drop ein eigenes Temp-Unterverzeichnis statt das gemeinsame zu loeschen:
@@ -206,21 +201,11 @@ extension MainView {
     }
 
     // Erstes Datei-/Ordner-Argument von der Kommandozeile (`SavageModPlayer <pfad>`).
-    // Ignoriert Flags und die Prozess-Serial-Args (`-psn_…`, `-NSDocument…`), die
-    // macOS beim Bundle-Start injiziert; nimmt den ersten existierenden Pfad mit
-    // unterstützter Endung oder ein Verzeichnis. Ermöglicht headless Auto-Play
-    // (Tests/CPU-Messung) ohne GUI-Bedienung.
+    // Die Auswertung selbst liegt testbar in LaunchArguments (Core); hier bleibt
+    // nur der Zugriff auf die echte Argumentliste des Prozesses. Ermöglicht
+    // headless Auto-Play (Tests/CPU-Messung) ohne GUI-Bedienung.
     static func launchFileArgument() -> URL? {
-        for arg in CommandLine.arguments.dropFirst() {
-            guard !arg.hasPrefix("-") else { continue }
-            let url = URL(fileURLWithPath: arg)
-            var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }
-            if isDir.boolValue || ModuleLoader.supportedExtensions.contains(url.pathExtension.lowercased()) {
-                return url
-            }
-        }
-        return nil
+        LaunchArguments.fileArgument(CommandLine.arguments)
     }
 
 }

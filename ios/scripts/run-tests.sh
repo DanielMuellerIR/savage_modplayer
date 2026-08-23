@@ -24,31 +24,72 @@ mkdir -p "$(dirname "$LOG")"
 # Simulator wird hier auf seine eindeutige UUID aufgeloest; `xcodebuild` wuerde
 # bei einem Ziel nur per Name implizit `OS:latest` verlangen und ein vorhandenes
 # Modell aus einer aelteren Laufzeit faelschlich nicht finden.
-DEVICE_LIST="$(xcrun simctl list devices available 2>/dev/null || true)"
+set +e
+DEVICE_LIST="$(xcrun simctl list devices available 2>&1)"
+SIMCTL_STATUS=$?
+set -e
+if [ "$SIMCTL_STATUS" -ne 0 ]; then
+    echo "FEHLER: simctl konnte die verfuegbaren Simulatoren nicht auflisten (Exit $SIMCTL_STATUS):"
+    printf '%s\n' "$DEVICE_LIST"
+    exit 2
+fi
+
 DEVICE_NAME=""
 DEVICE_ID=""
+DEVICE_RUNTIME=""
+CURRENT_RUNTIME=""
+CURRENT_RUNTIME_KEY=""
+
+runtime_key() {
+    local version major minor patch
+    version="$(printf '%s\n' "$1" | sed -nE 's/^[^0-9]*([0-9]+(\.[0-9]+){0,2}).*$/\1/p')"
+    IFS=. read -r major minor patch <<< "$version"
+    printf '%05d%05d%05d' "${major:-0}" "${minor:-0}" "${patch:-0}"
+}
+
 while IFS= read -r DEVICE_LINE; do
+    RUNTIME_HEADING="$(printf '%s\n' "$DEVICE_LINE" | sed -nE 's/^-- (.+) --$/\1/p')"
+    if [ -n "$RUNTIME_HEADING" ]; then
+        CURRENT_RUNTIME="$RUNTIME_HEADING"
+        CURRENT_RUNTIME_KEY="$(runtime_key "$CURRENT_RUNTIME")"
+        continue
+    fi
     CANDIDATE_NAME="$(printf '%s\n' "$DEVICE_LINE" \
         | sed -nE 's/^ +(.+) \([0-9A-Fa-f-]{36}\) \((Booted|Shutdown)\)[[:space:]]*$/\1/p')"
     CANDIDATE_ID="$(printf '%s\n' "$DEVICE_LINE" \
         | sed -nE 's/^ +.+ \(([0-9A-Fa-f-]{36})\) \((Booted|Shutdown)\)[[:space:]]*$/\1/p')"
     [ -n "$CANDIDATE_NAME" ] || continue
-    case "$CANDIDATE_NAME" in iPhone*) ;; *) continue ;; esac
-    if [ -z "${SIMULATOR_NAME:-}" ] || [ "$CANDIDATE_NAME" = "$SIMULATOR_NAME" ]; then
+    if [ -z "${SIMULATOR_NAME:-}" ]; then
+        case "$CANDIDATE_NAME" in iPhone*) ;; *) continue ;; esac
         DEVICE_NAME="$CANDIDATE_NAME"
         DEVICE_ID="$CANDIDATE_ID"
+        DEVICE_RUNTIME="$CURRENT_RUNTIME"
         break
+    fi
+    if [ "$CANDIDATE_NAME" = "$SIMULATOR_NAME" ]; then
+        # Derselbe Modellname kann in mehreren installierten Laufzeiten
+        # vorkommen. Wie das fruehere OS:latest-Ziel nehmen wir die neueste,
+        # sprechen sie danach aber ueber ihre eindeutige UUID an.
+        if [ -z "$DEVICE_ID" ] || [ "$CURRENT_RUNTIME_KEY" \> "$(runtime_key "$DEVICE_RUNTIME")" ]; then
+            DEVICE_NAME="$CANDIDATE_NAME"
+            DEVICE_ID="$CANDIDATE_ID"
+            DEVICE_RUNTIME="$CURRENT_RUNTIME"
+        fi
     fi
 done <<< "$DEVICE_LIST"
 
 if [ -z "$DEVICE_NAME" ] || [ -z "$DEVICE_ID" ]; then
-    echo "FEHLER: Kein iPhone-Simulator verfuegbar. Verfuegbare Geraete:"
+    if [ -n "${SIMULATOR_NAME:-}" ]; then
+        echo "FEHLER: SIMULATOR_NAME '$SIMULATOR_NAME' ist nicht in der Liste verfuegbarer Simulatoren enthalten:"
+    else
+        echo "FEHLER: Kein iPhone-Simulator verfuegbar. Verfuegbare Geraete:"
+    fi
     printf '%s\n' "$DEVICE_LIST"
     exit 2
 fi
 
 DESTINATION="platform=iOS Simulator,id=$DEVICE_ID"
-echo "==> Tests auf Simulator: $DEVICE_NAME ($DEVICE_ID)"
+echo "==> Tests auf Simulator: $DEVICE_NAME ($DEVICE_RUNTIME, $DEVICE_ID)"
 
 ARGS=(
     test

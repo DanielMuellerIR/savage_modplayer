@@ -216,9 +216,9 @@ public class S3MParser {
 
             let is16Bit = (flags & 4) != 0
             let bytesPerSample = is16Bit ? 2 : 1
-            let channelCount = (flags & 2) != 0 ? 2 : 1
+            let sampleChannelCount = (flags & 2) != 0 ? 2 : 1
             let (bytesPerFrame, frameSizeOverflow) = bytesPerSample
-                .multipliedReportingOverflow(by: channelCount)
+                .multipliedReportingOverflow(by: sampleChannelCount)
             let (sampleByteCount, sampleSizeOverflow) = length
                 .multipliedReportingOverflow(by: bytesPerFrame)
             let (sampleEnd, sampleEndOverflow) = sampleOffset

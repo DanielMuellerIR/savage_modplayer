@@ -101,6 +101,14 @@ Arbeit an einem AGENTS-Hotspot.
    2026-07-15 auf dem Linux-Testrechner: **216 Tests, 0 Fehler, 2 übersprungen**. Die Differenz zu
    den 230 macOS-Tests sind exakt die 14 Testmethoden, die die AVAudioEngine-
    gebundene Live-Klasse instanziieren und deshalb geguardet sind.*
+   *Erneut bestätigt 2026-08-15 für Version 1.6.7 nach der CodeQA-Kampagne
+   (Swift 6.0.3, x86_64): `swift build -c release` und `swift test -c release`
+   grün, **311 Tests, 0 Fehler, 7 übersprungen**. Die Differenz zu den 362
+   macOS-Tests sind die AVFoundation-/Combine-gebundenen Suiten und der
+   ZIP-Reader samt Tests, der hinter `canImport(Compression)` liegt; die 7
+   Skips sind die Korpustests, weil `audio/` dort nicht existiert. Gezielt
+   nachgewiesen: alle acht neuen Regressionstests der Kampagne laufen dort
+   grün, darunter beide Slice-Tests und beide Archiv-Tiefentests.*
 
 Der erste Linux-Lauf hat drei echte Fehler aufgedeckt, die auf macOS latent waren
 — genau der Wert des Ports:
@@ -121,9 +129,16 @@ Der erste Linux-Lauf hat drei echte Fehler aufgedeckt, die auf macOS latent ware
 Der `ObjCBool`-Verdacht aus der Vorab-Analyse war unbegründet: swift-corelibs-
 foundation kennt den Typ, die Zeile kompiliert unverändert.
 
-**Container-Anforderung:** `swift:6.0` bringt kein `bsdtar` mit. Für den vollen
-Archiv-Test braucht der Lauf `apt-get install -y libarchive-tools`; ohne das
-überspringen zwei Tests. Das gehört in den CI-Job.
+**Container-Anforderung (Stand 1.6.10):** `swift:6.0` bringt weder `bsdtar` noch
+die ALSA-Header noch die zlib-Header mit. `zlib1g-dev` ist seit 1.6.10 nötig,
+weil der eigene `ZipArchiveReader` dort `.zip` entpackt; `libarchive-tools` nur
+noch für `.7z`. Der Satz unten stammt aus der Zeit davor:
+
+**Container-Anforderung (bis 1.6.9):** `swift:6.0` bringt weder `bsdtar` noch die
+ALSA-Header mit. Der Lauf braucht `apt-get install -y libasound2-dev
+libarchive-tools`: ohne `libarchive-tools` überspringen zwei Archiv-Tests, ohne
+`libasound2-dev` scheitert schon der Build, weil `SavageModPlayerCore` unter
+Linux das Systemmodul `CALSA` einbindet. Beides steht so im CI-Job.
 
 ### Phase 1 — CLI vervollständigen (~0,25 PT)
 
@@ -232,12 +247,102 @@ Audiopfad aus, ist aber bloß eine schlechte Ausrichtung. Restliche
 Sample-Differenzen (Mittel ~54 LSB) stammen aus dem Subsample-Timing der Kette,
 nicht aus dem Replayer; sample-genaue Gleichheit deckt `ModulePCMSourceTests` ab.
 
-**Noch offen aus Phase 2:** Tastatursteuerung (Pause, nächster Titel, Quit) und
-Playlist-Wiedergabe über `--list`.
+**Tastatursteuerung und Playlist ergänzt (2026-08-23, Version 1.6.10) — Phase 2
+ist damit abgeschlossen.**
 
-### Phase 3 (optional) — Desktop-Integration
+- `savage-cli --list <ordner> --play` spielt den Ordner als Playlist, in
+  Pfadreihenfolge. Ein unlesbares oder kaputtes Modul wird gemeldet und
+  übersprungen; bleibt kein spielbares übrig, endet der Prozess mit 1.
+- An einem Terminal steuern Leertaste/`p` (Pause), `n` und Pfeil rechts
+  (nächster), `b` und Pfeil links (vorheriger) sowie `q` (Ende). Ohne Terminal
+  läuft die Wiedergabe wie bisher durch — `isatty` entscheidet, nicht ein Flag.
+- Einzeltitel und Playlist laufen durch denselben Code (`PlaylistPlayback.swift`);
+  eine Playlist ist nur eine Liste mit mehr als einem Eintrag. Kein zweiter
+  Wiedergabepfad, der auseinanderlaufen könnte.
+- Nebenbefund und mitbehoben: **`--play` verschluckte SIGINT.** Mit dem Stand
+  davor beendete `kill -INT` einen `--stdout`-Lauf sofort, während `--play` die
+  ganze Playlist zu Ende spielte — die Meldung „Ctrl-C beendet" stimmte also
+  nicht. Ein eigener Handler setzt jetzt nur ein Flag; die Wiedergabeschleife
+  schließt die Audio-Ausgabe und endet mit dem üblichen Exit-Code 130.
+- Beleg: `python3 Tests/cli_playback_tests.py` — acht Tests über ein
+  Pseudoterminal (`pty`) mit einem synthetischen, klanglosen Modul. Ohne
+  nutzbare Audio-Ausgabe überspringt sich die Suite sauber.
 
-MPRIS2, .desktop-Datei, statisches Binary/AppImage. Erst bei Bedarf.
+**ZIP-Leser auch unter Linux belegt (2026-08-23, Version 1.6.10).** `.zip`
+entpackt dort jetzt der eigene `ZipArchiveReader` über die zlib statt über
+`bsdtar`; `libarchive-tools` braucht nur noch `.7z`.
+
+| Container | Ergebnis |
+|---|---|
+| nur `libasound2-dev` + `zlib1g-dev` | **387 Tests, 25 übersprungen, 0 Fehler**; `ZipArchiveReaderTests` läuft mit allen 38 Tests |
+| zusätzlich `libarchive-tools` | **387 Tests, 7 übersprungen, 0 Fehler** |
+
+Die 18 zusätzlichen Skips ohne `bsdtar` sind genau die `.7z`- und
+Importtests, die das Werkzeug brauchen. Vor 1.6.10 lief die ZIP-Suite unter
+Linux **gar nicht** (sie hing an `canImport(Compression)`) und meldete trotzdem
+grün — der Testzähler stieg deshalb von 348 auf 387.
+
+Zwei Fallen dabei, beide erst im Container aufgefallen:
+
+- `autoreleasepool` gibt es nur auf Apple-Plattformen. Mit dem Umstieg wird der
+  Stored-Kopierpfad des Lesers auch unter Linux übersetzt und der Bau brach ab.
+- Die Testdatei hing noch am alten `canImport(Compression)`-Guard. Der Lauf
+  führte 0 von 38 Tests aus und meldete trotzdem grün — ein Skip, der wie ein
+  Erfolg aussieht.
+
+**Linux-Lauf für 1.6.10 belegt (2026-08-23, Swift 6.0.3 im `swift:6.0`-Container).**
+
+| Prüfung | Ergebnis |
+|---|---|
+| `swift build -c release` | grün |
+| `swift test -c release` | **345 Tests, 7 übersprungen, 0 Fehler** |
+| `python3 Tests/cli_contract_tests.py` | 10 Tests grün |
+| `python3 Tests/cli_playback_tests.py` am ALSA-Nullgerät | 4 grün, 4 übersprungen |
+| `python3 Tests/cli_playback_tests.py` an einer PipeWire-Null-Senke | **8 von 8 grün** |
+
+Falle, die dabei auffiel: **Ein ALSA-Nullgerät (`pcm.!default { type null }`)
+taugt nicht für die Tastensteuerung.** Es verschluckt die Samples so schnell,
+wie der Renderer sie liefert — drei Titel sind in 0,1 s vorbei, lange bevor ein
+Tastendruck ankommt. Zwei Tests fielen deshalb um, ohne dass etwas kaputt war.
+Die Suite misst jetzt im Probelauf die Laufzeit und überspringt die vier
+zeitabhängigen Tests, wenn die Ausgabe nicht im Echtzeittakt läuft.
+
+Für den vollen Beleg dieselbe Methode wie beim Dropout-Nachweis: statisches
+Binary im Container bauen, nativ gegen eine temporäre PipeWire-Null-Senke
+laufen lassen — echtzeitgetaktet und trotzdem lautlos.
+
+```bash
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+SINK=$(pactl load-module module-null-sink sink_name=savagekeys rate=44100 format=s16le channels=2)
+PULSE_SINK=savagekeys python3 Tests/cli_playback_tests.py -v
+pactl unload-module $SINK          # aufräumen nicht vergessen
+```
+
+### Phase 3 — Desktop-Integration (teilweise erledigt 2026-08-23, 1.6.10)
+
+**Erledigt und auf dem Fleet-Linux-Host belegt:**
+
+- `linux/savage-cli.desktop` meldet den Player für MOD, S3M, XM und IT an.
+  `desktop-file-validate` sagt gültig; `Tests/desktop_entry_tests.py` hält
+  Aufruf, Terminal-Pflicht und Typliste fest.
+- `linux/install.sh` installiert ohne root nach `~/.local` (Präfix wählbar),
+  `--uninstall` räumt auf. Geprüft in einem Wegwerf-Präfix: Binary und Eintrag
+  landen richtig, `update-desktop-database` schreibt savage-cli in die
+  `mimeinfo.cache`, und nach dem Deinstallieren steht es dort nicht mehr.
+- `linux/build-static.sh` baut ein statisch gelinktes `savage-cli` im Container
+  (69 MB), das ohne Swift-Laufzeit auf dem Zielrechner startet — im Präfix
+  ausgeführt und mit `--help` belegt.
+
+**Bewusst nicht gemacht:**
+
+- **AppImage.** Braucht `appimagetool`, das nicht aus den Paketquellen kommt,
+  sondern als Binary aus dem Netz. Das statische Programm plus `install.sh`
+  deckt denselben Zweck ohne Download ab.
+- **MPRIS2.** Braucht eine D-Bus-Anbindung und damit eine neue
+  Systemabhängigkeit (libdbus oder sd-bus als weiteres `systemLibrary`-Ziel).
+  Das ist eine eigene Entscheidung, kein Nebenbei — und ohne laufende
+  Desktop-Sitzung auf dem Testhost auch nicht ehrlich belegbar.
+- Ein natives Linux-GUI bleibt ausgeschlossen.
 
 ## Rahmenbedingungen
 
@@ -247,12 +352,19 @@ MPRIS2, .desktop-Datei, statisches Binary/AppImage. Erst bei Bedarf.
   Fleet-Linux-Host im `swift:6.0`-Container:
 
   ```bash
-  tar czf port.tgz Package.swift Sources Tests   # audio/ und .build bleiben draussen
-  scp port.tgz <host>:~/savage-linux-check/
-  ssh <host> 'cd ~/savage-linux-check && tar xzf port.tgz && \
+  # Der Host traegt das Bare-Repo der Fleet — dort genuegt ein lokaler Klon
+  # des gepushten Stands, dann laeuft genau der geprueft, was gepusht wurde.
+  ssh <host> 'git clone -q --branch main ~/git/savage_modplayer.git ~/savage-linux-check/repo && \
+    cd ~/savage-linux-check/repo && \
     docker run --rm -v "$PWD":/src -w /src swift:6.0 bash -c \
-    "apt-get update -qq && apt-get install -y -qq libarchive-tools; swift build && swift test"'
+    "apt-get update -qq && apt-get install -y -qq libasound2-dev libarchive-tools; \
+     swift build -c release && swift test -c release"'
   ```
+
+  Der Container laeuft als root und hinterlaesst ein root-eigenes `.build`, das
+  der naechste Lauf als normaler Nutzer nicht loeschen kann. Das Arbeitsverzeichnis
+  deshalb ebenfalls per Container aufraeumen (`docker run --rm -v "$HOME":/h
+  alpine rm -rf /h/savage-linux-check`).
 
   Der Host ist zugleich Backup-Host — Testlast moderat halten (ein Build/Testlauf
   am Stück, keine Dauerschleifen). Host-Details und die Etikette für GUI-/Audio-

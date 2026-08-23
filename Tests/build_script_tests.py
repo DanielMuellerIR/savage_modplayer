@@ -1,22 +1,30 @@
-"""Quelltest für die Schutzregel „/Applications nur notarisiert".
+"""Tests für Bau-, Minifizier- und Simulator-Skripte.
+
+Die Notary-Prüfungen lesen nur Quelltext. Die Simulator-Prüfungen starten das
+Skript mit kontrollierten Ersatzprogrammen für `xcrun` und `xcodebuild`; sie
+öffnen weder Xcode noch einen Simulator.
 
 Projektinvariante: Ad-hoc signierte Builds entstehen ausschließlich im
 Projektordner, und nach `/Applications` wandert nur ein Bundle mit
 angeheftetem Notary-Ticket.
-
-Diese Prüfungen lesen ausschließlich den Quelltext der Skripte. Sie starten
-weder einen Build noch eine Installation — ein Testlauf, der `build_app.sh`
-oder `install.sh` wirklich ausführt, würde genau das anfassen, was die Regel
-schützen soll.
 """
 
 from pathlib import Path
+import importlib.util
+import os
 import re
 import subprocess
+import tempfile
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+BUILD_SPEC = importlib.util.spec_from_file_location(
+    "savage_build", ROOT / "build.py")
+BUILD_MODULE = importlib.util.module_from_spec(BUILD_SPEC)
+assert BUILD_SPEC.loader is not None
+BUILD_SPEC.loader.exec_module(BUILD_MODULE)
 
 # Befehle, die etwas anlegen, überschreiben oder löschen. Steht einer davon vor
 # dem Wechsel ins Projektverzeichnis, hängt das Bauziel am Arbeitsverzeichnis
@@ -135,6 +143,67 @@ class ApplicationsFolderTests(unittest.TestCase):
         self.assertIn("xcrun stapler validate", quelle)
         # Und ein ad-hoc signiertes Bundle wird gar nicht erst eingereicht.
         self.assertIn("Signature=adhoc", quelle)
+
+
+class JavaScriptMinifierTests(unittest.TestCase):
+    """Der Minifizierer darf sichtbare Texte nicht umschreiben."""
+
+    def test_punctuation_inside_strings_is_preserved(self):
+        source = (
+            "throw new Error(`Leeres MOD (Songlänge 0): ${label}`); "
+            "const choice = ok ? left : right;")
+
+        result = BUILD_MODULE.minify_js(source)
+
+        self.assertIn("`Leeres MOD (Songlänge 0): ${label}`", result)
+        self.assertIn("const choice=ok?left:right;", result)
+
+
+class IOSSimulatorScriptTests(unittest.TestCase):
+    """Simulatorwahl mit kontrollierten xcrun-/xcodebuild-Antworten."""
+
+    def _run(self, xcrun_body, simulator_name=None):
+        with tempfile.TemporaryDirectory(prefix="savage-ios-script-") as tmp:
+            tmp_path = Path(tmp)
+            xcrun = tmp_path / "xcrun"
+            xcrun.write_text("#!/bin/sh\n" + xcrun_body, encoding="utf-8")
+            xcrun.chmod(0o755)
+            xcodebuild = tmp_path / "xcodebuild"
+            xcodebuild.write_text(
+                "#!/bin/sh\nprintf '%s\\n' '** TEST SUCCEEDED **'\n",
+                encoding="utf-8")
+            xcodebuild.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = str(tmp_path) + os.pathsep + env["PATH"]
+            env["DERIVED_DATA"] = str(tmp_path / "DerivedData")
+            env["TEST_LOG"] = str(tmp_path / "run-tests.log")
+            if simulator_name is not None:
+                env["SIMULATOR_NAME"] = simulator_name
+
+            return subprocess.run(
+                ["bash", str(ROOT / "ios/scripts/run-tests.sh")],
+                cwd=ROOT, env=env, capture_output=True, text=True)
+
+    def test_explicit_ipad_uses_newest_matching_runtime(self):
+        result = self._run(
+            """printf '%s\\n' \\
+'-- iOS 17.5 --' \\
+'    iPad Pro 13-inch (M4) (11111111-1111-1111-1111-111111111111) (Shutdown)' \\
+'-- iOS 18.2 --' \\
+'    iPad Pro 13-inch (M4) (22222222-2222-2222-2222-222222222222) (Shutdown)'\n""",
+            simulator_name="iPad Pro 13-inch (M4)")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("22222222-2222-2222-2222-222222222222", result.stdout)
+        self.assertIn("iOS 18.2", result.stdout)
+
+    def test_simctl_failure_keeps_the_original_diagnostic(self):
+        result = self._run(
+            "printf '%s\\n' 'CoreSimulator-Dienst nicht erreichbar' >&2\nexit 7\n")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("CoreSimulator-Dienst nicht erreichbar", result.stdout)
 
 
 if __name__ == "__main__":

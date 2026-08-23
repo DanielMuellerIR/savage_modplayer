@@ -111,7 +111,7 @@ jobs:
       - name: Linux dependencies
         run: |
           apt-get update -qq
-          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libasound2-dev libarchive-tools
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libasound2-dev zlib1g-dev libarchive-tools
 
       - name: Swift Version
         run: swift --version

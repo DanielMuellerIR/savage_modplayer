@@ -147,7 +147,7 @@ Compatibility messages are capability-based. `cwtv` identifies the creating trac
 | Parser | `ModuleLoader` plus project-owned MOD/S3M/XM/IT parsers (`SavageModPlayerCore`) | `modplayer.js` |
 | DSP / mixer | Project-owned sequencer and DSP via `AVAudioSourceNode`, up to 64 logical channels / 256 IT voices | `mod-player-worklet.js` (AudioWorklet) |
 | UI | SwiftUI + Canvas (`Sources/SavageModPlayerApp` on macOS, `ios/SavageModPlayer` on iOS) | vanilla JS + CSS grid |
-| Archives | `bsdtar` on macOS and Linux, project-owned `ZipArchiveReader` on iOS | — |
+| Archives | `.zip` everywhere through the project-owned `ZipArchiveReader`; `.7z` only on macOS and Linux through `bsdtar` | — |
 | Library | `SavageModPlayerCore/Library` (index, import, reset) — used by the iPhone app | — |
 | Quick Look | `quicklook/PreviewProvider.swift` (appex, offline WAV render) | — |
 
@@ -169,6 +169,12 @@ the Settings window (Cmd+,). If none is set, it looks for an `audio/` directory
 next to the application and automatically loads any `.mod`/`.s3m`/`.xm`/`.it` files (or
 `mod.*` files) found there. These files are local test data only and do not
 belong in the git repository.
+
+The same window holds the visualizer frame rate: 30 Hz (default, full look),
+24, 15 or 10 Hz. It does not affect the sound, only the interface's CPU load —
+on a Mac with an M5 chip the same playback cost about 22 % of a core at 30 Hz and about 14 % at
+10 Hz. The change takes effect immediately; the compact window stays at 5 Hz
+regardless, because no oscilloscopes are visible there.
 
 For release builds, `build_app.sh` automatically signs with the Developer ID
 `Developer ID Application: Daniel Mueller (9QSWKSR4NQ)` if it is available in
@@ -227,6 +233,7 @@ savage-cli song.mod -o out.wav -s 30         # render 30 s to WAV
 savage-cli song.mod --play                   # real-time playback (CoreAudio / ALSA)
 savage-cli song.mod --stdout | aplay -f S16_LE -c2 -r44100   # raw PCM to a player
 savage-cli --list audio/                     # list playable modules in a folder
+savage-cli --list audio/ --play              # play the whole folder as a playlist
 ```
 
 `--stdout` streams raw 16-bit stereo PCM (little endian) to stdout in bounded
@@ -235,9 +242,15 @@ without buffering the whole song. Streaming cannot be combined with
 `--normalize`, which needs a complete peak scan. `--seconds` accepts 0...600
 seconds (0 means song end with a 600-second cap); `--rate` accepts
 8,000...192,000 Hz. Non-finite and out-of-range values fail with exit code 2.
-`--list` prints one path per line and exits with 1 if nothing playable was found.
-`--normalize` raises the level like Quick Look does; leave it off for raw
-comparisons.
+`--list` prints one path per line and exits with 1 if nothing playable was found;
+combined with `--play` the folder is played as a playlist instead, in path order,
+skipping unreadable modules. `--normalize` raises the level like Quick Look does;
+leave it off for raw comparisons.
+
+While `--play` runs on a terminal, single keys control playback: space or `p`
+pauses and resumes, `n` or arrow right skips to the next track, `b` or arrow left
+goes back, and `q` ends playback. Without a terminal (pipe, cron, CI) playback
+simply runs to the end. Ctrl-C closes the audio output and exits with 130.
 
 #### Linux
 
@@ -246,22 +259,43 @@ Quick Look extension are macOS-only and are excluded from the package there.
 
 ```bash
 docker run --rm -v "$PWD":/src -w /src swift:6.0 \
-  bash -c "apt-get update -qq && apt-get install -y -qq libasound2-dev libarchive-tools && swift build && swift test"
+  bash -c "apt-get update -qq && apt-get install -y -qq libasound2-dev zlib1g-dev libarchive-tools && swift build && swift test"
 ```
 
 `libasound2-dev` provides the ALSA headers used by the Linux audio sink;
-`libarchive-tools` provides `bsdtar`, which the playlist scanner uses to read
-`.zip`/`.7z` archives. Without it, archives are skipped and two tests skip with
-them; everything else works.
+`zlib1g-dev` provides the zlib the project-owned `ZipArchiveReader` uses to
+unpack `.zip` on Linux (Apple platforms use the `Compression` framework instead).
+`libarchive-tools` provides `bsdtar` — since 1.6.10 only needed for `.7z`.
+Without it everything else still works, only `.7z` is skipped.
 
 `--play` uses the platform's audio output — AVAudioEngine on macOS, ALSA on Linux
 (needs `libasound2-dev` at build time). The playback path renders sample-identical
 output to the offline renderer; both pull from the same engine.
 
+##### Installing on the desktop
+
+```bash
+bash linux/build-static.sh            # build a static savage-cli in a container
+bash linux/install.sh                 # into ~/.local, no root needed
+bash linux/install.sh --uninstall     # remove it again
+```
+
+`install.sh` puts `savage-cli` into `~/.local/bin` and the entry
+`savage-cli.desktop` into `~/.local/share/applications`; `--prefix` selects a
+different target. The player then shows up in the menu and can be chosen as the
+application for MOD, S3M, XM and IT files. The entry starts in a terminal on
+purpose — the keyboard controls need one. All four file types are already
+defined by freedesktop.org; the entry only registers for them instead of
+inventing its own.
+
+The static binary is around 70 MB and runs without an installed Swift runtime.
+There is deliberately no AppImage: that would need `appimagetool`, which does
+not come from the package sources.
+
 Rendering is deterministic per platform but not bit-identical *across* platforms:
 `tanh` in the limiter rounds differently in glibc and Darwin libm, which shifts
 about 0.01 % of samples by a single LSB — roughly 115 dB below the signal, far
-below audibility. Keyboard control and playlist playback are not implemented yet.
+below audibility.
 
 ### Bonus HTML5 player
 

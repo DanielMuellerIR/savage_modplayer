@@ -1,0 +1,114 @@
+{
+  "sourceLanguage" : "de",
+  "strings" : {
+    "FastTracker-2-Modul" : {
+      "comment" : "UTTypeDescription fuer .xm — erscheint in der Dateien-App und im Teilen-Menue.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "FastTracker-2-Modul"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "FastTracker 2 module"
+          }
+        }
+      }
+    },
+    "Impulse-Tracker-Modul" : {
+      "comment" : "UTTypeDescription fuer .it.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impulse-Tracker-Modul"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impulse Tracker module"
+          }
+        }
+      }
+    },
+    "Modul-Archiv" : {
+      "comment" : "CFBundleTypeName fuer ZIP-Archive mit Modulen.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modul-Archiv"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Module archive"
+          }
+        }
+      }
+    },
+    "ProTracker-Modul" : {
+      "comment" : "UTTypeDescription fuer .mod.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ProTracker-Modul"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ProTracker module"
+          }
+        }
+      }
+    },
+    "Scream-Tracker-3-Modul" : {
+      "comment" : "UTTypeDescription fuer .s3m.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scream-Tracker-3-Modul"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scream Tracker 3 module"
+          }
+        }
+      }
+    },
+    "Tracker-Modul" : {
+      "comment" : "CFBundleTypeName fuer die vier Modulformate.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tracker-Modul"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tracker module"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

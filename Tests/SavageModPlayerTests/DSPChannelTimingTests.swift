@@ -533,6 +533,70 @@ final class DSPChannelTimingTests: XCTestCase {
                        "A00 muss den gespeicherten A20-Parameter weiterverwenden")
     }
 
+    /// XM P00 wiederholt den letzten Pxy-Parameter.
+    ///
+    /// `applyEffect` setzt den Panning-Slide zu Beginn jeder Row auf null.
+    /// Ohne Memory riss ein P00 den laufenden Slide deshalb ab, statt ihn wie
+    /// in FT2 fortzusetzen. Gemerkt wird der ganze Parameter, nicht die
+    /// Nibbles einzeln.
+    func testXMPanSlideZeroReusesPreviousParameter() {
+        let ch = makeXMChannel()
+        ch.panning = 0.5
+
+        // P20: pro Tick 2/255 nach rechts, bei Speed 4 in den Ticks 1..3.
+        let rightPerRow: Double = 3.0 * 2.0 / 255.0
+        ch.playNote(Note(instrument: 0, period: 0, effectId: ModuleEffect.panSlide, effectData: 0x20),
+                    instruments: [nil])
+        playRow(ch, ticksPerRow: 4)
+        let afterFirstRow: Double = 0.5 + rightPerRow
+        XCTAssertEqual(Double(ch.panning), afterFirstRow, accuracy: 0.0001)
+
+        ch.playNote(Note(instrument: 0, period: 0, effectId: ModuleEffect.panSlide, effectData: 0x00),
+                    instruments: [nil])
+        playRow(ch, ticksPerRow: 4)
+        XCTAssertEqual(Double(ch.panning), afterFirstRow + rightPerRow, accuracy: 0.0001,
+                       "P00 muss den gespeicherten P20-Parameter weiterverwenden")
+    }
+
+    /// Ein neuer Pxy-Wert ersetzt das Memory — auch in die Gegenrichtung.
+    func testXMPanSlideMemoryIsReplacedByANewParameter() {
+        let ch = makeXMChannel()
+        ch.panning = 0.5
+
+        ch.playNote(Note(instrument: 0, period: 0, effectId: ModuleEffect.panSlide, effectData: 0x20),
+                    instruments: [nil])
+        playRow(ch, ticksPerRow: 4)
+
+        // P04: pro Tick 4/255 nach links.
+        ch.playNote(Note(instrument: 0, period: 0, effectId: ModuleEffect.panSlide, effectData: 0x04),
+                    instruments: [nil])
+        playRow(ch, ticksPerRow: 4)
+
+        ch.playNote(Note(instrument: 0, period: 0, effectId: ModuleEffect.panSlide, effectData: 0x00),
+                    instruments: [nil])
+        playRow(ch, ticksPerRow: 4)
+
+        // Explizit getrennt und getypt: Als eine Kette sprengte dieser
+        // Ausdruck unter Linux die Typpruefung des Compilers.
+        let rightPerRow: Double = 3.0 * 2.0 / 255.0
+        let leftPerRow: Double = 3.0 * 4.0 / 255.0
+        let expected: Double = 0.5 + rightPerRow - 2.0 * leftPerRow
+        XCTAssertEqual(Double(ch.panning), expected, accuracy: 0.0001,
+                       "P00 muss den zuletzt gesetzten P04-Parameter weiterverwenden")
+    }
+
+    /// Ohne vorheriges Pxy bewegt ein P00 gar nichts — es gibt nichts zu
+    /// wiederholen.
+    func testXMPanSlideWithoutMemoryDoesNothing() {
+        let ch = makeXMChannel()
+        ch.panning = 0.5
+
+        ch.playNote(Note(instrument: 0, period: 0, effectId: ModuleEffect.panSlide, effectData: 0x00),
+                    instruments: [nil])
+        playRow(ch, ticksPerRow: 4)
+        XCTAssertEqual(Double(ch.panning), 0.5, accuracy: 0.0001)
+    }
+
     /// XM Rxy: Retrigger alle y Ticks verändert die Lautstärke nach der
     /// FT2-Modus-Tabelle (Modus 1 = -1 je Retrigger); R00 nutzt das getrennte
     /// Nibble-Memory. MOD E9x retriggt dagegen ohne Volume-Änderung.

@@ -113,11 +113,28 @@ public enum PlaylistScanner {
     // (rekursiv) mindestens eine Mod-Datei oder ein Archiv?
     public static func directoryContainsPlayableContent(_ dir: URL) -> Bool {
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return false }
-        while let fileURL = enumerator.nextObject() as? URL {
-            if isModFile(fileURL) || isArchive(fileURL) { return true }
+        var visitedDirectories = Set<String>()
+
+        func containsPlayableContent(_ directory: URL) -> Bool {
+            let resolved = directory.resolvingSymlinksInPath().standardizedFileURL.path
+            guard visitedDirectories.insert(resolved).inserted,
+                  let children = try? fm.contentsOfDirectory(
+                    at: directory,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]) else { return false }
+            for child in children {
+                if isModFile(child) || isArchive(child) { return true }
+                var isDirectory: ObjCBool = false
+                let directoryCandidate = child.resolvingSymlinksInPath()
+                if fm.fileExists(atPath: directoryCandidate.path, isDirectory: &isDirectory),
+                   isDirectory.boolValue,
+                   containsPlayableContent(directoryCandidate) {
+                    return true
+                }
+            }
+            return false
         }
-        return false
+        return containsPlayableContent(dir)
     }
 
     // MARK: - Einsammeln
@@ -129,11 +146,21 @@ public enum PlaylistScanner {
         let fm = FileManager.default
         try? fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
         var entries: [Entry] = []
+        var activeDirectories = Set<String>()
 
         // Eine einzelne Datei einsortieren: Mods kopieren, Archive entpacken
         // und deren Inhalt als Unterordner scannen. `archiveDepth` begrenzt
         // Archiv-in-Archiv-Rekursion.
-        func handleFile(_ fileURL: URL, folderPath: [String], archiveDepth: Int) {
+        func handleFile(
+            _ fileURL: URL,
+            sourceURL: URL? = nil,
+            folderPath: [String],
+            archiveDepth: Int
+        ) {
+            // Klassifikation und Anzeigename gehoeren zum vom Nutzer
+            // ausgewaehlten Link. Gelesen wird dagegen dessen Ziel, damit die
+            // Temp-Kopie nach Ende des Security-Scopes eine echte Datei ist.
+            let readableURL = sourceURL ?? fileURL
             // Archive ZUERST klassifizieren: `mod.collection.zip` matcht sonst
             // die Amiga-Namenskonvention `mod.<name>` und wuerde als
             // unspielbare "Moduldatei" kopiert statt entpackt.
@@ -146,18 +173,22 @@ public enum PlaylistScanner {
             // trennt beides bereits so.
             if isArchive(fileURL) {
                 guard archiveDepth < maxArchiveDepth else { return }
-                if let extractedDir = extractArchive(fileURL, tempDir: tempDir) {
+                if let extractedDir = extractArchive(readableURL, tempDir: tempDir) {
                     // Archivname ohne Endung als Ordner-Name — dass es ein
                     // Archiv war, soll man in der Playlist nicht merken.
                     let nodeName = (fileURL.lastPathComponent as NSString).deletingPathExtension
-                    scanDirectory(extractedDir, folderPath: folderPath + [nodeName], archiveDepth: archiveDepth + 1)
+                    scanDirectory(
+                        extractedDir,
+                        folderPath: folderPath + [nodeName],
+                        archiveDepth: archiveDepth + 1,
+                        insideExtractedArchive: true)
                 }
             } else if isModFile(fileURL) {
                 // UUID-Praefix vermeidet Namens-Kollisionen im flachen Temp-Ziel;
                 // die UI blendet ihn beim Anzeigen wieder aus (cleanFilename).
                 let destURL = tempDir.appendingPathComponent("\(UUID().uuidString)_\(fileURL.lastPathComponent)")
                 do {
-                    try fm.copyItem(at: fileURL, to: destURL)
+                    try fm.copyItem(at: readableURL, to: destURL)
                     entries.append(Entry(url: destURL, displayName: fileURL.lastPathComponent, folderPath: folderPath))
                 } catch {
                     print("Fehler beim Kopieren: \(error)")
@@ -167,7 +198,19 @@ public enum PlaylistScanner {
 
         // Ordner rekursiv absteigen und dabei die relativen Pfad-Komponenten
         // mitfuehren (der fruehere flache enumerator verlor die Hierarchie).
-        func scanDirectory(_ dir: URL, folderPath: [String], archiveDepth: Int) {
+        func scanDirectory(
+            _ dir: URL,
+            folderPath: [String],
+            archiveDepth: Int,
+            insideExtractedArchive: Bool
+        ) {
+            // Nutzer-Symlinks duerfen Ordner verbinden, aber Zyklen nicht zu
+            // endloser Rekursion fuehren. Im Entpackverzeichnis erreichen
+            // Symlinks diesen Punkt gar nicht, weil der Elterneintrag sie
+            // vorher ablehnt.
+            let resolved = dir.resolvingSymlinksInPath().standardizedFileURL.path
+            guard activeDirectories.insert(resolved).inserted else { return }
+            defer { activeDirectories.remove(resolved) }
             guard let children = try? fm.contentsOfDirectory(
                 at: dir,
                 includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
@@ -182,15 +225,30 @@ public enum PlaylistScanner {
                 if child.standardizedFileURL.path == tempDir.standardizedFileURL.path { continue }
                 let values = try? child.resourceValues(
                     forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-                // bsdtar kann Links aus einem fremden Archiv als echte
-                // Dateisystem-Links anlegen. Vor jeder Endungspruefung und vor
-                // der Rekursion ablehnen, damit weder song.mod noch inner.zip
-                // aus dem Entpackverzeichnis heraus verfolgt werden.
-                if values?.isSymbolicLink == true { continue }
-                if values?.isDirectory == true {
-                    scanDirectory(child, folderPath: folderPath + [child.lastPathComponent], archiveDepth: archiveDepth)
+                // Nur Links aus einem fremden Archiv sind untrusted. Links in
+                // der vom Nutzer gewaehlten Sammlung bleiben normale Quellen.
+                if insideExtractedArchive, values?.isSymbolicLink == true { continue }
+                var followsToDirectory: ObjCBool = false
+                let directoryCandidate = values?.isSymbolicLink == true
+                    ? child.resolvingSymlinksInPath()
+                    : child
+                let isDirectory = fm.fileExists(
+                    atPath: directoryCandidate.path, isDirectory: &followsToDirectory)
+                    && followsToDirectory.boolValue
+                if isDirectory {
+                    scanDirectory(
+                        directoryCandidate,
+                        folderPath: folderPath + [child.lastPathComponent],
+                        archiveDepth: archiveDepth,
+                        insideExtractedArchive: insideExtractedArchive)
                 } else {
-                    handleFile(child, folderPath: folderPath, archiveDepth: archiveDepth)
+                    handleFile(
+                        child,
+                        sourceURL: values?.isSymbolicLink == true
+                            ? child.resolvingSymlinksInPath()
+                            : nil,
+                        folderPath: folderPath,
+                        archiveDepth: archiveDepth)
                 }
             }
         }
@@ -207,9 +265,18 @@ public enum PlaylistScanner {
             var isDir: ObjCBool = false
             if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
                 if isDir.boolValue {
-                    scanDirectory(url, folderPath: [], archiveDepth: 0)
+                    scanDirectory(
+                        url, folderPath: [], archiveDepth: 0,
+                        insideExtractedArchive: false)
                 } else {
-                    handleFile(url, folderPath: [], archiveDepth: 0)
+                    let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey])
+                    handleFile(
+                        url,
+                        sourceURL: values?.isSymbolicLink == true
+                            ? url.resolvingSymlinksInPath()
+                            : nil,
+                        folderPath: [],
+                        archiveDepth: 0)
                 }
             }
         }
@@ -263,9 +330,31 @@ public enum PlaylistScanner {
             throw ArchiveError.tooManyEntries
         }
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true, attributes: nil)
+
+        // Weiche nach FORMAT, nicht nach Plattform (seit 1.6.10):
+        //
+        // `.zip` uebernimmt ueberall der eigene `ZipArchiveReader`. Er braucht
+        // keinen Hilfsprozess, und sein Vorfilter schreibt nur Moduldateien und
+        // verschachtelte Archive auf die Platte — bei einer 100-MB-Sammlung
+        // spart das den Loewenanteil. Zip-Slip, Symlinks, Verschluesselung,
+        // Zip64 und unplausible Kompressionsverhaeltnisse lehnt er ab, statt
+        // sie zu bereinigen. Frueher galt das nur auf iOS; macOS und Linux
+        // liefen ueber `bsdtar` und bekamen von alldem nichts.
+        //
+        // `.7z` kann der eigene Leser nicht (ein LZMA-Dekoder waere ein eigenes
+        // Vorhaben). Dafuer bleibt `bsdtar` — wo es `Process` gibt und das
+        // Werkzeug installiert ist. Damit ist die externe Abhaengigkeit von
+        // Pflicht zu Kuer geworden: Ohne `bsdtar` laeuft alles weiter, nur
+        // `.7z` nicht.
+        #if canImport(Compression) || canImport(CZlib)
+        if archive.pathExtension.lowercased() == "zip" {
+            return try unpackUsingZipReader(
+                archive, into: destination, limits: limits, isCancelled: isCancelled)
+        }
+        #endif
         #if os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
-        return try unpackUsingZipReader(
-            archive, into: destination, limits: limits, isCancelled: isCancelled)
+        // Kein `Process` auf iOS — hier endet der Weg fuer alles, was nicht ZIP ist.
+        throw ArchiveError.unsupportedFormat(archive.lastPathComponent)
         #else
         return try unpackUsingBsdtar(
             archive, into: destination, limits: limits, isCancelled: isCancelled)
@@ -301,7 +390,7 @@ public enum PlaylistScanner {
         }
     }
 
-    #if os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
+    #if canImport(Compression) || canImport(CZlib)
     // Entpacken ohne Hilfsprozess. Nur ZIP; alles andere (insbesondere `.7z`)
     // wird abgelehnt, damit der Aufrufer den Unterschied melden kann.
     private static func unpackUsingZipReader(
@@ -336,9 +425,12 @@ public enum PlaylistScanner {
             totalUncompressedBytes: result.totalUncompressedBytes,
             entryCount: result.entryCount)
     }
-    #else
+    #endif
+
+    #if !(os(iOS) || os(tvOS) || os(watchOS) || os(visionOS))
     // bsdtar liegt auf macOS und den meisten Linux-Distributionen unter
-    // /usr/bin (dort aus dem Paket libarchive-tools).
+    // /usr/bin (dort aus dem Paket libarchive-tools). Seit 1.6.10 nur noch fuer
+    // `.7z` zustaendig.
     private static func unpackUsingBsdtar(
         _ archive: URL,
         into destination: URL,

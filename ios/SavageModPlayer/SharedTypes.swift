@@ -73,3 +73,21 @@ struct TrackRef: Identifiable, Hashable, Sendable {
 
     var id: String { relativePath }
 }
+
+// Aus welcher Auswahl der Bibliothek die Abspielliste stammt.
+//
+// Ohne diese Angabe ersetzte jede Aenderung der Bibliothek die Abspielliste
+// durch den Gesamtbestand — auch wenn die Wiedergabe bewusst aus einer Suche
+// oder aus den Favoriten gestartet worden war. Ein Favorit mehr, und "weiter"
+// lief plotzlich durch die ganze Sammlung.
+//
+// Leerer Suchbegriff ohne Favoritenfilter heisst: die ganze Bibliothek. Das ist
+// derselbe Fall, den `LibraryStore.filteredTracks` ohnehin abkuerzt.
+struct QueueFilter: Equatable {
+    var search: String = ""
+    var favoritesOnly: Bool = false
+
+    var isWholeLibrary: Bool {
+        search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !favoritesOnly
+    }
+}

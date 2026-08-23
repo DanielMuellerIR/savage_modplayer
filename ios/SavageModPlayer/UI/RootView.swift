@@ -32,11 +32,88 @@ struct RootView: View {
         @ObservedObject var settings: PlayerSettings
 
         @Environment(\.scenePhase) private var scenePhase
+        // Breite Fenster (iPad im Vollbild, grosse Split-View-Haelfte) bekommen
+        // zwei Spalten; schmale bleiben beim Tab-Layout. Entscheidend ist die
+        // Groessenklasse, nicht das Geraet: Ein iPad in Slide Over ist
+        // "compact" und soll dort auch das iPhone-Layout zeigen.
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
         @State private var selection: Tab = .library
         // Der zuletzt gespielte Titel wird genau einmal wiederhergestellt.
         @State private var didRestoreSession = false
+        // Zweispaltiges Layout: Es gibt keinen Einstellungs-Tab, also kommen
+        // die Einstellungen als Blatt ueber einen Knopf in der Bibliothek.
+        @State private var showSettings = false
+        @State private var columnVisibility = NavigationSplitViewVisibility.all
 
         var body: some View {
+            layout
+                .tint(.accentColor)
+                // Hell, dunkel oder das, was das System vorgibt (nil = nicht
+                // erzwingen).
+                .preferredColorScheme(settings.theme.colorScheme)
+                // Fehler der Wiedergabe als eigener Modifier: er beobachtet die
+                // Wiedergabe fuer sich allein. Eine Aenderung dort wertet damit
+                // nur den Modifier neu aus, nicht die Ansichten darunter.
+                .modifier(PlaybackAlert(player: model.player))
+                .onAppear {
+                    // Beim ersten Erscheinen: gespeicherten Index anzeigen und im
+                    // Hintergrund mit dem Dateisystem abgleichen.
+                    model.library.start()
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    // Zurueck aus dem Hintergrund: was inzwischen ueber den Finder
+                    // oder die Dateien-App abgelegt oder geloescht wurde, soll
+                    // stimmen. Laeuft gerade ein Vorgang, tut refresh() nichts.
+                    if phase == .active { model.library.refresh() }
+                }
+                // onReceive statt @ObservedObject: die Bibliothek wird hier NICHT
+                // beobachtet. Diese Zeile reagiert nur auf eine neue Titelliste und
+                // zeichnet dabei nichts neu.
+                .onReceive(model.library.$tracks) { tracks in
+                    // Die Wiedergabe bildet ihre Liste aus der Auswahl neu, aus der
+                    // sie gestartet wurde — Suche oder Favoriten bleiben erhalten.
+                    model.player.refreshQueueFromLibrary()
+                    guard !didRestoreSession, !tracks.isEmpty else { return }
+                    didRestoreSession = true
+                    // Der zuletzt gespielte Titel ist danach ausgewaehlt — er
+                    // spielt aber nicht von selbst los.
+                    model.player.restoreSession()
+                }
+        }
+
+        @ViewBuilder
+        private var layout: some View {
+            if horizontalSizeClass == .regular {
+                wideLayout
+            } else {
+                tabLayout
+            }
+        }
+
+        // Zwei Spalten: links die Bibliothek, rechts die laufende Wiedergabe.
+        // Auf einem breiten Bildschirm ist das der Punkt — man sucht einen Titel
+        // und sieht dabei weiter, was gerade laeuft. Eine Mini-Player-Leiste
+        // braucht es hier nicht mehr; der Player steht ohnehin daneben.
+        private var wideLayout: some View {
+            NavigationSplitView(columnVisibility: $columnVisibility) {
+                // Ohne eigene Navigationsleiste: die liefert die Spalte.
+                LibraryView(embedsNavigation: false) { showSettings = true }
+                    .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 520)
+            } detail: {
+                // `isSelected` steuert den schnellen Visualizer-Takt. Hier ist
+                // die Wiedergabe immer sichtbar, also immer wahr.
+                NowPlayingView(isSelected: true) {
+                    columnVisibility = .all
+                }
+            }
+            .navigationSplitViewStyle(.balanced)
+            .sheet(isPresented: $showSettings) {
+                SettingsView()
+            }
+        }
+
+        private var tabLayout: some View {
             TabView(selection: $selection) {
                 LibraryView()
                     .miniPlayerBar(player: model.player) { selection = .player }
@@ -54,38 +131,8 @@ struct RootView: View {
                     .tabItem { Label("tab.settings", systemImage: "gearshape") }
                     .tag(Tab.settings)
             }
-            .tint(.accentColor)
             .toolbarBackground(Color.playerSurface, for: .tabBar)
             .toolbarBackground(.visible, for: .tabBar)
-            // Hell, dunkel oder das, was das System vorgibt (nil = nicht
-            // erzwingen).
-            .preferredColorScheme(settings.theme.colorScheme)
-            // Fehler der Wiedergabe als eigener Modifier: er beobachtet die
-            // Wiedergabe fuer sich allein. Eine Aenderung dort wertet damit nur
-            // den Modifier neu aus, nicht die drei Tabs darunter.
-            .modifier(PlaybackAlert(player: model.player))
-            .onAppear {
-                // Beim ersten Erscheinen: gespeicherten Index anzeigen und im
-                // Hintergrund mit dem Dateisystem abgleichen.
-                model.library.start()
-            }
-            .onChange(of: scenePhase) { _, phase in
-                // Zurueck aus dem Hintergrund: was inzwischen ueber den Finder
-                // oder die Dateien-App abgelegt oder geloescht wurde, soll
-                // stimmen. Laeuft gerade ein Vorgang, tut refresh() nichts.
-                if phase == .active { model.library.refresh() }
-            }
-            // onReceive statt @ObservedObject: die Bibliothek wird hier NICHT
-            // beobachtet. Diese Zeile reagiert nur auf eine neue Titelliste und
-            // zeichnet dabei nichts neu.
-            .onReceive(model.library.$tracks) { tracks in
-                model.player.setQueue(tracks)
-                guard !didRestoreSession, !tracks.isEmpty else { return }
-                didRestoreSession = true
-                // Der zuletzt gespielte Titel ist danach ausgewaehlt — er
-                // spielt aber nicht von selbst los.
-                model.player.restoreSession()
-            }
         }
     }
 }

@@ -326,6 +326,9 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var xmGlobalVolumeSlideMemory: Int = 0
     nonisolated(unsafe) public var xmMultiRetrigVolumeMemory: Int = 0
     nonisolated(unsafe) public var xmMultiRetrigIntervalMemory: Int = 0
+    // XM Pxy: FT2 merkt sich den GANZEN Parameter, nicht die Nibbles einzeln.
+    // P00 wiederholt damit den letzten Pxy-Wert.
+    nonisolated(unsafe) public var xmPanSlideMemory: Int = 0
     // Rxy auf dieser Row aktiv? Nur dann verändert der Retrigger die
     // Lautstärke nach der Q-/R-Modus-Tabelle (MOD E9x bleibt neutral).
     nonisolated(unsafe) private var xmMultiRetrigActive = false
@@ -471,6 +474,7 @@ public final class DSPChannel: Sendable {
         xmGlobalVolumeSlideMemory = 0
         xmMultiRetrigVolumeMemory = 0
         xmMultiRetrigIntervalMemory = 0
+        xmPanSlideMemory = 0
         xmMultiRetrigActive = false
 
         setInstrument = nil
@@ -1334,10 +1338,18 @@ public final class DSPChannel: Sendable {
             self.volEnvPos = effectData
             self.panEnvPos = effectData
         case ModuleEffect.panSlide: // XM Pxy: x = nach rechts, y = nach links (pro Tick)
-            if effectHigh > 0 {
-                self.panSlide = Float(effectHigh)
-            } else if effectLow > 0 {
-                self.panSlide = -Float(effectLow)
+            // `applyEffect` setzt panSlide zu Beginn jeder Row auf 0. Ohne
+            // Memory blieb ein P00 deshalb wirkungslos und riss einen laufenden
+            // Slide ab — FT2 setzt ihn dort fort. Gemerkt wird der ganze
+            // Parameter, nicht die Nibbles einzeln (anders als bei Rxy).
+            if effectData != 0 { self.xmPanSlideMemory = effectData }
+            let panParameter = effectData != 0 ? effectData : self.xmPanSlideMemory
+            let panRight = (panParameter >> 4) & 0x0F
+            let panLeft = panParameter & 0x0F
+            if panRight > 0 {
+                self.panSlide = Float(panRight)
+            } else if panLeft > 0 {
+                self.panSlide = -Float(panLeft)
             }
         case ModuleEffect.multiRetrig: // XM Rxy: Retrigger alle y Ticks, Volume-Modus x
             // FT2 merkt sich beide Nibbles getrennt; 0 = letzter Wert.

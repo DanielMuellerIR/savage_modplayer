@@ -11,14 +11,37 @@ import SwiftUI
 struct LibraryView: View {
     @EnvironmentObject private var model: AppModel
 
+    /// Bringt die Ansicht ihre eigene Navigationsleiste mit?
+    ///
+    /// Im Tab-Layout des iPhones ja — dort steht sie fuer sich. In der
+    /// zweispaltigen iPad-Ansicht liefert die Spalte selbst die Leiste; eine
+    /// zweite darin ergaebe zwei Titelzeilen uebereinander.
+    let embedsNavigation: Bool
+
+    /// Wird im zweispaltigen Layout gesetzt: Dort gibt es keinen
+    /// Einstellungs-Tab, also braucht die Werkzeugleiste einen Knopf dafuer.
+    let onOpenSettings: (() -> Void)?
+
+    init(embedsNavigation: Bool = true, onOpenSettings: (() -> Void)? = nil) {
+        self.embedsNavigation = embedsNavigation
+        self.onOpenSettings = onOpenSettings
+    }
+
     var body: some View {
-        Content(library: model.library, player: model.player, settings: model.settings)
+        Content(
+            library: model.library,
+            player: model.player,
+            settings: model.settings,
+            embedsNavigation: embedsNavigation,
+            onOpenSettings: onOpenSettings)
     }
 
     private struct Content: View {
         @ObservedObject var library: LibraryStore
         @ObservedObject var player: PlaybackEngine
         let settings: PlayerSettings
+        let embedsNavigation: Bool
+        let onOpenSettings: (() -> Void)?
 
         @State private var search = ""
         @State private var favoritesOnly = false
@@ -28,21 +51,27 @@ struct LibraryView: View {
         @State private var showImport = false
 
         var body: some View {
-            NavigationStack {
-                Group {
-                    if library.tracks.isEmpty {
-                        emptyState
-                    } else {
-                        treeList
-                    }
-                }
-                .background(Color.playerBackground)
-                .navigationTitle("tab.library")
-                .toolbar { toolbarContent }
-                .sheet(isPresented: $showImport) { LibraryImportSheet() }
-                .onAppear { expandPath(to: player.currentTrack) }
-                .onChange(of: player.currentTrack) { _, track in expandPath(to: track) }
+            if embedsNavigation {
+                NavigationStack { list }
+            } else {
+                list
             }
+        }
+
+        private var list: some View {
+            Group {
+                if library.tracks.isEmpty {
+                    emptyState
+                } else {
+                    treeList
+                }
+            }
+            .background(Color.playerBackground)
+            .navigationTitle("tab.library")
+            .toolbar { toolbarContent }
+            .sheet(isPresented: $showImport) { LibraryImportSheet() }
+            .onAppear { expandPath(to: player.currentTrack) }
+            .onChange(of: player.currentTrack) { _, track in expandPath(to: track) }
         }
 
         // MARK: - Werkzeugleiste
@@ -64,6 +93,14 @@ struct LibraryView: View {
                     Label("import.title", systemImage: "folder.badge.plus")
                 }
                 .accessibilityLabel("import.title")
+            }
+            if let onOpenSettings {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: onOpenSettings) {
+                        Label("tab.settings", systemImage: "gearshape")
+                    }
+                    .accessibilityLabel("tab.settings")
+                }
             }
         }
 
@@ -94,21 +131,48 @@ struct LibraryView: View {
                         pendingRow
                             .padding(.horizontal)
                     }
-                    ContentUnavailableView {
-                        Label("library.empty.title", systemImage: "music.note.list")
-                    } description: {
-                        Text("library.empty.hint")
-                    } actions: {
-                        Button("import.title") { showImport = true }
-                            .buttonStyle(.borderedProminent)
-                        Text("import.filesharing.hint")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.top, 4)
-                    }
+                    Spacer(minLength: 0)
+                    emptyLibraryMessage
+                    Spacer(minLength: 0)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+
+        // Bewusst von Hand gebaut statt mit `ContentUnavailableView`.
+        //
+        // Die Systemansicht nimmt sich die Wunschbreite ihres laengsten Textes
+        // und ignoriert dabei die angebotene Breite. In der schmalen
+        // Bibliotheks-Spalte des zweispaltigen iPad-Layouts stand der Hinweis
+        // dadurch an beiden Seiten ueber dem Rand — mitten im Satz
+        // abgeschnitten. Weder `fixedSize` am Text noch `frame(maxWidth:)` am
+        // Container haben daran etwas geaendert.
+        private var emptyLibraryMessage: some View {
+            VStack(spacing: 12) {
+                Image(systemName: "music.note.list")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.secondary)
+                Text("library.empty.title")
+                    .font(.title2.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                Text("library.empty.hint")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("import.title") { showImport = true }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 4)
+                Text("import.filesharing.hint")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 4)
+            }
+            .padding(.horizontal, 24)
+            // Auf einem breiten Bildschirm soll der Text nicht ueber die ganze
+            // Flaeche laufen — lesbare Zeilenlaenge statt Rand-zu-Rand.
+            .frame(maxWidth: 420)
         }
 
         // MARK: - Baumansicht
@@ -326,10 +390,17 @@ struct LibraryView: View {
             library.filteredTracks(search: search, favoritesOnly: favoritesOnly)
         }
 
+        // Dieselbe Auswahl noch einmal als Beschreibung: Die Wiedergabe merkt
+        // sie sich, damit eine spaetere Aenderung der Bibliothek die Liste
+        // innerhalb dieser Auswahl nachzieht statt sie zu ersetzen.
+        private var currentFilter: QueueFilter {
+            QueueFilter(search: search, favoritesOnly: favoritesOnly)
+        }
+
         private func play(relativePath: String) {
             let tracks = playableTracks
             guard let track = tracks.first(where: { $0.relativePath == relativePath }) else { return }
-            player.setQueue(tracks)
+            player.setQueue(tracks, filter: currentFilter)
             player.play(track)
         }
 
@@ -337,7 +408,7 @@ struct LibraryView: View {
             let tracks = playableTracks
             guard !tracks.isEmpty else { return }
             settings.set(\.shuffleEnabled, to: shuffled)
-            player.setQueue(tracks)
+            player.setQueue(tracks, filter: currentFilter)
             // Bei Zufallswiedergabe faengt die Liste auch zufaellig an — sonst
             // begaenne jeder Abend mit demselben Titel.
             player.play(shuffled ? (tracks.randomElement() ?? tracks[0]) : tracks[0])

@@ -22,6 +22,14 @@ struct SavageModPlayerApp: App {
                 .onChange(of: scenePhase) { _, newPhase in
                     model.scenePhaseChanged(to: newPhase)
                 }
+                // "Oeffnen mit", Doppeltipp in der Dateien-App, Anhang aus Mail:
+                // Die Info.plist meldet MOD/S3M/XM/IT und ZIP als eigene
+                // Dokumenttypen an, also muss die App die uebergebene Datei auch
+                // annehmen. Das Uebernehmen in die Bibliothek und das Abspielen
+                // macht AppModel — hier steht nur die Entgegennahme.
+                .onOpenURL { url in
+                    model.open(url)
+                }
         }
     }
 }

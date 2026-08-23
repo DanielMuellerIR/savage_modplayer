@@ -173,13 +173,38 @@ def tighten_js_punctuation(src: str) -> str:
     # (winziger Groessen-Aufschlag, dafuer korrekt). Lookarounds helfen hier nicht,
     # weil sie die Original-Nachbarn pruefen, nicht das Ergebnis nach dem Entfernen.
     punct = r'[{}()\[\];,:?=<>*/%&|^!~]'
-    src = re.sub(rf' *({punct}) *', r'\1', src)
-    # Mehrfache Leerzeilen → eine.
-    src = re.sub(r'\n{2,}', '\n', src)
-    # Whitespace am Zeilenanfang/-ende.
-    src = re.sub(r'[ \t]+\n', '\n', src)
-    src = re.sub(r'\n[ \t]+', '\n', src)
-    return src.strip()
+
+    def tighten_code(code: str) -> str:
+        code = re.sub(rf' *({punct}) *', r'\1', code)
+        code = re.sub(r'\n{2,}', '\n', code)
+        code = re.sub(r'[ \t]+\n', '\n', code)
+        return re.sub(r'\n[ \t]+', '\n', code)
+
+    # Nur Code-Segmente straffen. Die vorherige Regex lief ueber den gesamten
+    # Quelltext und machte aus sichtbaren Meldungen etwa "MOD (…): Datei"
+    # faelschlich "MOD(…):Datei".
+    out = []
+    code_start = 0
+    i = 0
+    while i < len(src):
+        if src[i] not in ('"', "'", '`'):
+            i += 1
+            continue
+        out.append(tighten_code(src[code_start:i]))
+        quote = src[i]
+        string_start = i
+        i += 1
+        while i < len(src):
+            if src[i] == '\\' and i + 1 < len(src):
+                i += 2
+                continue
+            i += 1
+            if src[i - 1] == quote:
+                break
+        out.append(src[string_start:i])
+        code_start = i
+    out.append(tighten_code(src[code_start:]))
+    return ''.join(out).strip()
 
 
 def minify_js(src: str) -> str:

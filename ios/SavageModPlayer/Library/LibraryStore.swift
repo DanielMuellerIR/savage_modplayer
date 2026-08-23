@@ -69,7 +69,7 @@ final class LibraryStore: ObservableObject {
     // Die serielle Schlange ist die eigentliche Absicherung gegen parallele
     // Zugriffe auf `MusicLibrary`: dort laeuft immer nur ein Block.
     private let worker = DispatchQueue(label: "com.viben.SavageModPlayer.library", qos: .utility)
-    private let cancellation = LibraryFlag()
+    private let cancellation = CancellationFlag()
 
     private var library: MusicLibrary?
     private var hasStarted = false
@@ -176,11 +176,17 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    // MARK: - Weg A: Ordner-Import
+    // MARK: - Weg A: Import ausgewaehlter Quellen
 
-    // Importiert die im Dateiauswahl-Blatt gewaehlten Ordner. Laeuft komplett im
-    // Hintergrund; die Oberflaeche sieht nur Fortschritt und Bericht.
-    func importFolders(_ urls: [URL]) {
+    // Importiert Ordner oder einzelne Dateien: aus dem Dateiauswahl-Blatt oder
+    // von "Oeffnen mit". Laeuft komplett im Hintergrund; die Oberflaeche sieht
+    // nur Fortschritt und Bericht.
+    //
+    // `completion` bekommt den Bericht, sobald der Import durch ist — der Weg
+    // ueber "Oeffnen mit" braucht ihn, um den frisch importierten Titel danach
+    // abzuspielen. Laeuft schon ein Vorgang, passiert nichts und die Closure
+    // wird nicht gerufen; der Aufrufer prueft `isBusy` vorher.
+    func importSources(_ urls: [URL], completion: (@MainActor (ImportReport?) -> Void)? = nil) {
         guard !urls.isEmpty, !isBusy else { return }
 
         // Der Zugriff auf ausgewaehlte Ordner wird EINMAL geoeffnet und erst
@@ -229,6 +235,9 @@ final class LibraryStore: ObservableObject {
             self.lastReport = outcome.report
             self.errorMessage = outcome.errorMessage ?? self.errorMessage
             self.endOperation()
+            // Erst nach `apply` und `endOperation`: Der Aufrufer soll die neue
+            // Titelliste schon sehen, wenn er auf den Bericht reagiert.
+            completion?(outcome.report)
         }
     }
 
@@ -322,7 +331,7 @@ final class LibraryStore: ObservableObject {
         // Der Haken wird auf der Arbeitsschlange aufgerufen; `UserDefaults`
         // wird deshalb nicht dort angefasst, sondern hier auf dem MainActor,
         // sobald feststeht, dass der Core den Haken wirklich gezogen hat.
-        let favoritesCleared = LibraryFlag()
+        let favoritesCleared = CancellationFlag()
 
         Task { [weak self] in
             guard let self else { return }

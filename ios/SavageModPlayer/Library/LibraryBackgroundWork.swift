@@ -12,13 +12,15 @@ import SavageModPlayerCore
 
 // MARK: - Schalter fuer zwei Threads
 
-// Ein Ja/Nein-Schalter, den der Haupt-Thread setzt und die Arbeitsschlange
+// Ein Ja/Nein-Schalter, den der Haupt-Thread setzt und eine Arbeitsschlange
 // liest. Genau dafuer sind die Abbruch-Haken des Core gedacht: der Nutzer tippt
 // auf "Abbrechen", der laufende Import sieht das beim naechsten Datei-Schritt.
+// Die Wiedergabe nutzt denselben Schalter, um einen ueberholten Ladeauftrag
+// abzubrechen — deshalb steht "Cancellation" im Namen und nicht "Library".
 //
 // `@unchecked Sendable` ist hier ehrlich verdient: der Zugriff ist mit einem
 // Lock geschuetzt, mehr Zustand als ein Bool gibt es nicht.
-final class LibraryFlag: @unchecked Sendable {
+final class CancellationFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var raised = false
 

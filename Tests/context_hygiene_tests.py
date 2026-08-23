@@ -137,9 +137,22 @@ class ContextHygieneTests(unittest.TestCase):
                        "build_app.sh", "QLPreviewReply(fileURL:)",
                        "Notary-Keychain"):
             self.assertIn(marker, testing)
-        self.assertIn("GUI-Smoke", backlog)
-        self.assertIn("Pxy-Effekt-Memory", backlog)
+        # Der Backlog wird abgearbeitet — einzelne Eintraege als Marke zu
+        # nehmen hiesse, diesen Test bei jedem erledigten Punkt nachzuziehen
+        # (zweimal passiert, 2026-08-23). Geprueft wird deshalb die Struktur:
+        # die drei Abschnitte, der eine Punkt, der sich grundsaetzlich nicht
+        # headless erledigen laesst, und dass der Abschnitt fuer offene Arbeit
+        # ueberhaupt Eintraege hat.
+        for heading in ("## Priorisiert", "## Optionaler Feinschliff", "## Nicht offen"):
+            self.assertIn(heading, backlog)
+        self.assertIn("Gerätetest der iPhone-App", backlog)
         self.assertIn("XM unterstützt lineare und Amiga-Perioden", backlog)
+
+        optional = backlog.split("## Optionaler Feinschliff", 1)[1].split("## Nicht offen", 1)[0]
+        entries = [line for line in optional.splitlines() if line.startswith("- **")]
+        self.assertGreaterEqual(
+            len(entries), 3,
+            "Der Abschnitt fuer optionale Arbeit sieht ausgeraeumt aus: %r" % entries)
 
     def test_no_tracked_text_file_leaks_private_infrastructure(self):
         """Alle getrackten Text-Quellen, nicht nur eine feste Handvoll.

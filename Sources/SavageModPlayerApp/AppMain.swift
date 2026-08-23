@@ -31,6 +31,19 @@ struct SavageModPlayerApp: App {
     @AppStorage("savage.uiZoom") private var uiZoom = 0
 
     init() {
+        #if os(macOS)
+        // AppKit deutet ein positionales Startargument als "diese Datei
+        // oeffnen". Beim so gestarteten Prozess erzeugt SwiftUI sein
+        // Standardfenster nicht — `SavageModPlayer <song.mod>` zeigte deshalb
+        // ueberhaupt kein Fenster, und ohne Fenster konnte auch `.onOpenURL` die
+        // Datei nicht entgegennehmen (belegt 2026-08-23 mit einer synthetischen
+        // .mod: null Fenster nach 15 s, mit dieser Zeile sofort eines).
+        // `register` schreibt nichts auf Platte und wirkt nur in diesem Prozess;
+        // der Wert muss vor dem Start der Ereignisschleife gesetzt sein, also
+        // hier. Den Weg von Finder und Dock ("Oeffnen mit", Doppelklick) beruehrt
+        // das nicht: der laeuft ueber ein Apple-Event, nicht ueber argv.
+        UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": false])
+        #endif
         // Temp-Kopien frueherer App-Laeufe einmalig beim Start aufraeumen.
         // (Innerhalb einer Sitzung bleiben die pro-Drop-Verzeichnisse bestehen,
         // weil die Playlist sie noch referenziert — siehe cleanStaleTempRoot.)

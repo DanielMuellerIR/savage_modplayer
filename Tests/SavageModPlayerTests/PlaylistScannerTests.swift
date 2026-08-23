@@ -53,6 +53,51 @@ final class PlaylistScannerTests: XCTestCase {
         }
     }
 
+    func testCollectEntriesFollowsSymbolicLinksInUserDirectory() throws {
+        let targetDirectory = workDir.appendingPathComponent("Ziel", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: targetDirectory, withIntermediateDirectories: true)
+        let targetFile = targetDirectory.appendingPathComponent("verlinkt.mod")
+        try Data([0x78]).write(to: targetFile)
+
+        let sourceDirectory = workDir.appendingPathComponent("Quelle", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: sourceDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: sourceDirectory.appendingPathComponent("datei.mod"),
+            withDestinationURL: targetFile)
+        try FileManager.default.createSymbolicLink(
+            at: sourceDirectory.appendingPathComponent("Ordner"),
+            withDestinationURL: targetDirectory)
+
+        XCTAssertTrue(PlaylistScanner.directoryContainsPlayableContent(sourceDirectory))
+        let entries = PlaylistScanner.collectEntries(
+            from: [sourceDirectory], tempDir: tempDir)
+
+        XCTAssertEqual(Set(entries.map(\.displayName)), ["datei.mod", "verlinkt.mod"])
+        XCTAssertEqual(entries.first { $0.displayName == "verlinkt.mod" }?.folderPath,
+                       ["Ordner"])
+        let linkedEntry = try XCTUnwrap(entries.first { $0.displayName == "datei.mod" })
+        XCTAssertEqual(try Data(contentsOf: linkedEntry.url), Data([0x78]))
+        XCTAssertNotEqual(
+            try linkedEntry.url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink,
+            true,
+            "die Temp-Kopie muss nach Ende des Security-Scopes eigenstaendig bleiben")
+    }
+
+    func testUserDirectorySymlinkCycleTerminates() throws {
+        let sourceDirectory = workDir.appendingPathComponent("Zyklus", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: sourceDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: sourceDirectory.appendingPathComponent("zurueck"),
+            withDestinationURL: sourceDirectory)
+
+        XCTAssertFalse(PlaylistScanner.directoryContainsPlayableContent(sourceDirectory))
+        XCTAssertTrue(PlaylistScanner.collectEntries(
+            from: [sourceDirectory], tempDir: tempDir).isEmpty)
+    }
+
     // MARK: - Baum & flache Reihenfolge
 
     func testBuildTreeSortsAndFlattenMatchesDisplayOrder() throws {
@@ -202,10 +247,15 @@ final class PlaylistScannerTests: XCTestCase {
     // Playlist-Scanner darf ihnen weder beim Modul-Kopieren noch bei einer
     // vermeintlichen inner.zip folgen, sonst verlaesst er unbemerkt das
     // Entpackverzeichnis des fremden Archivs.
-    func testArchiveSymbolicLinkIsIgnoredWithoutFollowingIt() throws {
+    //
+    // Seit 1.6.10 uebernimmt der eigene Leser auch hier, und der ist strenger
+    // als das frueher genutzte bsdtar: Ein Link macht das GANZE Archiv
+    // ungueltig, statt nur uebersprungen zu werden. Deshalb kommt hier
+    // nichts mehr heraus — auch nicht die harmlose direkt.mod.
+    func testArchiveWithASymbolicLinkIsRejectedAsAWhole() throws {
         try XCTSkipIf(
             PlaylistScanner.bsdtarURL == nil,
-            "bsdtar nicht installiert — Archiv-Symlink nicht pruefbar")
+            "bsdtar nicht installiert — das Testarchiv laesst sich nicht packen")
 
         let external = workDir.appendingPathComponent("Extern", isDirectory: true)
         try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
@@ -222,7 +272,9 @@ final class PlaylistScannerTests: XCTestCase {
 
         let entries = PlaylistScanner.collectEntries(from: [outer], tempDir: tempDir)
 
-        XCTAssertEqual(entries.map(\.displayName), ["direkt.mod"])
-        XCTAssertFalse(entries.contains { $0.displayName == "extern.mod" })
+        XCTAssertTrue(entries.isEmpty,
+                      "ein Archiv mit Link wird ganz abgelehnt, nicht teilweise entpackt")
+        XCTAssertFalse(entries.contains { $0.displayName == "extern.mod" },
+                       "dem Link darf der Scanner unter keinen Umstaenden folgen")
     }
 }

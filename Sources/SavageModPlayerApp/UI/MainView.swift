@@ -55,6 +55,11 @@ struct MainView: View {
     // im Einstellungs-Fenster (SettingsView, gleicher Schluessel).
     @AppStorage("savage.autoplayFolder") var autoplayFolderPath: String = ""
 
+    // Bildrate der Visualisierungen im Vollmodus (Hz). Vorgabe 30 = volle
+    // Optik; heruntergestellt spart sie spuerbar CPU. Gleicher Schluessel wie
+    // im Einstellungs-Fenster.
+    @AppStorage("savage.visualizerHz") var visualizerHz: Double = 30
+
     // Breite der Playlist-Sidebar (ziehbar per Trenn-Handle). Persistiert, damit
     // lange Dateinamen dauerhaft sichtbar bleiben (LIDA-XM-Problem: 260 pt fix war
     // zu schmal, um das Datei-Ende je zu sehen). Geklemmt in sidebarWidthRange.
@@ -406,6 +411,7 @@ struct MainView: View {
                 // Gespeicherte Lautstaerke in den Coordinator spiegeln, damit der
                 // erste play()-Aufruf sie auf den Mixer anwenden kann.
                 coordinator.setVolume(Float(volume))
+                coordinator.visualizerFrameRate = visualizerHz
                 // Datei/Ordner als Startargument (z.B. `SavageModPlayer <song.xm>`
                 // oder Öffnen-mit) hat Vorrang vor dem Autoplay-Ordner: direkt laden
                 // und abspielen — praktisch für headless Tests/CPU-Messungen ohne
@@ -434,6 +440,11 @@ struct MainView: View {
             }
             .onChange(of: coordinator.isPlaying) { isPlaying in
                 isDiskAnimating = isPlaying && !coordinator.isPaused
+            }
+            // Die Bildrate wird im eigenen Einstellungs-Fenster gesetzt. Ohne
+            // diese Zeile wirkte eine Aenderung erst beim naechsten Start.
+            .onChange(of: visualizerHz) { newRate in
+                coordinator.visualizerFrameRate = newRate
             }
             // Pause haelt auch die Disk-Animation an (isPlaying bleibt true).
             .onChange(of: coordinator.isPaused) { isPaused in

@@ -1,10 +1,19 @@
 import Foundation
 
-// Der ganze Reader haengt am Apple-Framework `Compression`. Unter Linux gibt es
-// das nicht — dort steuert diese Datei bewusst nichts bei (der Core baut
-// weiter, und `PlaylistScanner` nutzt dort ohnehin bsdtar).
+// Der Reader braucht einen streamenden DEFLATE-Dekomprimierer. Den liefert auf
+// Apple-Plattformen das Framework `Compression`, unter Linux die zlib des
+// Systems (Modul `CZlib`, siehe Package.swift). Nur wenn beides fehlt, steuert
+// diese Datei nichts bei — dann bleibt es beim externen `bsdtar`.
+//
+// Der Unterschied steckt in genau einer Funktion weiter unten (`inflate`);
+// alles andere — Verzeichnis lesen, Grenzen pruefen, Zip-Slip und Symlinks
+// abweisen, blockweise schreiben — ist plattformneutral.
+#if canImport(Compression) || canImport(CZlib)
 #if canImport(Compression)
 import Compression
+#else
+import CZlib
+#endif
 
 // ZIP-Archive lesen und entpacken — ohne Hilfsprozess, ohne Fremdbibliothek.
 //
@@ -38,6 +47,9 @@ import Compression
 public enum ZipArchiveError: Error, LocalizedError {
     /// Datei laesst sich nicht oeffnen oder lesen.
     case cannotOpenArchive(String)
+    /// Der Pfad zeigt nicht auf eine gewoehnliche Datei (etwa auf eine benannte
+    /// Pipe oder ein Geraet).
+    case notARegularFile(String)
     /// Kein EOCD gefunden — die Datei ist kein ZIP (oder abgeschnitten).
     case notAZipArchive
     /// Struktur passt nicht zusammen (Signatur, Laenge, Offset).
@@ -77,6 +89,8 @@ public enum ZipArchiveError: Error, LocalizedError {
         switch self {
         case .cannotOpenArchive(let name):
             return "Archiv „\(name)“ lässt sich nicht öffnen."
+        case .notARegularFile(let name):
+            return "„\(name)“ ist keine gewöhnliche Datei und wird nicht gelesen."
         case .notAZipArchive:
             return "Datei ist kein ZIP-Archiv (kein End-of-Central-Directory gefunden)."
         case .corruptArchive(let detail):
@@ -444,12 +458,41 @@ public enum ZipArchiveReader {
         var isSupported: Bool { isSupportedMethod && !isEncrypted && !isSymbolicLink }
     }
 
+    /// Oeffnet das Archiv — und stellt zuerst sicher, dass es ueberhaupt eine
+    /// gewoehnliche Datei ist.
+    ///
+    /// Warum der Umweg ueber `open`/`fstat` statt `FileHandle(forReadingFrom:)`:
+    /// Eine benannte Pipe (FIFO) mit der Endung `.zip` laesst `open()`
+    /// blockieren, solange niemand hineinschreibt — ohne Zeitlimit und ohne
+    /// Abbruchmoeglichkeit. Der Bibliotheks-Worker haenge dann fuer immer. Das
+    /// fiel auf, als der Leser 1.6.10 auch auf macOS und Linux zustaendig
+    /// wurde; auf iOS war so ein Pfad praktisch unerreichbar.
+    ///
+    /// `O_NONBLOCK` schon beim Oeffnen verhindert genau dieses Warten, und
+    /// `fstat` auf den offenen Deskriptor prueft danach am selben Objekt statt
+    /// am Pfad — zwischen einer Pfadpruefung und dem Oeffnen liesse sich sonst
+    /// tauschen.
     private static func openForReading(_ archive: URL) throws -> FileHandle {
-        do {
-            return try FileHandle(forReadingFrom: archive)
-        } catch {
+        let descriptor = archive.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return -1 }
+            return open(path, O_RDONLY | O_NONBLOCK)
+        }
+        guard descriptor >= 0 else {
             throw ZipArchiveError.cannotOpenArchive(archive.lastPathComponent)
         }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0 else {
+            close(descriptor)
+            throw ZipArchiveError.cannotOpenArchive(archive.lastPathComponent)
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG else {
+            close(descriptor)
+            throw ZipArchiveError.notARegularFile(archive.lastPathComponent)
+        }
+        // Fuer eine gewoehnliche Datei ist O_NONBLOCK bedeutungslos; zurueck auf
+        // die normalen Flags, damit sich der FileHandle wie ueblich verhaelt.
+        _ = fcntl(descriptor, F_SETFL, 0)
+        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     }
 
     /// Sucht das EOCD, liest das Central Directory am Stueck und zerlegt es.
@@ -796,7 +839,7 @@ public enum ZipArchiveReader {
             // und ein Pool wird ausserhalb einer Ereignisschleife nie von
             // selbst geleert. Gemessen an einem 120-MB-Archiv war das der
             // Unterschied zwischen 122 MB und knapp 10 MB Spitzenverbrauch.
-            try autoreleasepool {
+            try drainingPool {
                 if isCancelled() { throw ZipArchiveError.cancelled }
                 let want = Int(min(Int64(blockSize), remaining))
                 guard let chunk = try handle.read(upToCount: want), !chunk.isEmpty else {
@@ -812,12 +855,36 @@ public enum ZipArchiveReader {
         }
     }
 
-    /// Methode 8: Deflate, gestreamt ueber das Compression-Framework.
+    /// Fuehrt einen Schleifendurchlauf in einem Autorelease-Pool aus — dort, wo
+    /// es einen gibt.
     ///
-    /// Wichtig: Apples `COMPRESSION_ZLIB` ist "raw DEFLATE" nach RFC 1951 —
-    /// also genau das, was ohne zlib-Rahmen in einer ZIP-Datei steht. Es wird
-    /// je ein Eingabe- und ein Ausgabeblock von 64 KiB benutzt; der
-    /// Speicherbedarf haengt damit nicht an der Dateigroesse.
+    /// Auf Apple-Plattformen liefert jeder `read` ein Objekt, das sonst bis zum
+    /// Ende der Schleife liegen bliebe; bei einem grossen Eintrag summierte sich
+    /// das zu genau dem Speicherwachstum, das dieser Leser vermeiden soll.
+    /// Unter Linux gibt es keine Autorelease-Pools und auch das Problem nicht —
+    /// dort laeuft der Block einfach direkt.
+    @inline(__always)
+    private static func drainingPool<T>(_ body: () throws -> T) rethrows -> T {
+        #if canImport(Darwin)
+        return try autoreleasepool { try body() }
+        #else
+        return try body()
+        #endif
+    }
+
+    /// Methode 8: Deflate, gestreamt.
+    ///
+    /// Zwei Fassungen, gleicher Vertrag: Es wird je ein Eingabe- und ein
+    /// Ausgabeblock von 64 KiB benutzt, der Speicherbedarf haengt also nicht an
+    /// der Dateigroesse, und `emit` bekommt jeden fertigen Ausgabeblock samt
+    /// der bis dahin verbrauchten Eingabemenge (die geht in die
+    /// Verhaeltnispruefung gegen Zip-Bomben).
+    ///
+    /// Wichtig in beiden Faellen: In einer ZIP-Datei steht "raw DEFLATE" nach
+    /// RFC 1951, also OHNE zlib-Rahmen. Apples `COMPRESSION_ZLIB` meint genau
+    /// das; bei zlib selbst muss man es mit einem negativen Fenster-Parameter
+    /// ausdruecklich verlangen.
+#if canImport(Compression)
     private static func inflate(
         from handle: FileHandle,
         compressedSize: Int64,
@@ -852,7 +919,7 @@ public enum ZipArchiveReader {
             // Autorelease-Pool je Durchlauf, aus demselben Grund wie in
             // `copyStored`. Der Rueckgabewert sagt, ob der Strom zu Ende ist —
             // aus einem Closure heraus kann die Funktion nicht verlassen werden.
-            let finished = try autoreleasepool { () -> Bool in
+            let finished = try drainingPool { () -> Bool in
                 if isCancelled() { throw ZipArchiveError.cancelled }
 
                 // Nachschub holen, sobald der Eingabeblock leer ist.
@@ -895,6 +962,83 @@ public enum ZipArchiveReader {
             if finished { return }
         }
     }
+#else
+    private static func inflate(
+        from handle: FileHandle,
+        compressedSize: Int64,
+        name: String,
+        emit: (UnsafePointer<UInt8>, Int, Int64) throws -> Void,
+        isCancelled: () -> Bool
+    ) throws {
+        let input = UnsafeMutablePointer<UInt8>.allocate(capacity: blockSize)
+        let output = UnsafeMutablePointer<UInt8>.allocate(capacity: blockSize)
+        defer {
+            input.deallocate()
+            output.deallocate()
+        }
+
+        var stream = z_stream()
+        // Negatives Fenster = raw DEFLATE ohne zlib-Kopf und ohne Pruefsumme —
+        // genau die Form, die in einer ZIP-Datei steht. `inflateInit2` ist ein
+        // C-Makro; aus Swift heraus wird die dahinterliegende Funktion mit
+        // Version und Strukturgroesse gerufen.
+        guard inflateInit2_(&stream, -MAX_WBITS, ZLIB_VERSION,
+                            Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
+            throw ZipArchiveError.decompressionFailed(name)
+        }
+        defer { inflateEnd(&stream) }
+
+        var unreadCompressed = compressedSize   // noch nicht gelesene Archivbytes
+        var fed: Int64 = 0                      // in den Dekomprimierer gegebene Bytes
+        var reachedInputEnd = false
+
+        while true {
+            if isCancelled() { throw ZipArchiveError.cancelled }
+
+            // Nachschub holen, sobald der Eingabeblock leer ist.
+            if stream.avail_in == 0, !reachedInputEnd {
+                let want = Int(min(Int64(blockSize), unreadCompressed))
+                if want > 0, let chunk = try handle.read(upToCount: want), !chunk.isEmpty {
+                    chunk.copyBytes(to: input, count: chunk.count)
+                    stream.next_in = input
+                    stream.avail_in = uInt(chunk.count)
+                    unreadCompressed -= Int64(chunk.count)
+                    fed += Int64(chunk.count)
+                } else {
+                    reachedInputEnd = true
+                }
+            }
+
+            stream.next_out = output
+            stream.avail_out = uInt(blockSize)
+            let status = CZlib.inflate(&stream, Z_NO_FLUSH)
+
+            let producedNow = blockSize - Int(stream.avail_out)
+            if producedNow > 0 {
+                // Verbrauchte Eingabe = eingefuettert minus noch offen.
+                let consumed = fed - Int64(stream.avail_in)
+                try emit(output, producedNow, consumed)
+            }
+
+            switch status {
+            case Z_STREAM_END:
+                return
+            case Z_OK:
+                continue
+            case Z_BUF_ERROR:
+                // Kein Fortschritt moeglich. Solange noch Eingabe nachkommt, ist
+                // das nur ein leerer Durchlauf; ist die Eingabe erschoepft und
+                // der Strom trotzdem nicht zu Ende, ist das Archiv kaputt.
+                if reachedInputEnd && producedNow == 0 {
+                    throw ZipArchiveError.decompressionFailed(name)
+                }
+                continue
+            default:
+                throw ZipArchiveError.decompressionFailed(name)
+            }
+        }
+    }
+#endif
 
     // MARK: - Dateinamen (UTF-8 oder CP437)
 

@@ -1,0 +1,25 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Savage Mod Player
+GenericName=Tracker Module Player
+GenericName[de]=Tracker-Modul-Player
+Comment=Play MOD, S3M, XM and IT modules
+Comment[de]=MOD-, S3M-, XM- und IT-Module abspielen
+# %f statt %F: Der Player nimmt genau eine Datei entgegen. Ein Ordner laeuft
+# ueber `savage-cli --list <ordner> --play` und damit nicht ueber diesen Eintrag.
+Exec=savage-cli %f --play
+# Terminal=true ist hier kein Notbehelf, sondern der Punkt: savage-cli ist ein
+# Kommandozeilenspieler, und seine Tastensteuerung (Leertaste, n, b, q) braucht
+# ein Terminal. Ohne eines laeuft der Titel stumpf durch.
+Terminal=true
+# Icon aus dem Symbolthema statt eines mitgelieferten Bildes: So passt es zu
+# jedem Thema, und das Repo bleibt frei von Bildbeigaben.
+Icon=multimedia-audio-player
+Categories=AudioVideo;Audio;Player;
+Keywords=tracker;module;amiga;protracker;fasttracker;impulse;
+Keywords[de]=Tracker;Modul;Amiga;Protracker;Fasttracker;Impulse;
+# Alle vier Typen sind bereits von freedesktop.org definiert (samt Endungen);
+# der Eintrag meldet sich nur als Anwendung dafuer an, statt sie neu zu erfinden.
+MimeType=audio/x-mod;audio/x-s3m;audio/x-xm;audio/x-it;
+NoDisplay=false

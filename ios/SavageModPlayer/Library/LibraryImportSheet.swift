@@ -70,7 +70,7 @@ struct LibraryImportSheet: View {
                 ) { result in
                     switch result {
                     case .success(let urls):
-                        library.importFolders(urls)
+                        library.importSources(urls)
                     case .failure(let error):
                         library.errorMessage = error.localizedDescription
                     }

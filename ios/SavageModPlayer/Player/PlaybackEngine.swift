@@ -75,6 +75,21 @@ final class PlaybackEngine: ObservableObject {
     private var sceneIsActive = true
     private var visualizerSectionIsVisible = false
 
+    // Eigene Schlange fuer Lesen, Parsen und Dauerprobe eines Moduls. Diese
+    // drei Schritte dauern bei einem grossen IT oder einer Datei aus der Cloud
+    // spuerbar lange; auf dem MainActor friert dabei die Oberflaeche ein und im
+    // schlimmsten Fall greift der Watchdog des Systems ein. `userInitiated`,
+    // weil am anderen Ende meistens ein Fingertipp auf einen Titel steht.
+    private let loader = DispatchQueue(label: "com.viben.SavageModPlayer.moduleLoad", qos: .userInitiated)
+
+    // Der laufende Ladeauftrag und sein Abbruchschalter. Ein neuer Auftrag
+    // ueberholt den alten: Der alte darf danach weder etwas anzeigen noch
+    // abspielen. Wichtig beim Durchtippen von "weiter" — sonst arbeitete die
+    // Schlange zehn Ladeauftraege nacheinander ab, bevor der zuletzt gewaehlte
+    // Titel klingt.
+    private var loadTask: Task<Void, Never>?
+    private var loadCancellation: CancellationFlag?
+
     // MARK: - Aufbau
 
     init(settings: PlayerSettings, library: LibraryStore) {
@@ -204,7 +219,13 @@ final class PlaybackEngine: ObservableObject {
 
     // MARK: - Abspielliste
 
-    func setQueue(_ tracks: [TrackRef]) {
+    // Aus welcher Auswahl die aktuelle Liste stammt. Wird gebraucht, wenn sich
+    // die Bibliothek aendert: Die Liste wird dann aus derselben Auswahl neu
+    // gebildet, statt durch den Gesamtbestand ersetzt zu werden.
+    private(set) var queueFilter = QueueFilter()
+
+    func setQueue(_ tracks: [TrackRef], filter: QueueFilter = QueueFilter()) {
+        queueFilter = filter
         queue = tracks
         // Laeuft gerade etwas, das auch in der neuen Liste steht, behaelt es
         // seinen Platz — sonst spraenge "weiter" unerwartet an den Anfang.
@@ -217,33 +238,70 @@ final class PlaybackEngine: ObservableObject {
         }
     }
 
+    // Die Bibliothek hat sich geaendert: Liste aus derselben Auswahl neu bilden.
+    //
+    // Vorher setzte die Oberflaeche hier stumpf den Gesamtbestand ein. Wer die
+    // Wiedergabe aus einer Suche oder aus den Favoriten gestartet hatte, spielte
+    // danach durch die ganze Sammlung weiter — schon ein einzelner neuer
+    // Favorit reichte dafuer.
+    func refreshQueueFromLibrary() {
+        setQueue(
+            library.filteredTracks(
+                search: queueFilter.search,
+                favoritesOnly: queueFilter.favoritesOnly),
+            filter: queueFilter)
+    }
+
     // MARK: - Titel waehlen
 
     // Laden und sofort abspielen.
     func play(_ track: TrackRef) {
-        start(track, autoPlay: true)
+        replaceLoadTask { engine, cancellation in
+            await engine.start(track, autoPlay: true, cancellation: cancellation)
+        }
     }
 
     // Nur laden, nicht abspielen (z. B. Antippen in der Bibliothek im
     // pausierten Zustand oder das Wiederherstellen der letzten Sitzung).
     func select(_ track: TrackRef) {
-        start(track, autoPlay: false)
+        replaceLoadTask { engine, cancellation in
+            await engine.start(track, autoPlay: false, cancellation: cancellation)
+        }
     }
 
-    private func start(_ track: TrackRef, autoPlay: Bool) {
+    // Startet einen Ladevorgang und macht damit jeden vorherigen ungueltig.
+    // Alle Einstiege ins Laden gehen hier durch, damit es nie zwei gleichzeitig
+    // gueltige Auftraege gibt.
+    private func replaceLoadTask(
+        _ work: @escaping @MainActor (PlaybackEngine, CancellationFlag) async -> Void
+    ) {
+        loadCancellation?.set()
+        loadTask?.cancel()
+        let cancellation = CancellationFlag()
+        loadCancellation = cancellation
+        loadTask = Task { [weak self] in
+            guard let self else { return }
+            await work(self, cancellation)
+        }
+    }
+
+    private func start(_ track: TrackRef, autoPlay: Bool, cancellation: CancellationFlag) async {
         if let index = queue.firstIndex(of: track) {
-            activateTrack(at: index, autoPlay: autoPlay)
+            await activateTrack(at: index, autoPlay: autoPlay, cancellation: cancellation)
             return
         }
         // Der Titel gehoert nicht zur aktuellen Liste (z. B. per "Oeffnen mit"
         // hereingereicht). Dann gibt es kein Weiter/Zurueck, aber abspielen laesst
         // er sich trotzdem.
-        if let message = loadModule(track) {
-            errorMessage = message
+        switch await loadModule(track, cancellation: cancellation) {
+        case .cancelled:
             return
+        case .failed(let message):
+            errorMessage = message
+        case .loaded:
+            currentIndex = -1
+            if autoPlay { play() }
         }
-        currentIndex = -1
-        if autoPlay { play() }
     }
 
     // Einen Titel aus der Liste laden. Laesst er sich nicht laden (kaputte Datei,
@@ -255,22 +313,41 @@ final class PlaybackEngine: ObservableObject {
     // `direction` ist die Suchrichtung fuer das Ueberspringen: Bei "Zurueck"
     // (-1) wird absteigend weitergesucht — sonst spraenge die Rueckwaerts-
     // Navigation ueber eine defekte Datei wieder VORWAERTS zum aktuellen Titel.
-    private func activateTrack(at index: Int, direction: Int = 1, autoPlay: Bool) {
+    private func activateTrack(
+        at index: Int,
+        direction: Int = 1,
+        autoPlay: Bool,
+        cancellation: CancellationFlag
+    ) async {
         guard !queue.isEmpty else { return }
         let step = direction < 0 ? -1 : 1
-        var position = ((index % queue.count) + queue.count) % queue.count
+        var position = index
         var skipped: [String] = []
 
         for _ in 0..<queue.count {
+            // Zwischen zwei Ladeversuchen liegt ein `await`, und die Liste kann
+            // sich in dieser Zeit geaendert haben (die Bibliothek meldet
+            // laufend neue Staende). Deshalb wird die Position bei jedem
+            // Durchgang neu gegen die aktuelle Laenge gefaltet, statt einmal am
+            // Anfang.
+            guard !queue.isEmpty else { return }
+            let count = queue.count
+            position = ((position % count) + count) % count
             let track = queue[position]
-            if loadModule(track) == nil {
+            switch await loadModule(track, cancellation: cancellation) {
+            case .cancelled:
+                // Ein neuerer Auftrag hat uebernommen. Dieser hier darf weder
+                // eine Meldung setzen noch etwas abspielen.
+                return
+            case .loaded:
                 currentIndex = position
                 errorMessage = Self.skipMessage(for: skipped)
                 if autoPlay { play() }
                 return
+            case .failed:
+                skipped.append(track.displayName)
+                position += step
             }
-            skipped.append(track.displayName)
-            position = (((position + step) % queue.count) + queue.count) % queue.count
         }
 
         // Kein einziger Titel liess sich laden.
@@ -290,24 +367,49 @@ final class PlaybackEngine: ObservableObject {
         return "\(skipped.count) Titel liessen sich nicht laden und wurden übersprungen."
     }
 
-    // Modul einlesen und dem Core uebergeben. Rueckgabe: nil bei Erfolg, sonst
-    // ein lesbarer Fehlertext.
-    private func loadModule(_ track: TrackRef) -> String? {
-        let url = track.url
-        // Dateien aus der Dateien-App oder von einem Cloud-Anbieter liegen
-        // ausserhalb des App-Containers; ohne dieses Paar bleibt der Zugriff
-        // verwehrt. Bei Dateien aus der eigenen Bibliothek liefert der Aufruf
-        // schlicht false und das defer tut nichts.
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+    // Wie ein Ladeversuch ausging.
+    private enum LoadOutcome {
+        case loaded
+        case failed(String)
+        // Ein neuerer Ladeauftrag hat uebernommen. Kein Fehler — und vor allem
+        // kein Grund, irgendetwas anzuzeigen oder abzuspielen.
+        case cancelled
+    }
 
-        do {
-            let data = try Data(contentsOf: url)
-            // ModuleLoader erkennt MOD, S3M, XM und IT am Inhalt, nicht an der
-            // Dateiendung — auf Modulsammlungen ist die Endung oft falsch.
-            let mod = try ModuleLoader.parse(data: data)
+    // Das Ergebnis der Hintergrundarbeit. `Sendable`, weil es die Schlange
+    // verlaesst; `Mod` ist ein Wertetyp aus dem Core und selbst `Sendable`.
+    private enum PreparedModule: Sendable {
+        case ready(mod: Mod, duration: Double)
+        case failed(String)
+        case cancelled
+    }
+
+    // Modul einlesen und dem Core uebergeben.
+    //
+    // Lesen, Parsen und Dauerprobe laufen auf der Ladeschlange; nur die
+    // Uebergabe an den Coordinator und die Zustandspflege bleiben auf dem
+    // MainActor. Was der abgebrochene Auftrag dort schon angefangen hatte,
+    // laesst sich nicht mitten im Lesen stoppen — sein Ergebnis wird aber
+    // verworfen, und der naechste Schritt beginnt gar nicht erst.
+    private func loadModule(_ track: TrackRef, cancellation: CancellationFlag) async -> LoadOutcome {
+        let url = track.url
+        let prepared = await onLoader {
+            Self.prepare(url, isCancelled: { cancellation.isSet })
+        }
+        // Zwischen Schlange und MainActor kann der Auftrag ueberholt worden
+        // sein. Ab hier wird Zustand veraendert — also noch einmal pruefen.
+        guard !cancellation.isSet else { return .cancelled }
+
+        switch prepared {
+        case .cancelled:
+            return .cancelled
+        case .failed(let reason):
+            return .failed("„\(track.displayName)“ konnte nicht geladen werden: \(reason)")
+        case .ready(let mod, let duration):
             let fallbackName = (track.displayName as NSString).deletingPathExtension
-            coordinator.setMod(mod, fallbackName: fallbackName)
+            // Die Dauer ist schon gemessen; setMod muss den Sequencer dafuer
+            // nicht noch einmal auf dem MainActor durchtakten.
+            coordinator.setMod(mod, fallbackName: fallbackName, precomputedDuration: duration)
 
             activeFormat = mod.format
             currentTrack = track
@@ -319,9 +421,47 @@ final class PlaybackEngine: ObservableObject {
             settings.lastPlayedPosition = 0
 
             updateNowPlaying(force: true)
-            return nil
+            return .loaded
+        }
+    }
+
+    // Der teure Teil, ausserhalb des MainActor: Datei lesen, parsen, Spieldauer
+    // ermitteln. Zwischen den Schritten wird jeweils geprueft, ob der Auftrag
+    // noch gilt — vor allem vor der Dauerprobe, die den Sequencer einmal
+    // komplett durchtaktet.
+    private nonisolated static func prepare(
+        _ url: URL,
+        isCancelled: () -> Bool
+    ) -> PreparedModule {
+        guard !isCancelled() else { return .cancelled }
+        // Dateien aus der Dateien-App oder von einem Cloud-Anbieter liegen
+        // ausserhalb des App-Containers; ohne dieses Paar bleibt der Zugriff
+        // verwehrt. Bei Dateien aus der eigenen Bibliothek liefert der Aufruf
+        // schlicht false und das defer tut nichts.
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+
+        do {
+            let data = try Data(contentsOf: url)
+            guard !isCancelled() else { return .cancelled }
+            // ModuleLoader erkennt MOD, S3M, XM und IT am Inhalt, nicht an der
+            // Dateiendung — auf Modulsammlungen ist die Endung oft falsch.
+            let mod = try ModuleLoader.parse(data: data)
+            guard !isCancelled() else { return .cancelled }
+            return .ready(mod: mod, duration: RenderEngine.sequencedDuration(of: mod))
         } catch {
-            return "„\(track.displayName)“ konnte nicht geladen werden: \(error.localizedDescription)"
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    // Fuehrt einen Block auf der Ladeschlange aus und wartet auf sein Ergebnis,
+    // ohne den MainActor zu blockieren — dasselbe Muster wie `onWorker` im
+    // Bibliotheks-Teil.
+    private func onLoader<Value: Sendable>(_ work: @escaping @Sendable () -> Value) async -> Value {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Value, Never>) in
+            loader.async {
+                continuation.resume(returning: work())
+            }
         }
     }
 
@@ -384,21 +524,25 @@ final class PlaybackEngine: ObservableObject {
         let wasPlaying = coordinator.isPlaying && !coordinator.isPaused
         let shouldPlay = wasPlaying || automatic
 
+        // Zielindex und Suchrichtung stehen hier fest, noch bevor der
+        // Ladeauftrag laeuft — sonst rechnete er nach dem ersten `await` mit
+        // einer moeglicherweise schon anderen Liste.
+        let target: Int
+        let direction: Int
         if settings.shuffleEnabled {
-            activateTrack(at: randomIndex(excluding: currentIndex), autoPlay: shouldPlay)
-            return
+            target = randomIndex(excluding: currentIndex)
+            direction = 1
+        } else {
+            let next = currentIndex + step
+            // Am Rand der Liste von der anderen Seite weitermachen.
+            target = (next >= 0 && next < queue.count) ? next : (next < 0 ? queue.count - 1 : 0)
+            direction = step
         }
 
-        let target = currentIndex + step
-        if target >= 0 && target < queue.count {
-            activateTrack(at: target, direction: step, autoPlay: shouldPlay)
-            return
+        replaceLoadTask { engine, cancellation in
+            await engine.activateTrack(
+                at: target, direction: direction, autoPlay: shouldPlay, cancellation: cancellation)
         }
-        // Am Rand der Liste von der anderen Seite weitermachen.
-        activateTrack(
-            at: target < 0 ? queue.count - 1 : 0,
-            direction: step,
-            autoPlay: shouldPlay)
     }
 
     // Zufaelliger Titel, aber nie derselbe zweimal hintereinander — solange die
@@ -510,13 +654,18 @@ final class PlaybackEngine: ObservableObject {
         // Position VOR dem Laden merken: loadModule setzt sie fuer einen frisch
         // gewaehlten Titel auf 0 zurueck.
         let savedPosition = settings.lastPlayedPosition
-        activateTrack(at: index, autoPlay: false)
-        guard currentIndex == index else { return }
-        if savedPosition > 0 {
-            coordinator.seek(toPosition: savedPosition)
+        replaceLoadTask { engine, cancellation in
+            await engine.activateTrack(at: index, autoPlay: false, cancellation: cancellation)
+            // Nur weitermachen, wenn genau dieser Titel geladen wurde. Ein
+            // abgebrochener oder uebersprungener Auftrag darf die gespeicherte
+            // Position nicht auf einen anderen Song anwenden.
+            guard !cancellation.isSet, engine.currentIndex == index else { return }
+            if savedPosition > 0 {
+                engine.coordinator.seek(toPosition: savedPosition)
+            }
+            engine.persistPlaybackPosition()
+            engine.updateNowPlaying(force: true)
         }
-        persistPlaybackPosition()
-        updateNowPlaying(force: true)
     }
 
     private func persistPlaybackPosition() {
@@ -660,22 +809,29 @@ final class PlaybackEngine: ObservableObject {
             updateNowPlaying(force: true)
             return
         }
-        if let message = loadModule(track) {
-            errorMessage = message
-            return
-        }
-        // seek(toPosition:row:) merkt sich im gestoppten Zustand das Ziel; der
-        // naechste play()-Aufruf baut die Engine samt Tiefpass dort neu auf.
-        coordinator.seek(toPosition: position, row: row)
-        // Die rekonstruierte Position sofort sichern: loadModule hat sie eben
-        // auf 0 gesetzt, und im pausierten Zustand laeuft kein Heartbeat —
-        // ein App-Neustart nach dem Reset starte sonst faelschlich bei 0.
-        persistPlaybackPosition()
+        replaceLoadTask { engine, cancellation in
+            switch await engine.loadModule(track, cancellation: cancellation) {
+            case .cancelled:
+                return
+            case .failed(let message):
+                engine.errorMessage = message
+                return
+            case .loaded:
+                break
+            }
+            // seek(toPosition:row:) merkt sich im gestoppten Zustand das Ziel; der
+            // naechste play()-Aufruf baut die Engine samt Tiefpass dort neu auf.
+            engine.coordinator.seek(toPosition: position, row: row)
+            // Die rekonstruierte Position sofort sichern: loadModule hat sie eben
+            // auf 0 gesetzt, und im pausierten Zustand laeuft kein Heartbeat —
+            // ein App-Neustart nach dem Reset starte sonst faelschlich bei 0.
+            engine.persistPlaybackPosition()
 
-        if wasPlaying || wasPaused {
-            play()
-            if wasPaused { coordinator.pause() }
+            if wasPlaying || wasPaused {
+                engine.play()
+                if wasPaused { engine.coordinator.pause() }
+            }
+            engine.updateNowPlaying(force: true)
         }
-        updateNowPlaying(force: true)
     }
 }

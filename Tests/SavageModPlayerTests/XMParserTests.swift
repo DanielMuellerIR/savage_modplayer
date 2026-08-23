@@ -245,6 +245,16 @@ final class XMParserTests: XCTestCase {
         XCTAssertEqual(mod.patterns.count, 2)
     }
 
+    func testHeaderSpeedFitsTheSeekSnapshotField() throws {
+        var data = makeXM()
+        data[0x4C] = 0x2C
+        data[0x4D] = 0x01 // 300; der Seek-Snapshot speichert Speed in 8 Bit
+
+        let mod = try XMParser.parse(data: data)
+
+        XCTAssertEqual(mod.initialSpeed, 255)
+    }
+
     func testLinearAndAmigaHeaderModesProduceDistinctAudibleReferenceRenders() throws {
         var linearData = makeXM()
         linearData[0x4A] = 1

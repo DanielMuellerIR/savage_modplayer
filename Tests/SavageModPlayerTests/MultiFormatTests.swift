@@ -111,7 +111,12 @@ final class MultiFormatTests: XCTestCase {
         data[45] = 64
         data[470] = 1
 
-        XCTAssertThrowsError(try ModParser.parse(data: data))
+        XCTAssertThrowsError(try ModParser.parse(data: data)) { error in
+            guard case ModParser.ParserError.truncatedSampleData? =
+                    error as? ModParser.ParserError else {
+                return XCTFail("Expected .truncatedSampleData, got \(error)")
+            }
+        }
     }
 
     func testGarbageWithoutSignatureStillRejected() {
@@ -119,7 +124,12 @@ final class MultiFormatTests: XCTestCase {
         // 15-Sample-Soundtracker durchgehen (Volume-Plausibilitaet reisst).
         var data = Data(repeating: 0xEE, count: 4096)
         data.replaceSubrange(1080..<1084, with: Data("XYZ!".utf8))
-        XCTAssertThrowsError(try ModParser.parse(data: data))
+        XCTAssertThrowsError(try ModParser.parse(data: data)) { error in
+            guard case ModParser.ParserError.invalidSignature("XYZ!")? =
+                    error as? ModParser.ParserError else {
+                return XCTFail("Expected .invalidSignature(\"XYZ!\"), got \(error)")
+            }
+        }
     }
 
     // MARK: - S3M
@@ -249,7 +259,6 @@ final class MultiFormatTests: XCTestCase {
         data[0x65] = data[0x64]
         data[0x64] = data[0x63]
         data[0x63] = data[0x62]
-        data[0x62] = 0
         data[0x60] = 0
         data[0x61] = 255
         data[0x62] = 0
@@ -266,7 +275,6 @@ final class MultiFormatTests: XCTestCase {
         data[0x65] = data[0x64]
         data[0x64] = data[0x63]
         data[0x63] = data[0x62]
-        data[0x62] = 0
         data[0x60] = 0
         data[0x61] = 255
         data[0x62] = 0
@@ -298,7 +306,9 @@ final class MultiFormatTests: XCTestCase {
         var data = makeS3M()
         data.removeLast()
 
-        XCTAssertThrowsError(try S3MParser.parse(data: data))
+        XCTAssertThrowsError(try S3MParser.parse(data: data)) { error in
+            XCTAssertEqual(error as? S3MParser.ParserError, .truncatedSample(1))
+        }
     }
 
     func testS3MStereoSampleRequiresBothDeclaredChannels() {
@@ -306,7 +316,9 @@ final class MultiFormatTests: XCTestCase {
         data[0x8F] = 0x02       // Stereo, 8 Bit: 4 Frames brauchen 8 Bytes
         data.append(contentsOf: [0, 0, 0]) // insgesamt nur 7 Samplebytes
 
-        XCTAssertThrowsError(try S3MParser.parse(data: data))
+        XCTAssertThrowsError(try S3MParser.parse(data: data)) { error in
+            XCTAssertEqual(error as? S3MParser.ParserError, .truncatedSample(1))
+        }
     }
 
     func testS3MRejectsOversizedHeaderTablesBeforeAllocating() {

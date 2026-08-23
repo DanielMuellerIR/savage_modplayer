@@ -325,7 +325,12 @@ final class ModParserTests: XCTestCase {
         data[950] = 1
         data[952] = 0
 
-        XCTAssertThrowsError(try ModParser.parse(data: data))
+        XCTAssertThrowsError(try ModParser.parse(data: data)) { error in
+            guard case ModParser.ParserError.truncatedPatternData? =
+                    error as? ModParser.ParserError else {
+                return XCTFail("Expected .truncatedPatternData, got \(error)")
+            }
+        }
     }
 
     func testDeclaredSampleWindowMustBeComplete() {
@@ -338,7 +343,12 @@ final class ModParserTests: XCTestCase {
         data[950] = 1
         data[952] = 0
 
-        XCTAssertThrowsError(try ModParser.parse(data: data))
+        XCTAssertThrowsError(try ModParser.parse(data: data)) { error in
+            guard case ModParser.ParserError.truncatedSampleData? =
+                    error as? ModParser.ParserError else {
+                return XCTFail("Expected .truncatedSampleData, got \(error)")
+            }
+        }
     }
 
     // Die Playlist im Dateikopf ist physisch 128 Byte lang; dahinter stehen die

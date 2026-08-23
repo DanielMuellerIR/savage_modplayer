@@ -440,9 +440,15 @@ final class LibraryImporterTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: outer.path))
     }
 
-    // bsdtar legt Links an. Der Importer muss sie VOR Endungspruefung und
-    // Rekursion ablehnen; sonst koennte `inner.zip` auf eine externe Datei
-    // zeigen und deren Inhalt in die Bibliothek ziehen.
+    // Ein Link im Archiv koennte auf eine externe Datei zeigen und deren Inhalt
+    // in die Bibliothek ziehen. Er muss deshalb VOR Endungspruefung und
+    // Rekursion abgelehnt werden.
+    //
+    // Seit 1.6.10 greift die Ablehnung frueher: Der eigene Leser weist das
+    // GANZE Archiv ab, sobald ein Eintrag ein Link ist — vorher schrieb bsdtar
+    // den Link erst auf die Platte und der Importer sortierte ihn danach aus.
+    // Beide Meldungen sind hier zugelassen, das Ergebnis zaehlt: extern.mod
+    // kommt nicht in die Bibliothek, das Quellarchiv bleibt liegen.
     func testSymbolicLinkArchiveEntryIsRejectedWithoutFollowingIt() throws {
         try XCTSkipIf(PlaylistScanner.bsdtarURL == nil, "bsdtar nicht installiert")
 
@@ -463,8 +469,12 @@ final class LibraryImporterTests: XCTestCase {
 
         let report = try LibraryImporter(library: library).unpackPendingArchives()
 
-        XCTAssertTrue(report.failures.contains { $0.reason.contains("Symbolischer Link") })
+        XCTAssertTrue(report.failures.contains {
+            $0.reason.contains("Symbolischer Link") || $0.reason.contains("symbolischer Link")
+        }, "erwartet wurde eine Link-Ablehnung, bekommen: \(report.failures.map(\.reason))")
         XCTAssertFalse(report.imported.contains { $0.hasSuffix("extern.mod") })
+        XCTAssertFalse(report.imported.contains { $0.hasSuffix("direkt.mod") },
+                       "das ganze Archiv gilt als abgelehnt, nicht nur der Link")
         XCTAssertTrue(FileManager.default.fileExists(atPath: outer.path))
     }
 
@@ -574,8 +584,11 @@ final class LibraryImporterTests: XCTestCase {
     // Der Trick ist die "Archivdatei": eine benannte Pipe (FIFO). bsdtar
     // blockiert beim Oeffnen, solange niemand hineinschreibt — der Prozess
     // laeuft also garantiert noch, wenn der Abbruch kommt. Mit einem echten
-    // Mini-ZIP waere bsdtar oft schon fertig, und der Test waere ein
+    // Mini-Archiv waere bsdtar oft schon fertig, und der Test waere ein
     // Zufallstreffer.
+    //
+    // Die Endung ist seit 1.6.10 `.7z` und nicht mehr `.zip`: `.zip` uebernimmt
+    // ueberall der eigene Leser, bsdtar ist nur noch fuer `.7z` zustaendig.
     //
     // Dass dieser Test ueberhaupt zurueckkehrt, IST der Beleg: Ohne
     // `terminate()` liefe bsdtar endlos weiter.
@@ -586,7 +599,7 @@ final class LibraryImporterTests: XCTestCase {
 
         let manuell = rootURL.appendingPathComponent("Manuell", isDirectory: true)
         try FileManager.default.createDirectory(at: manuell, withIntermediateDirectories: true)
-        let fifo = manuell.appendingPathComponent("haenger.zip")
+        let fifo = manuell.appendingPathComponent("haenger.7z")
         try XCTSkipIf(mkfifo(fifo.path, 0o644) != 0, "FIFO liess sich nicht anlegen")
 
         let importer = LibraryImporter(library: library)
@@ -605,6 +618,29 @@ final class LibraryImporterTests: XCTestCase {
         XCTAssertGreaterThan(calls, 3, "der Abbruch muss erst in der Warteschleife greifen")
         XCTAssertTrue(FileManager.default.fileExists(atPath: fifo.path),
                       "Nach Abbruch muss das Quellarchiv erhalten bleiben")
+    }
+
+    // Gegenstueck zum Test darueber: Dieselbe Falle mit `.zip` geht jetzt an den
+    // eigenen Leser — und der darf an einer benannten Pipe nicht haengen
+    // bleiben. Er oeffnet mit O_NONBLOCK und weist alles ab, was keine
+    // gewoehnliche Datei ist.
+    //
+    // Dass dieser Test zurueckkehrt, IST der Beleg. Ohne die Pruefung blockiert
+    // schon das `open()`, ohne Zeitlimit und ohne Abbruchmoeglichkeit.
+    func testNamedPipeNamedLikeAZipDoesNotBlockTheReader() throws {
+        let manuell = rootURL.appendingPathComponent("Manuell", isDirectory: true)
+        try FileManager.default.createDirectory(at: manuell, withIntermediateDirectories: true)
+        let fifo = manuell.appendingPathComponent("haenger.zip")
+        try XCTSkipIf(mkfifo(fifo.path, 0o644) != 0, "FIFO liess sich nicht anlegen")
+
+        let importer = LibraryImporter(library: library)
+        let report = try importer.unpackPendingArchives()
+
+        XCTAssertFalse(report.wasCancelled)
+        XCTAssertTrue(report.imported.isEmpty)
+        XCTAssertEqual(report.failures.count, 1, "die Pipe gehoert als Fehlschlag gemeldet")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fifo.path),
+                      "Was nicht gelesen werden konnte, bleibt liegen")
     }
 
     // `mod.collection.zip` ist ein Archiv, keine Amiga-Moduldatei: Die
