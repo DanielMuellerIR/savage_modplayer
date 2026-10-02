@@ -6,6 +6,8 @@ Der Desktop-Tracker zeichnet neue Module neu. Der Webplayer setzt Stimmen beim
 Titelwechsel zurück, erhält endliche Pattern-Loops und navigiert anhand der gewählten
 Datei. Quick Look erneuert Audiocaches nach Updates. Linux-Desktop-Einträge verwenden
 den installierten Programmpfad; die DMG-Bereinigung hängt nur ihr eigenes Volume aus.
+Der DMG-Bau übernimmt den tatsächlichen Mountpunkt und wartet vor dem Einrichten
+des Installationsfensters, bis Finder das Volume erkennt.
 
 Der Referenzvergleich erhält die Stereoenergie und verwirft irreführende
 Zeitverschiebungen mit nur zwei überlappenden Hüllkurvenwerten.

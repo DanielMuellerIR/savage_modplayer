@@ -12,6 +12,7 @@ angeheftetem Notary-Ticket.
 from pathlib import Path
 import importlib.util
 import os
+import plistlib
 import re
 import subprocess
 import tempfile
@@ -62,6 +63,47 @@ def _code_lines(relative):
 
 
 class DmgMountOwnershipTests(unittest.TestCase):
+    def test_mount_reply_controls_copy_destination_and_detached_device(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Path(temporary)
+            script = fixture / "build_dmg.sh"
+            script.write_text((ROOT / "build_dmg.sh").read_text())
+            (fixture / "Savage Mod Player.app").mkdir()
+            mount = fixture / "mounted image 1"
+            mount.mkdir()
+            reply = fixture / "mount.plist"
+            reply.write_bytes(plistlib.dumps({"system-entities": [
+                {"dev-entry": "/dev/disk-test"},
+                {"dev-entry": "/dev/disk-test-s1", "mount-point": str(mount)},
+            ]}))
+            fake_bin = fixture / "bin"
+            fake_bin.mkdir()
+            log = fixture / "hdiutil.log"
+            commands = {
+                "hdiutil": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$HDI_LOG"\n'
+                           'if [ "$1" = attach ]; then cat "$MOUNT_REPLY"; fi\n',
+                "codesign": "#!/bin/sh\nexit 0\n",
+                "sips": "#!/bin/sh\nexit 0\n",
+                "tiffutil": '#!/bin/sh\ntouch build/DmgBackground.tiff\n',
+            }
+            for name, content in commands.items():
+                tool = fake_bin / name
+                tool.write_text(content)
+                tool.chmod(0o755)
+            environment = os.environ.copy()
+            environment.update(PATH=str(fake_bin) + os.pathsep + environment["PATH"],
+                               HDI_LOG=str(log), MOUNT_REPLY=str(reply), SIGN_DMG="0")
+            result = subprocess.run(["bash", str(script), "--no-finder-layout"],
+                                    env=environment, capture_output=True, text=True,
+                                    timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((mount / "Savage Mod Player.app").is_dir())
+            self.assertTrue((mount / "Applications").is_symlink())
+            calls = log.read_text().splitlines()
+            self.assertNotIn("-mountpoint", " ".join(calls))
+            self.assertEqual([line for line in calls if line.startswith("detach ")],
+                             ["detach /dev/disk-test-s1"])
+
     def test_early_failure_does_not_detach_an_existing_volume(self):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = Path(temporary)

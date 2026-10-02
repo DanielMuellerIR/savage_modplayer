@@ -14,7 +14,9 @@ VOL_NAME="Savage Mod Player"
 BUILD_DIR="build"
 RW_DMG="${BUILD_DIR}/dmg_rw.dmg"
 FINAL_DMG="${BUILD_DIR}/${DMG_NAME}.dmg"
-MOUNT_DIR="/Volumes/${VOL_NAME}"
+MOUNT_DIR=""
+MOUNT_DEVICE=""
+MOUNT_INFO="${BUILD_DIR}/dmg_mount.plist"
 MOUNTED=0
 NOTARIZE=0
 FINDER_LAYOUT=1
@@ -65,10 +67,11 @@ done
 
 cleanup() {
     if [[ "$MOUNTED" == "1" ]]; then
-        hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1 || hdiutil detach -force "$MOUNT_DIR" >/dev/null 2>&1 || true
+        hdiutil detach "$MOUNT_DEVICE" >/dev/null 2>&1 || hdiutil detach -force "$MOUNT_DEVICE" >/dev/null 2>&1 || true
     fi
     rm -f "$RW_DMG" "${BUILD_DIR}/DmgBg_1x.png" "${BUILD_DIR}/DmgBg_2x.png" "${BUILD_DIR}/DmgBackground.tiff"
     rm -rf "${BUILD_DIR}/dmg_temp"
+    rm -f "$MOUNT_INFO"
 }
 trap cleanup EXIT
 
@@ -98,7 +101,11 @@ tiffutil -cathidpicheck "${BUILD_DIR}/DmgBg_1x.png" "${BUILD_DIR}/DmgBg_2x.png" 
 hdiutil create -size 80m -fs HFS+ -volname "${VOL_NAME}" -ov "$RW_DMG"
 
 echo "=== Mounting DMG ==="
-hdiutil attach -readwrite -noverify -noautoopen -mountpoint "$MOUNT_DIR" "$RW_DMG"
+# Ein erzwungener Mountpunkt kann für Finder zunächst unsichtbar bleiben.
+# Gerät und tatsächlichen Pfad deshalb aus der eigenen Mount-Antwort übernehmen.
+hdiutil attach -readwrite -noverify -noautoopen -plist "$RW_DMG" > "$MOUNT_INFO"
+MOUNT_DEVICE="$(python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); print(next(e["dev-entry"] for e in p["system-entities"] if "mount-point" in e))' "$MOUNT_INFO")"
+MOUNT_DIR="$(python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); print(next(e["mount-point"] for e in p["system-entities"] if "mount-point" in e))' "$MOUNT_INFO")"
 MOUNTED=1
 
 echo "=== Copying files to DMG ==="
@@ -112,7 +119,12 @@ if [[ "$FINDER_LAYOUT" == "1" ]]; then
     echo "=== Configuring DMG layout with AppleScript ==="
     osascript <<EOF
 tell application "Finder"
-    tell disk "${VOL_NAME}"
+    repeat 40 times
+        if exists disk "${MOUNT_DIR##*/}" then exit repeat
+        delay 0.25
+    end repeat
+    if not (exists disk "${MOUNT_DIR##*/}") then error "Finder erkennt das eingehängte DMG nicht."
+    tell disk "${MOUNT_DIR##*/}"
         open
         set current view of container window to icon view
         set toolbar visible of container window to false
@@ -147,7 +159,7 @@ fi
 
 echo "=== Unmounting DMG ==="
 sleep 2
-hdiutil detach "$MOUNT_DIR" || hdiutil detach -force "$MOUNT_DIR"
+hdiutil detach "$MOUNT_DEVICE" || hdiutil detach -force "$MOUNT_DEVICE"
 MOUNTED=0
 
 echo "=== Converting DMG to read-only ==="

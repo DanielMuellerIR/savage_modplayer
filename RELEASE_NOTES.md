@@ -5,6 +5,8 @@ The desktop tracker refreshes when changing modules. The web player resets voice
 between tracks, preserves finite pattern loops and uses the selected file for playlist
 navigation. Quick Look refreshes cached audio after upgrades. Linux desktop entries
 use the installed executable path, and DMG cleanup only detaches its own mount.
+The DMG builder reads the actual mount location and waits for Finder before setting
+the installation layout.
 
 The reference comparison retains stereo energy and rejects misleading lag matches
 with only two overlapping envelope values.
