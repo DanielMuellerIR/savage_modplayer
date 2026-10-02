@@ -60,6 +60,10 @@ struct RootView: View {
                     // Beim ersten Erscheinen: gespeicherten Index anzeigen und im
                     // Hintergrund mit dem Dateisystem abgleichen.
                     model.library.start()
+                    // Falls der Bestand schon steht, bevor diese Ansicht
+                    // ueberhaupt zuhoert: Der Melder unten liefert nur
+                    // Aenderungen, keinen Startwert.
+                    libraryDidChange(tracks: model.library.tracks)
                 }
                 .onChange(of: scenePhase) { _, phase in
                     // Zurueck aus dem Hintergrund: was inzwischen ueber den Finder
@@ -70,16 +74,26 @@ struct RootView: View {
                 // onReceive statt @ObservedObject: die Bibliothek wird hier NICHT
                 // beobachtet. Diese Zeile reagiert nur auf eine neue Titelliste und
                 // zeichnet dabei nichts neu.
-                .onReceive(model.library.$tracks) { tracks in
-                    // Die Wiedergabe bildet ihre Liste aus der Auswahl neu, aus der
-                    // sie gestartet wurde — Suche oder Favoriten bleiben erhalten.
-                    model.player.refreshQueueFromLibrary()
-                    guard !didRestoreSession, !tracks.isEmpty else { return }
-                    didRestoreSession = true
-                    // Der zuletzt gespielte Titel ist danach ausgewaehlt — er
-                    // spielt aber nicht von selbst los.
-                    model.player.restoreSession()
+                //
+                // `tracksDidChange` und nicht `$tracks`: Ein @Published-Strom
+                // meldet in `willSet`, die Bibliothek liefert dann also noch
+                // ihren alten Bestand. Genau daran ist die
+                // Sitzungswiederherstellung gescheitert.
+                .onReceive(model.library.tracksDidChange) { tracks in
+                    libraryDidChange(tracks: tracks)
                 }
+        }
+
+        // Der Bestand hat sich geaendert — oder stand beim Erscheinen schon da.
+        private func libraryDidChange(tracks: [TrackRef]) {
+            // Die Wiedergabe bildet ihre Liste aus der Auswahl neu, aus der
+            // sie gestartet wurde — Suche oder Favoriten bleiben erhalten.
+            model.player.refreshQueueFromLibrary()
+            guard !didRestoreSession, !tracks.isEmpty else { return }
+            didRestoreSession = true
+            // Der zuletzt gespielte Titel ist danach ausgewaehlt — er
+            // spielt aber nicht von selbst los.
+            model.player.restoreSession()
         }
 
         @ViewBuilder

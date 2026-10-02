@@ -81,6 +81,7 @@ final class PlaybackEngine: ObservableObject {
     // schlimmsten Fall greift der Watchdog des Systems ein. `userInitiated`,
     // weil am anderen Ende meistens ein Fingertipp auf einen Titel steht.
     private let loader = DispatchQueue(label: "com.viben.SavageModPlayer.moduleLoad", qos: .userInitiated)
+    private let readModule: @Sendable (URL) throws -> Data
 
     // Der laufende Ladeauftrag und sein Abbruchschalter. Ein neuer Auftrag
     // ueberholt den alten: Der alte darf danach weder etwas anzeigen noch
@@ -92,35 +93,43 @@ final class PlaybackEngine: ObservableObject {
 
     // MARK: - Aufbau
 
-    init(settings: PlayerSettings, library: LibraryStore) {
+    init(settings: PlayerSettings, library: LibraryStore,
+         readModule: @escaping @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) }) {
         self.settings = settings
         self.library = library
+        self.readModule = readModule
 
         configureSession()
         configureRemoteControl()
         observeCoordinator()
         observeSettings()
+        library.favoritesDidChange
+            .sink { [weak self] in self?.refreshQueueFromLibrary() }
+            .store(in: &cancellables)
         applySettings()
     }
 
     private func configureSession() {
         session.onEvent = { [weak self] event in
-            guard let self else { return }
-            switch event {
-            case .interruptionBegan:
-                self.handleInterruptionBegan()
-            case .interruptionEnded(let shouldResume):
-                self.handleInterruptionEnded(shouldResume: shouldResume)
-            case .outputDeviceLost:
-                self.handleOutputDeviceLost()
-            case .mediaServicesWereReset:
-                self.rebuildAfterMediaServicesReset()
-            }
+            self?.handleAudioSessionEvent(event)
         }
         // Kategorie und Puffergroesse jetzt setzen, die Session aber erst beim
         // ersten Play aktivieren — sonst wuerde schon der App-Start die Musik
         // einer anderen App abwuergen.
         session.prepare()
+    }
+
+    func handleAudioSessionEvent(_ event: AudioSessionController.Event) {
+        switch event {
+        case .interruptionBegan:
+            handleInterruptionBegan()
+        case .interruptionEnded(let shouldResume):
+            handleInterruptionEnded(shouldResume: shouldResume)
+        case .outputDeviceLost:
+            handleOutputDeviceLost()
+        case .mediaServicesWereReset:
+            rebuildAfterMediaServicesReset()
+        }
     }
 
     private func configureRemoteControl() {
@@ -275,14 +284,23 @@ final class PlaybackEngine: ObservableObject {
     private func replaceLoadTask(
         _ work: @escaping @MainActor (PlaybackEngine, CancellationFlag) async -> Void
     ) {
-        loadCancellation?.set()
-        loadTask?.cancel()
+        cancelPendingLoad()
         let cancellation = CancellationFlag()
         loadCancellation = cancellation
         loadTask = Task { [weak self] in
             guard let self else { return }
             await work(self, cancellation)
         }
+    }
+
+    // Macht einen noch wartenden oder auf der Ladeschlange laufenden Auftrag
+    // ungueltig. `Task.cancel()` allein reicht nicht: Die DispatchQueue-Arbeit
+    // ist kein Kind-Task und liest deshalb den threadsicheren Schalter.
+    private func cancelPendingLoad() {
+        loadCancellation?.set()
+        loadCancellation = nil
+        loadTask?.cancel()
+        loadTask = nil
     }
 
     private func start(_ track: TrackRef, autoPlay: Bool, cancellation: CancellationFlag) async {
@@ -340,7 +358,7 @@ final class PlaybackEngine: ObservableObject {
                 // eine Meldung setzen noch etwas abspielen.
                 return
             case .loaded:
-                currentIndex = position
+                currentIndex = queue.firstIndex(where: { $0.relativePath == track.relativePath }) ?? -1
                 errorMessage = Self.skipMessage(for: skipped)
                 if autoPlay { play() }
                 return
@@ -393,8 +411,9 @@ final class PlaybackEngine: ObservableObject {
     // verworfen, und der naechste Schritt beginnt gar nicht erst.
     private func loadModule(_ track: TrackRef, cancellation: CancellationFlag) async -> LoadOutcome {
         let url = track.url
+        let readModule = self.readModule
         let prepared = await onLoader {
-            Self.prepare(url, isCancelled: { cancellation.isSet })
+            Self.prepare(url, readModule: readModule, isCancelled: { cancellation.isSet })
         }
         // Zwischen Schlange und MainActor kann der Auftrag ueberholt worden
         // sein. Ab hier wird Zustand veraendert — also noch einmal pruefen.
@@ -431,6 +450,7 @@ final class PlaybackEngine: ObservableObject {
     // komplett durchtaktet.
     private nonisolated static func prepare(
         _ url: URL,
+        readModule: (URL) throws -> Data,
         isCancelled: () -> Bool
     ) -> PreparedModule {
         guard !isCancelled() else { return .cancelled }
@@ -442,7 +462,7 @@ final class PlaybackEngine: ObservableObject {
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
 
         do {
-            let data = try Data(contentsOf: url)
+            let data = try readModule(url)
             guard !isCancelled() else { return .cancelled }
             // ModuleLoader erkennt MOD, S3M, XM und IT am Inhalt, nicht an der
             // Dateiendung — auf Modulsammlungen ist die Endung oft falsch.
@@ -490,6 +510,7 @@ final class PlaybackEngine: ObservableObject {
     }
 
     func pause() {
+        cancelPendingLoad()
         pausedByInterruption = false
         coordinator.pause()
         persistPlaybackPosition()
@@ -497,6 +518,9 @@ final class PlaybackEngine: ObservableObject {
     }
 
     func stop() {
+        // Stop bedeutet auch: Ein eben angetippter, noch ladender Titel darf
+        // nicht nach diesem Aufruf verspaetet die Wiedergabe starten.
+        cancelPendingLoad()
         pausedByInterruption = false
         coordinator.stop()
         persistPlaybackPosition()
@@ -659,7 +683,7 @@ final class PlaybackEngine: ObservableObject {
             // Nur weitermachen, wenn genau dieser Titel geladen wurde. Ein
             // abgebrochener oder uebersprungener Auftrag darf die gespeicherte
             // Position nicht auf einen anderen Song anwenden.
-            guard !cancellation.isSet, engine.currentIndex == index else { return }
+            guard !cancellation.isSet, engine.currentTrack?.relativePath == path else { return }
             if savedPosition > 0 {
                 engine.coordinator.seek(toPosition: savedPosition)
             }
@@ -749,6 +773,7 @@ final class PlaybackEngine: ObservableObject {
     // MARK: - Systemereignisse
 
     private func handleInterruptionBegan() {
+        cancelPendingLoad()
         // Anruf, Wecker, Siri: iOS hat die Engine bereits angehalten. Wir ziehen
         // den eigenen Zustand nach und merken uns, dass WIR nicht schuld sind —
         // nur dann darf spaeter automatisch fortgesetzt werden.
@@ -774,12 +799,13 @@ final class PlaybackEngine: ObservableObject {
     }
 
     private func handleOutputDeviceLost() {
+        cancelPendingLoad()
+        pausedByInterruption = false
         // Kopfhoerer abgezogen. Hier wird bewusst NICHT gemerkt, dass wir
         // pausiert haben: die Musik darf spaeter nicht von selbst wieder
         // losbrechen, schon gar nicht ueber den Lautsprecher.
         guard coordinator.isPlaying, !coordinator.isPaused else { return }
         coordinator.pause()
-        pausedByInterruption = false
         persistPlaybackPosition()
         updateNowPlaying(force: true)
     }

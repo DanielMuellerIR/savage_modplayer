@@ -45,36 +45,28 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
     // Die BPM-/Speed-Stepper in der UI schreiben in diese beiden Properties.
     // Damit eine Aenderung auch wirklich die laufende Wiedergabe beeinflusst,
-    // muss sie an den Echtzeit-Zustand (`playbackState`) durchgereicht werden —
-    // sonst liest der Render-Block weiter die alten `state.bpm`/`state.ticksPerRow`
-    // und die Stepper waeren wirkungslos (sie wuerden ausserdem beim naechsten
-    // VU-Poll wieder vom Render-Zustand ueberschrieben).
+    // legt der MainActor einen atomaren Auftrag fuer den Renderblock ab. Nur der
+    // Audiothread schreibt danach `state.bpm` und `state.ticksPerRow`; ein
+    // Stepper kann deshalb nicht mehr parallel in den Sequencer-Zustand greifen.
     // Beim Veröffentlichen eines Seek-Ziels werden die UI-Werte sofort
     // nachgezogen. Dieser Schalter verhindert, dass ihre didSet-Hooks dabei
     // denselben Zustand doch wieder ausserhalb des Audiothreads verändern.
     private var suppressRealtimeParameterWriteback = false
+    private var pendingBPMSequence: UInt64?
+    private var pendingSpeedSequence: UInt64?
 
     @Published public var bpm = 125 {
         didSet {
-            // Nur durchschreiben, wenn der Wert tatsaechlich von der UI kommt.
-            // Der VU-Poller setzt `bpm` selbst aus `state.bpm` — in dem Fall sind
-            // beide Werte schon gleich und wir sparen uns die Neuberechnung.
             guard !suppressRealtimeParameterWriteback,
-                  let state = playbackState, state.bpm != bpm, bpm > 0 else { return }
-            state.bpm = bpm
-            // Tick-Laenge in Output-Frames neu bestimmen (gleiche Formel wie play()/seek()).
-            let sampleRate = audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
-            SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
+                  let state = playbackState, bpm > 0 else { return }
+            pendingBPMSequence = state.requestBPM(bpm)
         }
     }
     @Published public var speed = 6 {
         didSet {
-            // Analog zu `bpm`: Speed = Ticks pro Zeile an den Echtzeit-Zustand geben.
             guard !suppressRealtimeParameterWriteback,
-                  let state = playbackState, state.ticksPerRow != speed, speed > 0 else { return }
-            state.ticksPerRow = speed
-            let sampleRate = audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
-            SequencerCore.recalculateTickDuration(state: state, sampleRate: sampleRate)
+                  let state = playbackState, speed > 0 else { return }
+            pendingSpeedSequence = state.requestTicksPerRow(speed)
         }
     }
     @Published public var trackName = "Kein Song geladen"
@@ -146,18 +138,25 @@ public final class ModPlayerCoordinator: ObservableObject {
     // New parameters for user controls
     @Published public var stereoSeparation: Float = 0.8 {
         didSet {
-            playbackState?.stereoSeparation = stereoSeparation
+            requestRenderOptions()
         }
     }
     @Published public var useInterpolation: Bool = true {
         didSet {
-            playbackState?.useInterpolation = useInterpolation
+            requestRenderOptions()
         }
     }
     @Published public var palClock: Bool = true {
         didSet {
-            playbackState?.palClock = palClock
+            requestRenderOptions()
         }
+    }
+
+    private func requestRenderOptions() {
+        playbackState?.requestRenderOptions(
+            stereoSeparation: stereoSeparation,
+            useInterpolation: useInterpolation,
+            palClock: palClock)
     }
     
 
@@ -198,36 +197,15 @@ public final class ModPlayerCoordinator: ObservableObject {
     // ARC-managed state captured by the AVAudioSourceNode closure
     private var playbackState: RealtimePlaybackState?
     
-    // Raw pointers for atomic visual synchronization (preallocated, thread-safe, lock-free)
-    nonisolated(unsafe) private let peakLevelsPointer: UnsafeMutablePointer<Float>
-    nonisolated(unsafe) private let masterWavesPointer: UnsafeMutablePointer<Float>
-    nonisolated(unsafe) private let channelWavesPointer: UnsafeMutablePointer<Float>
+    // Vorallozierte Dreifachpuffer trennen den schreibenden Audiothread vom
+    // lesenden MainActor. Der Renderblock waehlt den freien Slot lockfrei.
+    private let visualizationExchange = RealtimeVisualizationExchange(
+        channelCapacity: RenderEngine.maxChannels)
     
     // Timer for VU meter visual updates
     private var vuUpdateTimer: Timer?
     
-    public init() {
-        // Puffer immer für die Maximal-Kanalzahl anlegen: so bleibt der
-        // Echtzeit-Pfad allokationsfrei, egal wie viele Kanäle ein Modul hat.
-        self.peakLevelsPointer = UnsafeMutablePointer<Float>.allocate(capacity: RenderEngine.maxChannels)
-        for i in 0..<RenderEngine.maxChannels {
-            self.peakLevelsPointer[i] = 0.0
-        }
-        self.masterWavesPointer = UnsafeMutablePointer<Float>.allocate(capacity: 128)
-        for i in 0..<128 {
-            self.masterWavesPointer[i] = 0.0
-        }
-        self.channelWavesPointer = UnsafeMutablePointer<Float>.allocate(capacity: RenderEngine.maxChannels * 32) // je Kanal 32 Samples
-        for i in 0..<(RenderEngine.maxChannels * 32) {
-            self.channelWavesPointer[i] = 0.0
-        }
-    }
-    
-    deinit {
-        peakLevelsPointer.deallocate()
-        masterWavesPointer.deallocate()
-        channelWavesPointer.deallocate()
-    }
+    public init() {}
     
     // fallbackName: Anzeigename (i. d. R. der Dateiname), der genutzt wird, wenn
     // das Modul selbst keinen brauchbaren Titel im Header traegt. Viele Module —
@@ -394,8 +372,8 @@ public final class ModPlayerCoordinator: ObservableObject {
         self.playbackState = state
         
         let dspChannels = channels
-        let vuBuffer = RealtimeVUBuffer(pointer: peakLevelsPointer)
-        let waveBuffer = RealtimeWaveBuffer(channelWaves: channelWavesPointer, masterWaves: masterWavesPointer)
+        let vuBuffer = visualizationExchange.makeVUBuffer()
+        let waveBuffer = visualizationExchange.makeWaveBuffer()
         
         let renderBlock = RenderEngine.createRenderBlock(
             state: state,
@@ -464,6 +442,8 @@ public final class ModPlayerCoordinator: ObservableObject {
         self.playbackState = nil
         pendingSeekSequence = nil
         pendingSeekTransport = nil
+        pendingBPMSequence = nil
+        pendingSpeedSequence = nil
 
         for ch in channels {
             ch.reset()
@@ -768,18 +748,45 @@ public final class ModPlayerCoordinator: ObservableObject {
         // self), damit dieser 30-Hz-Tick nur die Scope-/VU-/Zeit-Subviews neu rendert.
         let vis = self.visualizerState
         let count = min(channelCount, RenderEngine.maxChannels)
+        var rawPeaks = [Float](repeating: 0, count: count)
+        var newWaves = visualizersVisible
+            ? (0..<count).map { _ in [Float](repeating: 0.0, count: 32) }
+            : []
+        var newMasterOsc = visualizersVisible
+            ? [Float](repeating: 0.0, count: 128)
+            : []
+        let hasFreshSnapshot = visualizationExchange.withLatestSnapshot(channelCount: count) {
+            peaks, waves, master in
+            for channel in 0..<count {
+                rawPeaks[channel] = peaks[channel]
+            }
+            if visualizersVisible {
+                for channel in 0..<count {
+                    for sample in 0..<32 {
+                        newWaves[channel][sample] = waves[channel * 32 + sample]
+                    }
+                }
+                for sample in 0..<128 {
+                    newMasterOsc[sample] = master[sample]
+                }
+            }
+        }
+        // Wellenformen duerfen bis zum naechsten Audioblock stehenbleiben. Ein
+        // Peak ist dagegen ein Ereignis dieses Blocks: Den gleichen Snapshot
+        // mehrfach als neue Attacke anzuwenden verfälscht den VU-Ausschlag.
+        if !hasFreshSnapshot {
+            rawPeaks = [Float](repeating: 0, count: count)
+        }
+
         var newLevels = [Float](repeating: 0, count: count)
         for i in 0..<count {
-            let rawPeak = self.peakLevelsPointer[i]
+            let rawPeak = rawPeaks[i]
             let prev = i < vis.vuLevels.count ? vis.vuLevels[i] : 0
             let attack: Float = 0.35
             let release: Float = 0.08
 
             let factor = rawPeak > prev ? attack : release
             newLevels[i] = prev + (rawPeak - prev) * factor
-
-            // Reset raw peak in the C-pointer
-            self.peakLevelsPointer[i] = 0.0
         }
         vis.vuLevels = newLevels
 
@@ -789,20 +796,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         // der View-Hierarchie entfernt — dann sparen wir diesen CPU-Posten komplett.
         // VU-Pegel (oben, billig), Spielzeit und Songende laufen weiter.
         if visualizersVisible {
-            // Update true channel waveforms from channelWavesPointer
-            var newWaves = (0..<count).map { _ in [Float](repeating: 0.0, count: 32) }
-            for i in 0..<count {
-                for j in 0..<32 {
-                    newWaves[i][j] = self.channelWavesPointer[i * 32 + j]
-                }
-            }
             vis.channelWaveforms = newWaves
-
-            // Update true master oscilloscope samples from masterWavesPointer
-            var newMasterOsc = [Float](repeating: 0.0, count: 128)
-            for j in 0..<128 {
-                newMasterOsc[j] = self.masterWavesPointer[j]
-            }
             vis.masterSamples = newMasterOsc
         }
 
@@ -841,6 +835,18 @@ public final class ModPlayerCoordinator: ObservableObject {
             self.songEndPulse &+= 1
         }
 
+        if let sequence = pendingBPMSequence,
+           state.isBPMRequestApplied(sequence) {
+            pendingBPMSequence = nil
+        }
+        if let sequence = pendingSpeedSequence,
+           state.isTicksPerRowRequestApplied(sequence) {
+            pendingSpeedSequence = nil
+        }
+        // Die Ack-Acquire-Lesevorgaenge oben stehen bewusst VOR dem Transport:
+        // Der Audiothread veroeffentlicht erst diesen Snapshot und danach die
+        // Bestaetigung. So kann ein bestaetigter Auftrag nie mit dem alten
+        // Transportstand in die UI zurueckgespiegelt werden.
         let transport = state.transportSnapshot
         suppressRealtimeParameterWriteback = true
         defer { suppressRealtimeParameterWriteback = false }
@@ -848,8 +854,12 @@ public final class ModPlayerCoordinator: ObservableObject {
             self.currentPosition = transport.position
         }
         if self.currentRow != transport.row { self.currentRow = transport.row }
-        if self.bpm != transport.bpm { self.bpm = transport.bpm }
-        if self.speed != transport.ticksPerRow { self.speed = transport.ticksPerRow }
+        if pendingBPMSequence == nil, self.bpm != transport.bpm {
+            self.bpm = transport.bpm
+        }
+        if pendingSpeedSequence == nil, self.speed != transport.ticksPerRow {
+            self.speed = transport.ticksPerRow
+        }
     }
     
     private func startVUUpdates() {
@@ -1195,8 +1205,9 @@ public final class ModPlayerCoordinator: ObservableObject {
         let sampleRate = mod.format == .it
             ? Double(smp.itProperties?.c5Speed ?? smp.c2spd)
             : 22050.0
-        guard let monoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
-            throw NSError(domain: "ModPlayer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Konnte Mono-Format nicht erstellen"])
+        let channelCount: AVAudioChannelCount = smp.rightPCM == nil ? 1 : 2
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channelCount) else {
+            throw NSError(domain: "ModPlayer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Konnte Sample-Format nicht erstellen"])
         }
         
         // Ziel-Datei ggf. entfernen, damit AVAudioFile sauber neu schreiben kann.
@@ -1210,17 +1221,19 @@ public final class ModPlayerCoordinator: ObservableObject {
         } catch {
             print("WAV-Export: konnte bestehende Datei nicht entfernen: \(error.localizedDescription)")
         }
-        let audioFile = try AVAudioFile(forWriting: destinationURL, settings: monoFormat.settings)
+        let audioFile = try AVAudioFile(forWriting: destinationURL, settings: format.settings)
         
-        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: UInt32(pcm.count)) else {
+        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: UInt32(pcm.count)) else {
             throw NSError(domain: "ModPlayer", code: 2, userInfo: [NSLocalizedDescriptionKey: "Konnte Buffer nicht erstellen"])
         }
 
         pcmBuffer.frameLength = UInt32(pcm.count)
-        if let channelData = pcmBuffer.floatChannelData?[0] {
-            // PCM ist bereits normalisiert (Float-Engine) — direkt schreiben.
+        if let channelData = pcmBuffer.floatChannelData {
             for i in 0..<pcm.count {
-                channelData[i] = pcm[i]
+                channelData[0][i] = pcm[i]
+                if let right = smp.rightPCM {
+                    channelData[1][i] = i < right.count ? right[i] : 0
+                }
             }
         }
         

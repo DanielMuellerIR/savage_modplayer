@@ -189,6 +189,8 @@ export class ModPlayer {
   constructor() {
     this.mod = null;
     this.playing = false;
+    this.playRevision = 0;
+    this.loadRevision = 0;
     this.audio = null;
     this.gain = null;
     this.worklet = null;
@@ -210,12 +212,15 @@ export class ModPlayer {
   async load(url, workletUrl = 'mod-player-worklet.js') {
     this.unload();
     this.workletUrl = workletUrl;
-    this.mod = await loadMod(url);
+    const revision = this.loadRevision;
+    const mod = await loadMod(url);
+    if (revision === this.loadRevision) this.mod = mod;
   }
 
   // Setzt ein bereits geparstes Mod direkt (für File-Upload).
   setMod(mod, workletUrl = 'mod-player-worklet.js') {
     this.stop();
+    ++this.loadRevision;
     this.workletUrl = workletUrl;
     this.mod = mod;
   }
@@ -261,7 +266,7 @@ export class ModPlayer {
     } catch (_) {}
 
     this.gain = ctx.createGain();
-    this.gain.gain.value = this.volume;
+    this.gain.gain.value = this.volume * this.volume;
 
     const absoluteWorkletUrl = new URL(this.workletUrl, window.location.href).href;
     if (!ctx.__workletAdded) {
@@ -293,7 +298,7 @@ export class ModPlayer {
   onMessage(event) {
     const { data } = event;
     if (data.type === 'row') {
-      for (const cb of this.rowCallbacks) cb(data.position, data.rowIndex, data.bpm, data.speed);
+      for (const cb of this.rowCallbacks) cb(data.position, data.rowIndex, data.bpm, data.speed, data.songEnded);
       const key = data.position + ':' + data.rowIndex;
       if (key in this.singleCallbacks) {
         for (const cb of this.singleCallbacks[key]) cb();
@@ -340,6 +345,7 @@ export class ModPlayer {
   }
 
   unload() {
+    ++this.loadRevision;
     this.stop();
     if (this.worklet) {
       try { this.worklet.disconnect(); } catch (_) {}
@@ -383,20 +389,25 @@ export class ModPlayer {
   }
 
   async play() {
-    if (this.playing) return;
+    if (this.playing) return true;
+    if (!this.mod) return false;
+    const revision = ++this.playRevision;
     await this.setupAudio();
-    if (!this.worklet) return;
+    if (!this.worklet || revision !== this.playRevision) return false;
     this.resumeContext();
     await this.tryResumeContext(500);
+    if (revision !== this.playRevision) return false;
     this.worklet.port.postMessage({
       type: 'play',
       mod: this.mod,
       sampleRate: this.audio.sampleRate
     });
     this.playing = true;
+    return true;
   }
 
   stop() {
+    ++this.playRevision;
     if (this.worklet) {
       this.worklet.port.postMessage({ type: 'stop' });
     }

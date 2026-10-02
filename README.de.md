@@ -81,6 +81,7 @@ Falls keine Vorschau erscheint:
 - **Ordner-Import**: Einen Ordner auswählen, und alles Spielbare darin wird mitsamt Struktur in die Bibliothek kopiert. ZIP-Archive werden ausgepackt, Doppelte übersprungen, der Fortschritt angezeigt, und der Import lässt sich abbrechen. Verschachtelte Archive teilen sich eine Sicherheitsgrenze für Bytes, Einträge und Archivzahl; Links werden abgelehnt, und bei unvollständiger Übernahme bleibt die Quelle erhalten. Dateien aus einem Cloud-Dateianbieter werden zuvor geladen und koordiniert gelesen.
 - **Finder-Dateifreigabe**: iPhone anschließen, im Finder „Dateien" öffnen und ganze Ordner oder ZIP-Archive auf die App ziehen; dieselbe Bibliothek erscheint in der iOS-Dateien-App unter „Auf meinem iPhone". Der Index wird bei jedem Start mit dem Dateisystem abgeglichen, ZIPs werden automatisch ausgepackt.
 - **Visualisierungen nach Sichtbarkeit**: nach unten scrollen, und Master-Oszilloskop, VU-Meter sowie Kanal-Oszilloskope starten sofort; wegscrollen, Tab wechseln oder Bildschirm sperren, und Views wie Wellenform-Caches werden freigegeben. Bis zu 32 Kanal-Oszilloskope stehen lesbar in vier Spalten auf dem iPhone beziehungsweise acht auf breiten Layouts.
+- **iPad**: Auf breiten Bildschirmen steht die Bibliothek links und die laufende Wiedergabe rechts. Master- und Kanal-Oszilloskope wachsen in die freie Höhe der Wiedergabespalte. Module und ZIP-Archive lassen sich aus der Dateien-App direkt in die Bibliothek ziehen — sie werden übernommen und Archive ausgepackt, ohne die laufende Wiedergabe zu unterbrechen. Mit angeschlossener Tastatur schaltet die Leertaste zwischen Abspielen und Pause, Cmd+← und Cmd+→ wechseln den Titel, Cmd+Umschalt+← und Cmd+Umschalt+→ springen zehn Sekunden. Während das Suchfeld aktiv ist, tippt die Leertaste ein Leerzeichen. Alle Kürzel erscheinen beim Halten von Cmd.
 - **Erscheinungsbild**: verwendet dieselbe ruhige Blau-/Cyan-/Graphit-Palette und dasselbe App-Icon wie die Mac-App. Es folgt dem System und lässt sich fest auf hell oder dunkel stellen. Deutsch und Englisch.
 
 ---
@@ -140,6 +141,10 @@ Kompatibilitätsmeldungen entstehen aus einer Capability-Analyse. `cwtv` identif
 - Veraltete OpenMPT-Bugemulationen für Swing vor 1.17, die abgelöste alte Pattern-Loop-/Jump-Regel, ungenauen historischen Ping-Pong-Überschuss und proprietäre Envelope-Release-Knoten werden nicht emuliert. Nur die tatsächliche Nutzung erzeugt eine merkmalsspezifische Warnung.
 - Erweiterte IT-Patterns mit 1 bis 1.024 Zeilen und bis zu 240 Patterns werden akzeptiert. Gelöschte Pattern-Referenzen in der Order-Liste werden wie in OpenMPT übersprungen.
 
+Pro IT-Modul gelten Grenzen von 33.554.432 dekodierten PCM-Werten (beide
+Stereokanäle zusammen) und 4.194.304 expandierten Pattern-Zellen. Größere Dateien
+werden vor der entsprechenden Pufferallokation abgelehnt.
+
 ### Architektur
 
 | Schicht | macOS und iOS (Swift) | HTML5-Bonusplayer |
@@ -158,7 +163,7 @@ Kompatibilitätsmeldungen entstehen aus einer Capability-Analyse. `cwtv` identif
 ### macOS App
 
 ```bash
-bash build_app.sh                 # → "Savage Mod Player.app" (inkl. Quick-Look-Appex)
+./build.sh                        # → "Savage Mod Player.app" (inkl. Quick-Look-Appex; Wrapper auf build_app.sh)
 ```
 
 `build_app.sh` kompiliert neben der App auch die Quick-Look-Extension

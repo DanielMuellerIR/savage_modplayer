@@ -7,6 +7,31 @@ final class ITParserTests: XCTestCase {
         let packed: [UInt8]
     }
 
+    func testAliasedExtendedPatternsCannotExceedTheGridBudget() {
+        var data = makeIT(patterns: [PatternSpec?](repeating: nil, count: 240))
+        let offset = data.count
+        data.append(contentsOf: [0, 4, 0, 4, 0, 0, 0, 0])
+        data.append(Data(repeating: 0, count: 1_024))
+        for index in 0..<240 {
+            setDword(offset, at: 0xC2 + index * 4, in: &data)
+        }
+        XCTAssertThrowsError(try ITParser.parse(data: data)) {
+            XCTAssertEqual($0 as? ITParser.ParserError, .resourceLimitExceeded("Pattern"))
+        }
+    }
+
+    func testPositionJumpsPastTheOrderListPreserveTheEndTransition() throws {
+        for (orders, target) in [([UInt8](arrayLiteral: 0, 1, 255), 2), ([0, 1, 255], 255), ([0, 1, 254], 2)] {
+            let packed = patternData(rows: 32, populatedRows: [[0x81, 0x08, 2, UInt8(target)]])
+            let mod = try ITParser.parse(data: makeIT(
+                orders: orders, patterns: [PatternSpec(rows: 32, packed: packed), nil]))
+            XCTAssertEqual(mod.patterns[0].rows[0].notes[0].effectData, mod.length)
+            let wav = try ModuleRenderer.renderWavData(
+                mod: mod, sampleRate: 8_000, maxDurationSeconds: 1, normalize: false)
+            XCTAssertEqual(wav.count, 44 + 960 * 4)
+        }
+    }
+
     func testHeaderOrdersChannelStateAndCompatibilityProfile() throws {
         var pannings = [UInt8](repeating: 32, count: 64)
         pannings[0] = 0

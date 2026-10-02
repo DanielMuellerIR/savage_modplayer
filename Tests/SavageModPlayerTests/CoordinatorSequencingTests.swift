@@ -268,6 +268,32 @@ final class CoordinatorSequencingTests: XCTestCase {
 
         coordinator.stop()
     }
+
+    /// Die Bedienelemente schreiben vom MainActor, waehrend CoreAudio den
+    /// Renderblock ausfuehrt. Der Test ist vor allem fuer Thread Sanitizer
+    /// gedacht: Einstellungen und Mute/Solo muessen ueber lockfreie
+    /// Uebergaben laufen, nie ueber gemeinsam gelesene Swift-Variablen.
+    @MainActor
+    func testRealtimeControlsCanChangeDuringPlayback() async throws {
+        let mod = try ModParser.parse(data: makeMod(effectId: 0, effectData: 0))
+        let coordinator = ModPlayerCoordinator()
+        coordinator.setMod(mod)
+        coordinator.play()
+        XCTAssertTrue(coordinator.isPlaying)
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        for value in 0..<500 {
+            coordinator.stereoSeparation = Float(value % 101) / 100
+            coordinator.useInterpolation.toggle()
+            coordinator.palClock.toggle()
+            coordinator.toggleMute(channelIndex: value % 4)
+            coordinator.toggleSolo(channelIndex: (value + 1) % 4)
+            if value % 25 == 0 { await Task.yield() }
+        }
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+        coordinator.stop()
+    }
 #endif
 
     // Braucht die AVAudioEngine-gebundene Live-Klasse — entfällt unter Linux.
@@ -499,6 +525,133 @@ final class CoordinatorSequencingTests: XCTestCase {
         withExtendedLifetime(hold) {}
     }
 
+    /// UI-Tempo und Sequencer-Zustand gehoeren verschiedenen Threads. Der
+    /// MainActor legt deshalb nur einen vollstaendigen Auftrag ab; erst der
+    /// Renderblock uebernimmt beide Werte und berechnet die Ticklaenge neu.
+    func testTempoRequestMutatesStateOnlyInsideRenderBlock() {
+        let mod = ModParser.generateDemoMod()
+        let sampleRate = 48_000.0
+        let (block, state, hold) = makeBlockAndState(
+            mod: mod,
+            sampleRate: sampleRate)
+        let buffer = StereoRenderBuffer(capacity: 1)
+        let oldOutputsPerTick = state.outputsPerTick
+
+        state.requestTempo(ticksPerRow: 4, bpm: 150)
+
+        XCTAssertEqual(state.ticksPerRow, 6, "der Producer legt nur einen Auftrag ab")
+        XCTAssertEqual(state.bpm, 125, "der Producer darf den Sequencer nicht selbst aendern")
+        XCTAssertEqual(state.outputsPerTick, oldOutputsPerTick)
+
+        block(1, buffer.left, buffer.right)
+
+        XCTAssertEqual(state.ticksPerRow, 4)
+        XCTAssertEqual(state.bpm, 150)
+        XCTAssertEqual(
+            state.outputsPerTick,
+            SequencerCore.outputsPerTick(
+                tempoMode: state.tempoMode,
+                bpm: 150,
+                ticksPerRow: 4,
+                rowsPerBeat: state.rowsPerBeat,
+                sampleRate: sampleRate),
+            accuracy: 0.000_001)
+        XCTAssertNil(state.takePendingTempo(), "der Auftrag gilt genau einmal")
+        withExtendedLifetime(hold) {}
+    }
+
+    /// Zwei schnell aufeinanderfolgende Stepper-Aenderungen duerfen nur ihr
+    /// eigenes Feld tragen. Insbesondere darf ein BPM-Auftrag, den der
+    /// Audiothread schon abgeholt hat, nicht durch einen danach geschriebenen
+    /// Speed-Auftrag mit einem alten UI-BPM wiederholt werden.
+    func testTempoFieldsRemainIndependentAcrossAudioAcknowledgement() throws {
+        let state = RealtimePlaybackState()
+
+        let bpmSequence = state.requestBPM(140)
+        let bpmRequest = try XCTUnwrap(state.takePendingTempo())
+        XCTAssertEqual(bpmRequest.bpm, 140)
+        XCTAssertNil(bpmRequest.ticksPerRow)
+
+        let speedSequence = state.requestTicksPerRow(4)
+        state.markTempoApplied(bpmRequest)
+
+        XCTAssertTrue(state.isBPMRequestApplied(bpmSequence))
+        XCTAssertFalse(state.isTicksPerRowRequestApplied(speedSequence))
+        let speedRequest = try XCTUnwrap(state.takePendingTempo())
+        XCTAssertEqual(speedRequest.ticksPerRow, 4)
+        XCTAssertNil(speedRequest.bpm,
+                     "Speed darf keinen inzwischen bestaetigten BPM-Wert wiederholen")
+    }
+
+    func testRenderOptionsMutateStateOnlyInsideRenderBlock() {
+        let mod = ModParser.generateDemoMod()
+        let (block, state, hold) = makeBlockAndState(mod: mod)
+        let buffer = StereoRenderBuffer(capacity: 1)
+
+        state.requestRenderOptions(
+            stereoSeparation: 0,
+            useInterpolation: false,
+            palClock: false)
+
+        XCTAssertEqual(state.stereoSeparation, 0.8)
+        XCTAssertTrue(state.useInterpolation)
+        XCTAssertTrue(state.palClock)
+
+        block(1, buffer.left, buffer.right)
+
+        XCTAssertEqual(state.stereoSeparation, 0)
+        XCTAssertFalse(state.useInterpolation)
+        XCTAssertFalse(state.palClock)
+        XCTAssertNil(state.takePendingRenderOptions(), "der Auftrag gilt genau einmal")
+        withExtendedLifetime(hold) {}
+    }
+
+    func testSeekSupersedesOlderTempoRequest() throws {
+        let state = RealtimePlaybackState()
+        state.requestTempo(ticksPerRow: 4, bpm: 140)
+
+        state.requestSeek(
+            position: 1,
+            row: 3,
+            ticksPerRow: 8,
+            bpm: 150,
+            globalVolume: 32,
+            elapsedFrames: 9_000)
+
+        XCTAssertNil(state.takePendingTempo())
+        let seek = try XCTUnwrap(state.takePendingSeek())
+        XCTAssertEqual(seek.ticksPerRow, 8)
+        XCTAssertEqual(seek.bpm, 150)
+
+        state.requestTempo(ticksPerRow: 7, bpm: 180)
+        let newerTempo = try XCTUnwrap(state.takePendingTempo())
+        XCTAssertEqual(newerTempo.ticksPerRow, 7)
+        XCTAssertEqual(newerTempo.bpm, 180)
+    }
+
+    /// Ein Seek invalidiert auch einen Tempoauftrag, waehrend der Audiothread
+    /// noch einen aelteren Auftrag aus demselben Kanal verarbeitet. Dessen
+    /// spaete Bestaetigung darf die Seek-Grenze nicht wieder zuruecksetzen.
+    func testLateTempoAcknowledgementCannotReviveRequestInvalidatedBySeek() throws {
+        let state = RealtimePlaybackState()
+        state.requestBPM(140)
+        let inFlight = try XCTUnwrap(state.takePendingTempo())
+        let invalidatedSequence = state.requestBPM(150)
+
+        state.requestSeek(
+            position: 1,
+            row: 3,
+            ticksPerRow: 8,
+            bpm: 160,
+            globalVolume: 32,
+            elapsedFrames: 9_000)
+        state.markTempoApplied(inFlight)
+
+        XCTAssertTrue(state.isBPMRequestApplied(invalidatedSequence))
+        XCTAssertNil(state.takePendingTempo(),
+                     "spaete Alt-Bestaetigung darf keinen Vor-Seek-Auftrag wiederbeleben")
+    }
+
     func testSeekMutatesSequencerAndChannelsOnlyInsideRenderBlock() {
         let mod = makeTraceMod()
         let channels = RenderEngine.makeRenderChannels(for: mod)
@@ -676,6 +829,98 @@ final class CoordinatorSequencingTests: XCTestCase {
         XCTAssertEqual(state.pendingElapsedFrames, .max)
     }
 
+    /// Der Producer rotiert schneller durch die drei Slots als die UI lesen
+    /// kann. Jeder beanspruchte Snapshot muss trotzdem aus genau einem
+    /// vollstaendig veroeffentlichten Audioblock stammen.
+    func testVisualizationExchangeStressNeverMixesPublishedBlocks() {
+        let channelCount = 4
+        let exchange = RealtimeVisualizationExchange(
+            channelCapacity: channelCount)
+        let vu = exchange.makeVUBuffer()
+        let wave = exchange.makeWaveBuffer()
+        let lastValue = 10_000
+        let mismatch = LockFreeAtomicUInt64(.max)
+        let producerDone = LockFreeAtomicUInt64(0)
+        let producer = expectation(description: "visualization producer")
+        let consumer = expectation(description: "visualization consumer")
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            for value in 1...lastValue {
+                let marker = Float(value)
+                exchange.beginRenderBlock(channelCount: channelCount)
+                for channel in 0..<channelCount {
+                    vu.pointer[channel] = marker
+                }
+                for sample in 0..<(channelCount * 32) {
+                    wave.channelWavesPointer[sample] = marker
+                }
+                for sample in 0..<128 {
+                    wave.masterWavesPointer[sample] = marker
+                }
+                exchange.publish(channelCount: channelCount)
+            }
+            producerDone.storeRelease(1)
+            producer.fulfill()
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            repeat {
+                exchange.withLatestSnapshot(channelCount: channelCount) {
+                    peaks, waves, master in
+                    let marker = peaks[0]
+                    guard marker != 0 else { return }
+                    for channel in 0..<channelCount where peaks[channel] != marker {
+                        mismatch.storeRelaxed(UInt64(marker))
+                        return
+                    }
+                    for sample in 0..<(channelCount * 32) where waves[sample] != marker {
+                        mismatch.storeRelaxed(UInt64(marker))
+                        return
+                    }
+                    for sample in 0..<128 where master[sample] != marker {
+                        mismatch.storeRelaxed(UInt64(marker))
+                        return
+                    }
+                }
+            } while producerDone.loadAcquire() == 0
+                && mismatch.loadRelaxed() == .max
+            consumer.fulfill()
+        }
+
+        wait(for: [producer, consumer], timeout: 10)
+        XCTAssertEqual(mismatch.loadRelaxed(), .max)
+    }
+
+    /// Peaks gehoeren genau zu einem Audioblock. Ein schneller UI-Poller darf
+    /// denselben veroeffentlichten Slot zwar fuer stehende Wellenformen erneut
+    /// lesen, muss ihn aber als bereits konsumiert erkennen.
+    func testVisualizationSnapshotIsFreshExactlyOncePerPublishedBlock() {
+        let exchange = RealtimeVisualizationExchange(channelCapacity: 1)
+        let vu = exchange.makeVUBuffer()
+        let wave = exchange.makeWaveBuffer()
+        vu.pointer[0] = 0.75
+        wave.channelWavesPointer[0] = 0.25
+        wave.masterWavesPointer[0] = -0.5
+        exchange.publish(channelCount: 1)
+
+        var observedPeak: Float = 0
+        XCTAssertTrue(exchange.withLatestSnapshot(channelCount: 1) {
+            peaks, _, _ in observedPeak = peaks[0]
+        })
+        XCTAssertEqual(observedPeak, 0.75)
+
+        var repeatedWave: Float = 0
+        XCTAssertFalse(exchange.withLatestSnapshot(channelCount: 1) {
+            _, waves, _ in repeatedWave = waves[0]
+        })
+        XCTAssertEqual(repeatedWave, 0.25,
+                       "stehende Scope-Daten bleiben weiterhin lesbar")
+
+        exchange.beginRenderBlock(channelCount: 1)
+        vu.pointer[0] = 0.5
+        exchange.publish(channelCount: 1)
+        XCTAssertTrue(exchange.withLatestSnapshot(channelCount: 1) { _, _, _ in })
+    }
+
     /// Der Endtransition-Snapshot wird komplett geschrieben, bevor das
     /// atomare Signal sichtbar wird. Der Leser nimmt Frame/Position/Zeile vor
     /// dem Freigeben des Slots auf; dadurch kann kein gemischtes Wertepaar aus
@@ -722,6 +967,26 @@ final class CoordinatorSequencingTests: XCTestCase {
     /// setzt dort noch die Zielzeile. Genau dieses Ziel muss der Renderzustand
     /// festhalten, sonst setzt der Track-Loop die Anzeige-Uhr auf einen anderen
     /// Punkt als den, an dem wirklich weitergespielt wird.
+    func testPositionJumpToCurrentOrderKeepsTheCombinedBreakRow() {
+        let empty = Note(instrument: 0, period: 0, effectId: 0, effectData: 0)
+        let pattern = Pattern(rows: [
+            Row(notes: [Note(instrument: 0, period: 0, effectId: 0x0B, effectData: 0),
+                        Note(instrument: 0, period: 0, effectId: 0x0D, effectData: 2), empty, empty]),
+            Row(notes: [Note](repeating: empty, count: 4)),
+            Row(notes: [Note](repeating: empty, count: 4))
+        ])
+        let mod = Mod(name: "same-order", length: 2, patternTable: [0, 1],
+                      instruments: [nil], patterns: [pattern, pattern], channelCount: 4)
+        let (block, state, hold) = makeBlockAndState(mod: mod, sampleRate: 8_000)
+        let buffer = StereoRenderBuffer(capacity: 961)
+        block(961, buffer.left, buffer.right)
+        XCTAssertEqual(state.position, 0)
+        XCTAssertEqual(state.rowIndex, 2)
+        XCTAssertEqual(state.endReachedPosition, 0)
+        XCTAssertEqual(state.endReachedRow, 2)
+        withExtendedLifetime(hold) {}
+    }
+
     func testBackwardPositionJumpRecordsItsOwnTargetAsLoopPoint() {
         let empty = Note(instrument: 0, period: 0, effectId: 0, effectData: 0)
         func effect(_ id: Int, _ data: Int) -> Note {
@@ -766,6 +1031,48 @@ final class CoordinatorSequencingTests: XCTestCase {
                 transitionFrame: 100_000,
                 renderedFrame: 101_470),
             5_470)
+    }
+
+    func testMuteSoloAtomicStressAllowsConcurrentRenderReads() {
+        let voice = DSPChannel(index: 1)
+        let pattern = ITPatternChannelState(channelVolume: 64)
+        let readerReady = LockFreeAtomicUInt64(0)
+        let producerDone = LockFreeAtomicUInt64(0)
+        let observed = LockFreeAtomicUInt64(.max)
+        let producer = expectation(description: "mute writer")
+        let consumer = expectation(description: "mute reader")
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            while readerReady.loadAcquire() == 0 {}
+            for value in 0..<20_000 {
+                let muted = value.isMultiple(of: 2)
+                let soloed = value.isMultiple(of: 3)
+                voice.isMuted = muted
+                voice.isSoloed = soloed
+                pattern.isMuted = muted
+                pattern.isSoloed = soloed
+            }
+            producerDone.storeRelease(1)
+            producer.fulfill()
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            readerReady.storeRelease(1)
+            repeat {
+                let bits = (voice.isMuted ? UInt64(1) : 0)
+                    | (voice.isSoloed ? UInt64(2) : 0)
+                    | (pattern.isMuted ? UInt64(4) : 0)
+                    | (pattern.isSoloed ? UInt64(8) : 0)
+                observed.storeRelaxed(bits)
+            } while producerDone.loadAcquire() == 0
+            consumer.fulfill()
+        }
+
+        wait(for: [producer, consumer], timeout: 10)
+        XCTAssertNotEqual(observed.loadRelaxed(), .max)
+        XCTAssertFalse(voice.isMuted)
+        XCTAssertFalse(voice.isSoloed)
+        XCTAssertFalse(pattern.isMuted)
+        XCTAssertFalse(pattern.isSoloed)
     }
 
     // Mute und Solo liegen bei IT am logischen Pattern-Kanal, bei allen anderen

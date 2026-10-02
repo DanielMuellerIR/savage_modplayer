@@ -91,6 +91,8 @@ struct FileProviderReader: Sendable {
     static func read(
         _ url: URL,
         isCancelled: @escaping @Sendable () -> Bool,
+        coordinationStallTimeout: TimeInterval = stallTimeout,
+        coordinationPollInterval: TimeInterval = pollInterval,
         body: (URL) throws -> Void
     ) throws {
         try awaitLocalCopy(of: url, isCancelled: isCancelled)
@@ -98,6 +100,7 @@ struct FileProviderReader: Sendable {
 
         var coordinationError: NSError?
         var thrownInside: Error?
+        var coordinationOutcome: CoordinationWatchdog.Outcome?
         let coordinator = NSFileCoordinator(filePresenter: nil)
 
         // Die Koordination selbst hat kein Zeitlimit. Bei einem fremden File
@@ -111,8 +114,8 @@ struct FileProviderReader: Sendable {
         //
         let cancellable = CancellableCoordinator(coordinator: coordinator)
         let watchdog = CoordinationWatchdog(
-            stallTimeout: stallTimeout,
-            pollInterval: pollInterval,
+            stallTimeout: coordinationStallTimeout,
+            pollInterval: coordinationPollInterval,
             isCancelled: isCancelled,
             progress: { downloadedSize(of: url) },
             abort: { cancellable.cancel() }
@@ -129,6 +132,15 @@ struct FileProviderReader: Sendable {
                 options: [.withoutChanges],
                 error: &coordinationError
             ) { readableURL in
+                // Ab hier hat der Provider den Zugriff gewaehrt. Der Waechter
+                // darf nicht auch noch Hashen, Kopieren oder Entpacken mit der
+                // Koordinationsfrist belegen: Ein grosser lokaler Import kann
+                // laenger als 60 Sekunden dauern, ohne dass der Provider
+                // haengt. Hat der Waechter gerade noch abgebrochen, wird der
+                // Leseblock nicht mehr begonnen.
+                let outcome = watchdog.finish()
+                coordinationOutcome = outcome
+                guard outcome == .none else { return }
                 do {
                     try escapableBody(readableURL)
                 } catch {
@@ -136,11 +148,18 @@ struct FileProviderReader: Sendable {
                 }
             }
         }
-        let watchdogOutcome = watchdog.finish()
+        // Bei einem Koordinationsfehler wird der Zugriffsblock gar nicht
+        // aufgerufen; dann endet der Waechter erst hier.
+        let watchdogOutcome = coordinationOutcome ?? watchdog.finish()
 
         // Ein Fehler aus dem Leseblock selbst zaehlt zuerst: Er sagt mehr als
         // "abgebrochen".
         if let thrownInside { throw thrownInside }
+        // Der Waechter endet absichtlich VOR dem potentiell langen Hash-/Kopier-
+        // Block. Ein Nutzerabbruch waehrend dieses Blocks muss danach trotzdem
+        // als Abbruch beim Importer ankommen, statt einen erfolgreichen Bericht
+        // fuer einen bereits abgebrochenen Vorgang zu erzeugen.
+        if isCancelled() { throw ReadCancelled() }
         switch watchdogOutcome {
         case .cancelled:
             throw ReadCancelled()

@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import UIKit
 @testable import SavageModPlayer
 
 // Belegt den sichtbarkeitsgesteuerten Visualizer der App: Der schnelle Takt
@@ -128,10 +129,34 @@ final class ScenePhaseVisualizerTests: XCTestCase {
     // mit je vier Scopes; ein breites Layout verwendet vier Zeilen zu acht.
     func testThirtyTwoScopesUseFourPhoneOrEightWideColumns() {
         XCTAssertEqual(
-            ChannelScopesView.height(channelCount: 32, availableWidth: 351),
+            ChannelScopesView.height(channelCount: 32, availableWidth: NowPlayingView.visualizerWidth(viewportWidth: 391)),
             600)
         XCTAssertEqual(
-            ChannelScopesView.height(channelCount: 32, availableWidth: 700),
+            ChannelScopesView.height(channelCount: 32, availableWidth: NowPlayingView.visualizerWidth(viewportWidth: 1024)),
             296)
     }
+    func testScopesRenderAtPlaybackColumnWidth() async throws {
+        for viewportWidth: CGFloat in [391, 1024] {
+            let width = NowPlayingView.visualizerWidth(viewportWidth: viewportWidth)
+            let scopes = ChannelScopesView(
+                visualizer: model.player.coordinator.visualizerState,
+                channelIndices: Array(0..<32), frameRate: 30, availableWidth: width)
+            let host = UIHostingController(rootView: scopes
+                .padding(.horizontal, 20)
+                .frame(maxWidth: NowPlayingView.contentMaximumWidth)
+                .frame(maxWidth: .infinity))
+            host.view.frame = CGRect(x: 0, y: 0, width: viewportWidth, height: 650)
+            host.view.backgroundColor = .black
+            host.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            let image = UIGraphicsImageRenderer(size: host.view.bounds.size).image { _ in
+                host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "channel-scopes-\(Int(viewportWidth))"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
 }

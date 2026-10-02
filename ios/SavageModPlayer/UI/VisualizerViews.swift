@@ -31,6 +31,7 @@ struct MasterScopeView: View {
     // Bewusst `let` statt @ObservedObject: siehe Kopfkommentar.
     let visualizer: VisualizerState
     let frameRate: Int
+    var height: CGFloat = 64
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1.0 / Double(max(1, frameRate)))) { _ in
@@ -46,7 +47,7 @@ struct MasterScopeView: View {
                 context.stroke(path, with: .color(.accentColor), lineWidth: 1.5)
             }
         }
-        .frame(height: 64)
+        .frame(height: height)
         .background(Color.playerSurface, in: RoundedRectangle(cornerRadius: 10))
         .overlay {
             RoundedRectangle(cornerRadius: 10)
@@ -72,6 +73,7 @@ struct ChannelScopesView: View {
     let channelIndices: [Int]
     let frameRate: Int
     let availableWidth: CGFloat
+    var minimumHeight: CGFloat = 0
 
     private static let columnSpacing: CGFloat = 8
     private static let rowSpacing: CGFloat = 8
@@ -94,13 +96,15 @@ struct ChannelScopesView: View {
                 let vuWidth = min(10, max(3, columnWidth * 0.22))
                 let innerGap: CGFloat = columnWidth > 20 ? 3 : 1
                 let scopeWidth = max(1, columnWidth - vuWidth - innerGap)
-                let plotHeight = Self.rowHeight - 14
+                let rows = Int(ceil(Double(count) / Double(columns)))
+                let rowHeight = (size.height - Self.rowSpacing * CGFloat(max(0, rows - 1))) / CGFloat(rows)
+                let plotHeight = rowHeight - 14
 
                 for (offset, channel) in channelIndices.enumerated() {
                     let column = offset % columns
                     let row = offset / columns
                     let originX = CGFloat(column) * (columnWidth + Self.columnSpacing)
-                    let originY = CGFloat(row) * (Self.rowHeight + Self.rowSpacing)
+                    let originY = CGFloat(row) * (rowHeight + Self.rowSpacing)
 
                     // VU-Meter: acht Segmente, von unten gefuellt.
                     let level = channel < levels.count ? levels[channel] : 0
@@ -133,7 +137,7 @@ struct ChannelScopesView: View {
                             .foregroundStyle(.secondary))
                     context.draw(
                         label,
-                        at: CGPoint(x: originX, y: originY + Self.rowHeight),
+                        at: CGPoint(x: originX, y: originY + rowHeight),
                         anchor: .bottomLeading)
 
                     guard channel < waves.count else { continue }
@@ -153,9 +157,9 @@ struct ChannelScopesView: View {
                 }
             }
         }
-        .frame(height: Self.height(
+        .frame(height: max(minimumHeight, Self.height(
             channelCount: channelIndices.count,
-            availableWidth: availableWidth))
+            availableWidth: availableWidth)))
         .accessibilityHidden(true)
     }
 

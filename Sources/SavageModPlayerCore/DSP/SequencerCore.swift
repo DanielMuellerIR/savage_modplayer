@@ -179,14 +179,15 @@ enum SequencerCore {
             targetRow = state.patternLoopRow
             state.patternLoopRow = -1
         } else {
-            if state.positionJump >= 0 {
+            let hasPositionJump = state.positionJump >= 0
+            if hasPositionJump {
                 targetPosition = state.positionJump
                 followedBackwardJump = targetPosition <= sourcePosition
                 targetRow = 0
                 state.positionJump = -1
             }
             if state.patternBreak >= 0 {
-                if targetPosition == state.position {
+                if !hasPositionJump {
                     targetPosition = state.position + 1
                 }
                 targetRow = state.patternBreak

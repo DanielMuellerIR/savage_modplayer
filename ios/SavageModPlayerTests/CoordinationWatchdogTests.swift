@@ -38,6 +38,18 @@ final class CoordinationWatchdogTests: XCTestCase {
         }
     }
 
+    private final class CancellationBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        var isSet: Bool {
+            lock.lock(); defer { lock.unlock() }
+            return value
+        }
+        func cancel() {
+            lock.lock(); value = true; lock.unlock()
+        }
+    }
+
     /// Ein Lesevorgang, der von selbst durchläuft, wird nicht angefasst.
     func testFinishingInTimeAbortsNothing() {
         let aborts = AbortCounter()
@@ -155,6 +167,51 @@ final class CoordinationWatchdogTests: XCTestCase {
         watchdog.start()
         XCTAssertEqual(watchdog.finish(), .none)
         XCTAssertEqual(watchdog.finish(), .none)
+    }
+
+    /// Sobald der Koordinator den Zugriff gewaehrt hat, ist ein unveraenderter
+    /// Download-Fortschritt kein Stillstand mehr. Der eigentliche Leseblock
+    /// darf laenger als die Koordinationsfrist brauchen, etwa beim Hashen oder
+    /// Auspacken einer grossen lokalen Datei.
+    func testReadStopsTheCoordinationWatchdogBeforeRunningTheAccessBody() throws {
+        let file = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("Watchdog-\(UUID().uuidString).mod")
+        try Data([0x01]).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        var bodyRan = false
+        XCTAssertNoThrow(try FileProviderReader.read(
+            file,
+            isCancelled: { false },
+            coordinationStallTimeout: 0.03,
+            coordinationPollInterval: 0.005
+        ) { readable in
+            bodyRan = true
+            XCTAssertEqual(readable.path, file.path)
+            Thread.sleep(forTimeInterval: 0.1)
+        })
+        XCTAssertTrue(bodyRan)
+    }
+
+    /// Der Koordinationswaechter endet vor dem langen Leseblock. Ein Abbruch in
+    /// genau diesem Zeitfenster muss nach dem Block typisiert zum Importer
+    /// gelangen; sonst meldet die Oberflaeche den abgebrochenen Import als
+    /// erfolgreich.
+    func testReadReportsCancellationRaisedInsideTheAccessBody() throws {
+        let file = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("Watchdog-Cancel-\(UUID().uuidString).mod")
+        try Data([0x01]).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let cancellation = CancellationBox()
+
+        XCTAssertThrowsError(try FileProviderReader.read(
+            file,
+            isCancelled: { cancellation.isSet }
+        ) { _ in
+            cancellation.cancel()
+        }) { error in
+            XCTAssertTrue(error is FileProviderReader.ReadCancelled)
+        }
     }
 
     private func waitUntil(

@@ -25,12 +25,13 @@ jobs:
       - name: UI-Quelltests
         run: python3 Tests/ui_source_tests.py
 
-      # Liest nur den Quelltext der Bau-/Installationsskripte: Ad-hoc-Builds
-      # bleiben im Projektordner, nach /Applications greift allein install.sh —
-      # und nur mit angeheftetem Notary-Ticket. Der Test baut und installiert
-      # bewusst nichts.
-      - name: Bau- und Installationsskripte (Quelltest)
-        run: python3 Tests/build_script_tests.py
+      # Schutzregeln im Quelltext und kontrollierte Skriptläufe mit temporären
+      # Dateien prüfen; die Systeminstallation und Notarisierung bleiben unberührt.
+      - name: Build-, Installations- und Referenztests
+        run: |
+          python3 Tests/build_script_tests.py
+          python3 Tests/desktop_entry_tests.py
+          python3 Tests/reference_compare_tests.py
 
       - name: Swift Version
         run: swift --version
@@ -71,7 +72,9 @@ jobs:
           node --check mod-player-worklet.js
 
       - name: JS↔Swift Worklet-Parität (headless)
-        run: node Tests/js/worklet-timing.mjs
+        run: |
+          node Tests/js/worklet-timing.mjs
+          node Tests/js/playback-state.mjs
 
       - name: Browser-MOD-Parser-Grenzen (headless)
         run: node Tests/js/pattern-bounds.mjs

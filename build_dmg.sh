@@ -15,6 +15,7 @@ BUILD_DIR="build"
 RW_DMG="${BUILD_DIR}/dmg_rw.dmg"
 FINAL_DMG="${BUILD_DIR}/${DMG_NAME}.dmg"
 MOUNT_DIR="/Volumes/${VOL_NAME}"
+MOUNTED=0
 NOTARIZE=0
 FINDER_LAYOUT=1
 # Profilname: Umgebung schlägt clone-lokale Git-Konfiguration. Kein fester
@@ -63,7 +64,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 cleanup() {
-    if hdiutil info | grep -Fq "$MOUNT_DIR"; then
+    if [[ "$MOUNTED" == "1" ]]; then
         hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1 || hdiutil detach -force "$MOUNT_DIR" >/dev/null 2>&1 || true
     fi
     rm -f "$RW_DMG" "${BUILD_DIR}/DmgBg_1x.png" "${BUILD_DIR}/DmgBg_2x.png" "${BUILD_DIR}/DmgBackground.tiff"
@@ -98,6 +99,7 @@ hdiutil create -size 80m -fs HFS+ -volname "${VOL_NAME}" -ov "$RW_DMG"
 
 echo "=== Mounting DMG ==="
 hdiutil attach -readwrite -noverify -noautoopen -mountpoint "$MOUNT_DIR" "$RW_DMG"
+MOUNTED=1
 
 echo "=== Copying files to DMG ==="
 cp -R "${BUILD_DIR}/dmg_temp/${APP_NAME}" "$MOUNT_DIR/"
@@ -121,10 +123,20 @@ tell application "Finder"
         set icon size of viewOptions to 96
         set background picture of viewOptions to file ".background:DmgBackground.tiff"
         -- Position icons over the slots in the background image
-        set position of item "${APP_NAME}" of container window to {180, 360}
-        set position of item "Applications" of container window to {420, 360}
+        set position of item "${APP_NAME}" of container window to {150, 300}
+        set position of item "Applications" of container window to {450, 300}
         update without registering applications
         delay 2
+        -- Finder kann beim Laden der Hintergrundgrafik die fruehen Bounds ersetzen.
+        set the bounds of container window to {100, 100, 700, 700}
+        update without registering applications
+        delay 2
+        close
+        open
+        delay 1
+        if the bounds of container window is not {100, 100, 700, 700} then
+            error "Finder hat die DMG-Fenstergroesse nicht gespeichert."
+        end if
         close
     end tell
 end tell
@@ -136,6 +148,7 @@ fi
 echo "=== Unmounting DMG ==="
 sleep 2
 hdiutil detach "$MOUNT_DIR" || hdiutil detach -force "$MOUNT_DIR"
+MOUNTED=0
 
 echo "=== Converting DMG to read-only ==="
 hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$FINAL_DMG"

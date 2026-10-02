@@ -19,6 +19,7 @@ public class S3MParser {
         case noChannels
         case unsupportedDimensions(String)
         case resourceLimit(String)
+        case corruptInstrument(String)
         case corruptPattern(String)
         case truncatedSample(Int)
 
@@ -36,6 +37,8 @@ public class S3MParser {
                 return "Nicht unterstützte S3M-Abmessungen: \(detail)."
             case .resourceLimit(let detail):
                 return "S3M-Modul überschreitet das sichere Ressourcenlimit: \(detail)."
+            case .corruptInstrument(let detail):
+                return "Beschädigtes S3M-Instrument: \(detail)."
             case .corruptPattern(let detail):
                 return "Beschädigtes S3M-Pattern: \(detail)."
             case .truncatedSample(let instrument):
@@ -142,6 +145,14 @@ public class S3MParser {
             } else if v == 254 {
                 rawIsSkip[i] = true
             } else {
+                // Anders als 254/255 ist jeder andere Wert ein echter
+                // Pattern-Verweis. Ein Index ausserhalb der deklarierten
+                // Pattern-Tabelle ist strukturelle Korruption und darf nicht
+                // als 64 Zeilen Stille weitergereicht werden.
+                guard v < patNum else {
+                    throw ParserError.corruptPattern(
+                        "Order \(i) verweist auf nicht deklariertes Pattern \(v)")
+                }
                 patternTable.append(v)
             }
         }
@@ -169,8 +180,14 @@ public class S3MParser {
         var pannings = (0..<channelCount).map { i -> Float in
             stereo ? (channelIsRight[i] ? 0.8 : 0.2) : 0.5
         }
+        var payloadFloor = tableEnd
         if defaultPanFlag == 0xFC {
             let panOffset = patParaOffset + patNum * 2
+            let (panEnd, panOverflow) = panOffset.addingReportingOverflow(32)
+            guard !panOverflow, panEnd <= data.count else {
+                throw ParserError.fileTooSmall
+            }
+            payloadFloor = panEnd
             for i in 0..<32 {
                 let target = channelMap[i]
                 guard target >= 0 else { continue }
@@ -185,7 +202,26 @@ public class S3MParser {
         var instruments: [Instrument?] = [nil]
         var totalPCMFrames = 0
         for i in 0..<insNum {
-            let off = word(instParaOffset + i * 2) * 16
+            let paragraph = word(instParaOffset + i * 2)
+            if paragraph == 0 {
+                // Null ist der dokumentierte leere Instrument-Slot. Erst bei
+                // einem echten Parapointer darf ein Header gelesen werden.
+                instruments.append(Instrument(
+                    index: i + 1, name: "", length: 0, finetune: 0,
+                    volume: 0, repeatOffset: 0, repeatLength: 0, bytes: [],
+                    isLooped: false
+                ))
+                continue
+            }
+            let off = paragraph * 16
+            // Ein nichtleerer Pointer muss einen kompletten 80-Byte-Header
+            // hinter den Haupttabellen (und einer deklarierten Pan-Sektion)
+            // bezeichnen. Der bisherige Null-lesende Helfer machte aus einem
+            // abgeschnittenen Pointer still ein leeres Instrument.
+            guard off >= payloadFloor, off <= data.count - 0x50 else {
+                throw ParserError.corruptInstrument(
+                    "Instrument \(i + 1): Header-Pointer liegt ausserhalb der Datei")
+            }
             let type = byte(off)
             let hasSCRS = byte(off + 0x4C) == 0x53 && byte(off + 0x4D) == 0x43
                 && byte(off + 0x4E) == 0x52 && byte(off + 0x4F) == 0x53
@@ -223,6 +259,10 @@ public class S3MParser {
                 .multipliedReportingOverflow(by: bytesPerFrame)
             let (sampleEnd, sampleEndOverflow) = sampleOffset
                 .addingReportingOverflow(sampleByteCount)
+            guard length == 0 || sampleOffset >= payloadFloor else {
+                throw ParserError.corruptInstrument(
+                    "Instrument \(i + 1): Sample-Pointer liegt im Dateikopf")
+            }
             guard length == 0 || (
                     !frameSizeOverflow && !sampleSizeOverflow && !sampleEndOverflow
                     && sampleOffset >= 0 && sampleEnd <= data.count
@@ -285,6 +325,10 @@ public class S3MParser {
 
             if para > 0 {
                 let packedStart = para * 16
+                guard packedStart >= payloadFloor else {
+                    throw ParserError.corruptPattern(
+                        "Pattern \(p): Pointer liegt im Dateikopf")
+                }
                 // Das Zwei-Byte-Längenfeld deklariert die Gesamtlänge des
                 // gepackten Patterns INKLUSIVE der beiden Längenbytes. Diese
                 // Grenze gilt für JEDEN Feldzugriff — sonst liest ein

@@ -84,6 +84,21 @@ try {
 check('Songlaenge 0 wird abgelehnt', emptySongError instanceof Error);
 check('Fehler nennt die leere Songstruktur', /Songlänge 0/.test(emptySongError?.message ?? ''));
 
+// --- Fall 4: Das Laengenbyte darf nicht ueber die 128-Byte-Tabelle hinaus ---
+// Hinter Offset 1079 stehen die Signatur und danach Pattern-Daten. Ohne die
+// Klemme wurden bei einem Laengenbyte von 200 unter anderem die vier Bytes
+// "M.K." als zusaetzliche Patternpositionen gelesen.
+const oversizedOrder = makeMod(1084 + 1024, 200);
+let boundedOrder, oversizedOrderError;
+try {
+    boundedOrder = parseModBuffer(oversizedOrder, 'oversized-order');
+} catch (error) {
+    oversizedOrderError = error;
+}
+check('Laengenbyte ueber 128 parst ohne Ausnahme', !oversizedOrderError);
+check('Songlaenge wird auf 128 Positionen begrenzt', boundedOrder?.length === 128);
+check('Pattern-Tabelle endet vor der Signatur', boundedOrder?.patternTable?.length === 128);
+
 if (failures > 0) {
     console.error(`\n${failures} Test(s) fehlgeschlagen.`);
     process.exit(1);

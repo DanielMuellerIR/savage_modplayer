@@ -133,6 +133,13 @@ func parseArgs(_ argv: [String]) throws -> Options {
         if o.rateExplicit {
             throw CLIError.incompatibleOptions("--play und --rate (Echtzeit nutzt die Geraete-Samplerate)")
         }
+        // Dasselbe gilt fuer die Analyse-Ausgaben: Der --play-Zweig steht im
+        // Ablauf VOR ihnen, `savage-cli modul.mod --play --info` startete also
+        // die Wiedergabe, statt die angeforderte Textausgabe zu liefern — eine
+        // Automatisierung, die eine endliche Ausgabe erwartet, blieb daran
+        // haengen (Review-Fund 2026-08-25).
+        if o.infoOnly { throw CLIError.incompatibleOptions("--play und --info") }
+        if o.dumpPattern != nil { throw CLIError.incompatibleOptions("--play und --pattern") }
     }
     // Eingabedatei UND --list zusammen: Vorher gewann still --list und die Datei
     // verschwand kommentarlos. Ein Aufruf, dessen eine Haelfte wirkungslos ist,
@@ -463,8 +470,12 @@ if opts.play {
 }
 
 let inputURL = URL(fileURLWithPath: inputPath)
-guard let data = try? Data(contentsOf: inputURL) else {
-    FileHandle.standardError.write(Data("Fehler: Datei nicht lesbar: \(inputPath)\n".utf8))
+let data: Data
+do {
+    data = try readRegularInput(at: inputURL)
+} catch {
+    FileHandle.standardError.write(Data(
+        "Fehler: Datei nicht lesbar: \(inputPath): \(error.localizedDescription)\n".utf8))
     exit(1)
 }
 

@@ -37,6 +37,19 @@ public final class RealtimePlaybackState: Sendable {
         let elapsedFrames: UInt64
     }
 
+    struct TempoSnapshot: Sendable {
+        let ticksPerRow: Int?
+        let ticksPerRowSequence: UInt64?
+        let bpm: Int?
+        let bpmSequence: UInt64?
+    }
+
+    struct RenderOptionsSnapshot: Sendable {
+        let stereoSeparation: Float
+        let useInterpolation: Bool
+        let palClock: Bool
+    }
+
     struct TransportSnapshot: Sendable {
         let position: Int
         let row: Int
@@ -126,6 +139,24 @@ public final class RealtimePlaybackState: Sendable {
     private let seekTargetStorage = LockFreeAtomicUInt64(0)
     private let seekElapsedFramesStorage = LockFreeAtomicUInt64(0)
     private let appliedSeekSequenceStorage = LockFreeAtomicUInt64(0)
+    // BPM und Ticks pro Zeile besitzen getrennte Ein-Feld-Auftraege. Der
+    // MainActor darf nie den gerade noch nicht bestaetigten Wert des ANDEREN
+    // Steppers aus seinem UI-Snapshot mitschicken: Ein einzelner BPM-Klick
+    // koennte sonst einen neueren Speed-Klick ueberschreiben. Jede Sequenz ist
+    // waehrend des Schreibens ungerade und danach gerade; der Audiothread
+    // bestaetigt sie erst nach dem passenden Transport-Snapshot am Blockende.
+    private let ticksPerRowRequestSequenceStorage = LockFreeAtomicUInt64(0)
+    private let ticksPerRowRequestValueStorage = LockFreeAtomicUInt64(0)
+    private let appliedTicksPerRowSequenceStorage = LockFreeAtomicUInt64(0)
+    private let invalidatedTicksPerRowSequenceStorage = LockFreeAtomicUInt64(0)
+    private let bpmRequestSequenceStorage = LockFreeAtomicUInt64(0)
+    private let bpmRequestValueStorage = LockFreeAtomicUInt64(0)
+    private let appliedBPMSequenceStorage = LockFreeAtomicUInt64(0)
+    private let invalidatedBPMSequenceStorage = LockFreeAtomicUInt64(0)
+    // Vollstaendiger Snapshot der drei live bedienbaren Renderoptionen. Bit 63
+    // markiert einen vorhandenen Auftrag, damit auch 0.0/false/false darstellbar
+    // bleibt; die unteren 32 Bits enthalten das unveraenderte Float-Bitmuster.
+    private let pendingRenderOptionsStorage = LockFreeAtomicUInt64(0)
     // Position, Zeile und Tempo werden als EIN atomarer Snapshot an MainActor
     // und Sperrbildschirm veroeffentlicht. Damit liest der Poller nie vier
     // normale Swift-Felder waehrend der Audiothread sie gerade aendert.
@@ -208,6 +239,11 @@ public final class RealtimePlaybackState: Sendable {
         globalVolume: Int,
         elapsedFrames: UInt64
     ) -> UInt64 {
+        // Ein Seek enthaelt selbst einen vollstaendigen Tempo-Snapshot. Ein
+        // aelterer Stepper-Auftrag darf ihn nicht im selben Audioblock wieder
+        // ueberschreiben. Ein nach dem Seek abgelegter Auftrag bleibt dagegen
+        // erhalten und gewinnt durch die Verarbeitungsreihenfolge im Block.
+        invalidateTempoRequests()
         let packed = Self.packTransport(
             position: position,
             row: row,
@@ -229,6 +265,133 @@ public final class RealtimePlaybackState: Sendable {
         return publishedSequence
     }
 
+    @discardableResult
+    func requestTicksPerRow(_ ticksPerRow: Int) -> UInt64 {
+        publishTempoField(
+            UInt64(max(1, min(Int(UInt8.max), ticksPerRow))),
+            sequenceStorage: ticksPerRowRequestSequenceStorage,
+            valueStorage: ticksPerRowRequestValueStorage)
+    }
+
+    @discardableResult
+    func requestBPM(_ bpm: Int) -> UInt64 {
+        publishTempoField(
+            UInt64(max(1, min(Int(UInt16.max), bpm))),
+            sequenceStorage: bpmRequestSequenceStorage,
+            valueStorage: bpmRequestValueStorage)
+    }
+
+    // Behaelt den bisherigen Core-Helfer fuer Aufrufer bei, die bewusst beide
+    // Felder als einen Bedienvorgang setzen. Intern bleiben es zwei unabhaengige
+    // Auftraege, damit spaetere Ein-Feld-Aenderungen nichts Altes mitschleppen.
+    func requestTempo(ticksPerRow: Int, bpm: Int) {
+        _ = requestTicksPerRow(ticksPerRow)
+        _ = requestBPM(bpm)
+    }
+
+    @inline(__always)
+    func takePendingTempo() -> TempoSnapshot? {
+        let ticksPerRow = pendingTempoField(
+            sequenceStorage: ticksPerRowRequestSequenceStorage,
+            valueStorage: ticksPerRowRequestValueStorage,
+            appliedSequenceStorage: appliedTicksPerRowSequenceStorage,
+            invalidatedSequenceStorage: invalidatedTicksPerRowSequenceStorage)
+        let bpm = pendingTempoField(
+            sequenceStorage: bpmRequestSequenceStorage,
+            valueStorage: bpmRequestValueStorage,
+            appliedSequenceStorage: appliedBPMSequenceStorage,
+            invalidatedSequenceStorage: invalidatedBPMSequenceStorage)
+        guard ticksPerRow != nil || bpm != nil else { return nil }
+        return TempoSnapshot(
+            ticksPerRow: ticksPerRow.map { Int($0.value) },
+            ticksPerRowSequence: ticksPerRow?.sequence,
+            bpm: bpm.map { Int($0.value) },
+            bpmSequence: bpm?.sequence)
+    }
+
+    func isTicksPerRowRequestApplied(_ sequence: UInt64) -> Bool {
+        appliedTicksPerRowSequenceStorage.loadAcquire() == sequence
+            || invalidatedTicksPerRowSequenceStorage.loadAcquire() >= sequence
+    }
+
+    func isBPMRequestApplied(_ sequence: UInt64) -> Bool {
+        appliedBPMSequenceStorage.loadAcquire() == sequence
+            || invalidatedBPMSequenceStorage.loadAcquire() >= sequence
+    }
+
+    @inline(__always)
+    func markTempoApplied(_ tempo: TempoSnapshot) {
+        if let sequence = tempo.ticksPerRowSequence {
+            appliedTicksPerRowSequenceStorage.storeRelease(sequence)
+        }
+        if let sequence = tempo.bpmSequence {
+            appliedBPMSequenceStorage.storeRelease(sequence)
+        }
+    }
+
+    private func invalidateTempoRequests() {
+        invalidatedTicksPerRowSequenceStorage.storeRelease(
+            ticksPerRowRequestSequenceStorage.loadAcquire())
+        invalidatedBPMSequenceStorage.storeRelease(
+            bpmRequestSequenceStorage.loadAcquire())
+    }
+
+    @inline(__always)
+    private func publishTempoField(
+        _ value: UInt64,
+        sequenceStorage: LockFreeAtomicUInt64,
+        valueStorage: LockFreeAtomicUInt64
+    ) -> UInt64 {
+        let current = sequenceStorage.loadRelaxed()
+        let writingSequence = (current &+ 1) | 1
+        _ = sequenceStorage.exchangeAcquiringAndReleasing(writingSequence)
+        valueStorage.storeRelaxed(value)
+        let publishedSequence = writingSequence &+ 1
+        sequenceStorage.storeRelease(publishedSequence)
+        return publishedSequence
+    }
+
+    @inline(__always)
+    private func pendingTempoField(
+        sequenceStorage: LockFreeAtomicUInt64,
+        valueStorage: LockFreeAtomicUInt64,
+        appliedSequenceStorage: LockFreeAtomicUInt64,
+        invalidatedSequenceStorage: LockFreeAtomicUInt64
+    ) -> (sequence: UInt64, value: UInt64)? {
+        let firstSequence = sequenceStorage.loadAcquire()
+        guard firstSequence != 0,
+              firstSequence & 1 == 0,
+              firstSequence != appliedSequenceStorage.loadAcquire(),
+              firstSequence > invalidatedSequenceStorage.loadAcquire() else { return nil }
+        let value = valueStorage.loadRelaxed()
+        LockFreeAtomicUInt64.sequentiallyConsistentFence()
+        guard sequenceStorage.loadAcquire() == firstSequence else { return nil }
+        return (firstSequence, value)
+    }
+
+    func requestRenderOptions(
+        stereoSeparation: Float,
+        useInterpolation: Bool,
+        palClock: Bool
+    ) {
+        let packed = UInt64(stereoSeparation.bitPattern)
+            | (useInterpolation ? UInt64(1) << 32 : 0)
+            | (palClock ? UInt64(1) << 33 : 0)
+            | (UInt64(1) << 63)
+        pendingRenderOptionsStorage.storeRelease(packed)
+    }
+
+    @inline(__always)
+    func takePendingRenderOptions() -> RenderOptionsSnapshot? {
+        let packed = pendingRenderOptionsStorage.exchangeAcquiringAndReleasing(0)
+        guard packed & (UInt64(1) << 63) != 0 else { return nil }
+        return RenderOptionsSnapshot(
+            stereoSeparation: Float(
+                bitPattern: UInt32(truncatingIfNeeded: packed)),
+            useInterpolation: packed & (UInt64(1) << 32) != 0,
+            palClock: packed & (UInt64(1) << 33) != 0)
+    }
+
     @inline(__always)
     func takePendingSeek() -> SeekSnapshot? {
         let firstSequence = seekSequenceStorage.loadAcquire()
@@ -242,13 +405,15 @@ public final class RealtimePlaybackState: Sendable {
         let secondSequence = seekSequenceStorage.loadAcquire()
         guard firstSequence == secondSequence else { return nil }
 
+        let transport = Self.unpackTransport(packed)
+
         return SeekSnapshot(
             sequence: firstSequence,
-            position: Int(packed & 0xFFFF),
-            row: Int(Int16(bitPattern: UInt16((packed >> 16) & 0xFFFF))),
-            ticksPerRow: Int((packed >> 32) & 0xFF),
-            bpm: Int((packed >> 40) & 0xFFFF),
-            globalVolume: Int((packed >> 56) & 0xFF),
+            position: transport.position,
+            row: transport.row,
+            ticksPerRow: transport.ticksPerRow,
+            bpm: transport.bpm,
+            globalVolume: transport.globalVolume,
             elapsedFrames: elapsed)
     }
 
@@ -329,8 +494,19 @@ public final class RealtimePlaybackState: Sendable {
 
 public final class RealtimeVUBuffer: @unchecked Sendable {
     public let pointer: UnsafeMutablePointer<Float>
+    let visualizationExchange: RealtimeVisualizationExchange?
+
     public init(pointer: UnsafeMutablePointer<Float>) {
         self.pointer = pointer
+        self.visualizationExchange = nil
+    }
+
+    fileprivate init(
+        pointer: UnsafeMutablePointer<Float>,
+        visualizationExchange: RealtimeVisualizationExchange
+    ) {
+        self.pointer = pointer
+        self.visualizationExchange = visualizationExchange
     }
 }
 
@@ -341,6 +517,184 @@ public final class RealtimeWaveBuffer: @unchecked Sendable {
     public init(channelWaves: UnsafeMutablePointer<Float>, masterWaves: UnsafeMutablePointer<Float>) {
         self.channelWavesPointer = channelWaves
         self.masterWavesPointer = masterWaves
+    }
+}
+
+// Dreifach gepufferte Uebergabe der VU- und Oszilloskopdaten vom Audio- an den
+// MainActor. Der Renderblock behaelt eigene Arbeitspuffer und kopiert den
+// fertigen Stand am Blockende in einen Slot, den weder die UI liest noch der
+// vorige Snapshot belegt. Die UI beansprucht ihren Slot atomar, bevor sie ihn
+// kopiert. Dadurch greifen beide Threads nie gleichzeitig auf dieselben
+// Float-Zellen zu; im Echtzeitpfad entstehen weder Locks noch Allokationen.
+final class RealtimeVisualizationExchange: @unchecked Sendable {
+    private static let slotCount = 3
+    private static let slotMask: UInt64 = 0x3
+
+    private let channelCapacity: Int
+    private let renderPeaksPointer: UnsafeMutablePointer<Float>
+    private let renderChannelWavesPointer: UnsafeMutablePointer<Float>
+    private let renderMasterWavesPointer: UnsafeMutablePointer<Float>
+    private let snapshotPeaksPointer: UnsafeMutablePointer<Float>
+    private let snapshotChannelWavesPointer: UnsafeMutablePointer<Float>
+    private let snapshotMasterWavesPointer: UnsafeMutablePointer<Float>
+
+    // Untere zwei Bits: veroeffentlichter Slot; obere Bits: Generation.
+    private let publishedStorage = LockFreeAtomicUInt64(0)
+    // 0 = kein Leser, sonst Slot + 1. Nur der MainActor beansprucht einen Slot.
+    private let readerSlotStorage = LockFreeAtomicUInt64(0)
+    private let consumedGenerationStorage = LockFreeAtomicUInt64(0)
+
+    init(channelCapacity: Int) {
+        precondition(channelCapacity > 0)
+        self.channelCapacity = channelCapacity
+
+        renderPeaksPointer = .allocate(capacity: channelCapacity)
+        renderPeaksPointer.initialize(repeating: 0, count: channelCapacity)
+        renderChannelWavesPointer = .allocate(capacity: channelCapacity * 32)
+        renderChannelWavesPointer.initialize(repeating: 0, count: channelCapacity * 32)
+        renderMasterWavesPointer = .allocate(capacity: 128)
+        renderMasterWavesPointer.initialize(repeating: 0, count: 128)
+
+        snapshotPeaksPointer = .allocate(capacity: Self.slotCount * channelCapacity)
+        snapshotPeaksPointer.initialize(
+            repeating: 0,
+            count: Self.slotCount * channelCapacity)
+        snapshotChannelWavesPointer = .allocate(
+            capacity: Self.slotCount * channelCapacity * 32)
+        snapshotChannelWavesPointer.initialize(
+            repeating: 0,
+            count: Self.slotCount * channelCapacity * 32)
+        snapshotMasterWavesPointer = .allocate(capacity: Self.slotCount * 128)
+        snapshotMasterWavesPointer.initialize(
+            repeating: 0,
+            count: Self.slotCount * 128)
+    }
+
+    deinit {
+        renderPeaksPointer.deinitialize(count: channelCapacity)
+        renderPeaksPointer.deallocate()
+        renderChannelWavesPointer.deinitialize(count: channelCapacity * 32)
+        renderChannelWavesPointer.deallocate()
+        renderMasterWavesPointer.deinitialize(count: 128)
+        renderMasterWavesPointer.deallocate()
+        snapshotPeaksPointer.deinitialize(count: Self.slotCount * channelCapacity)
+        snapshotPeaksPointer.deallocate()
+        snapshotChannelWavesPointer.deinitialize(
+            count: Self.slotCount * channelCapacity * 32)
+        snapshotChannelWavesPointer.deallocate()
+        snapshotMasterWavesPointer.deinitialize(count: Self.slotCount * 128)
+        snapshotMasterWavesPointer.deallocate()
+    }
+
+    func makeVUBuffer() -> RealtimeVUBuffer {
+        RealtimeVUBuffer(
+            pointer: renderPeaksPointer,
+            visualizationExchange: self)
+    }
+
+    func makeWaveBuffer() -> RealtimeWaveBuffer {
+        RealtimeWaveBuffer(
+            channelWaves: renderChannelWavesPointer,
+            masterWaves: renderMasterWavesPointer)
+    }
+
+    @inline(__always)
+    func beginRenderBlock(channelCount: Int) {
+        let count = max(0, min(channelCapacity, channelCount))
+        for channel in 0..<count {
+            renderPeaksPointer[channel] = 0
+        }
+    }
+
+    @inline(__always)
+    func publish(channelCount: Int) {
+        let count = max(0, min(channelCapacity, channelCount))
+        let published = publishedStorage.loadAcquire()
+        let publishedSlot = Int(published & Self.slotMask)
+        let publishedGeneration = published >> 2
+        // Zusammen mit dem Fence des Lesers verhindert dies den
+        // Store-Buffering-Fall: Entweder sieht der Audiothread den
+        // beanspruchten Slot, oder der Leser sieht bei seiner Kontrollabfrage
+        // die neuere Generation. Nur Acquire/Release auf zwei verschiedenen
+        // Atomikspeichern garantiert diese Alternative nicht.
+        LockFreeAtomicUInt64.sequentiallyConsistentFence()
+        let readerSlot = Int(readerSlotStorage.loadAcquire()) - 1
+
+        // Von drei Slots sind hoechstens der veroeffentlichte und ein noch von
+        // der UI gelesener belegt. Der dritte bleibt dem Audiothread garantiert.
+        var targetSlot = (publishedSlot + 1) % Self.slotCount
+        if targetSlot == readerSlot {
+            targetSlot = (targetSlot + 1) % Self.slotCount
+        }
+
+        let targetPeaks = snapshotPeaksPointer.advanced(
+            by: targetSlot * channelCapacity)
+        let publishedPeaks = snapshotPeaksPointer.advanced(
+            by: publishedSlot * channelCapacity)
+        let publishedWasConsumed = consumedGenerationStorage.loadAcquire()
+            >= publishedGeneration
+        for channel in 0..<count {
+            let blockPeak = renderPeaksPointer[channel]
+            // Wenn die UI einen Block uebersprungen hat, dessen Maximum bis
+            // zum naechsten konsumierten Snapshot weitertragen.
+            targetPeaks[channel] = publishedWasConsumed
+                ? blockPeak
+                : max(blockPeak, publishedPeaks[channel])
+        }
+
+        let waveCount = count * 32
+        let targetWaves = snapshotChannelWavesPointer.advanced(
+            by: targetSlot * channelCapacity * 32)
+        targetWaves.update(from: renderChannelWavesPointer, count: waveCount)
+        let targetMaster = snapshotMasterWavesPointer.advanced(
+            by: targetSlot * 128)
+        targetMaster.update(from: renderMasterWavesPointer, count: 128)
+
+        let nextGeneration = publishedGeneration &+ 1
+        publishedStorage.storeRelease(
+            (nextGeneration << 2) | UInt64(targetSlot))
+    }
+
+    @discardableResult
+    func withLatestSnapshot(
+        channelCount: Int,
+        _ body: (
+            UnsafePointer<Float>,
+            UnsafePointer<Float>,
+            UnsafePointer<Float>
+        ) -> Void
+    ) -> Bool {
+        precondition(channelCount >= 0 && channelCount <= channelCapacity)
+        while true {
+            let published = publishedStorage.loadAcquire()
+            let slot = Int(published & Self.slotMask)
+            readerSlotStorage.storeRelease(UInt64(slot + 1))
+            // Gegenstueck zum Fence in `publish`: Der Anspruch auf den Slot
+            // muss global vor der folgenden Kontrollabfrage sichtbar sein.
+            // Sonst koennen beide Threads jeweils noch den alten Wert des
+            // anderen Atomikspeichers sehen und denselben Slot benutzen.
+            LockFreeAtomicUInt64.sequentiallyConsistentFence()
+
+            // Hat der Audiothread zwischen Auswahl und Beanspruchen einen
+            // neueren Slot veroeffentlicht, noch keine Float-Zelle lesen.
+            guard publishedStorage.loadAcquire() == published else {
+                _ = readerSlotStorage.exchangeAcquiringAndReleasing(0)
+                continue
+            }
+
+            let generation = published >> 2
+            let isFresh = generation > consumedGenerationStorage.loadAcquire()
+            body(
+                UnsafePointer(snapshotPeaksPointer.advanced(
+                    by: slot * channelCapacity)),
+                UnsafePointer(snapshotChannelWavesPointer.advanced(
+                    by: slot * channelCapacity * 32)),
+                UnsafePointer(snapshotMasterWavesPointer.advanced(
+                    by: slot * 128)))
+            consumedGenerationStorage.storeRelease(generation)
+            _ = readerSlotStorage.exchangeAcquiringAndReleasing(0)
+            return isFresh
+        }
     }
 }
 
@@ -604,10 +958,16 @@ public enum RenderEngine {
             mixGain = voiceCount > 4 ? (4.0 / Float(voiceCount)).squareRoot() : 1.0
         }
         let globalVolumeScale = Float(mod.globalVolumeScale.rawValue)
+        let visualizationExchange = vuBuffer.visualizationExchange
 
         return { (frameCount, left, right) in
             let safeFrameCount = Int(frameCount)
             var appliedSeekSequence: UInt64?
+
+            if safeFrameCount > 0 {
+                visualizationExchange?.beginRenderBlock(
+                    channelCount: logicalChannelCount)
+            }
 
             // UI-Auftraege hoechstens einmal pro Audioblock pruefen. Eine
             // Blockgrenze ist fuer Seek/Uhr genau genug und spart im Normalfall
@@ -619,6 +979,25 @@ public enum RenderEngine {
                     channels: dspChannels,
                     sampleRate: sampleRate)
                 appliedSeekSequence = request.sequence
+            }
+            var appliedTempo: RealtimePlaybackState.TempoSnapshot?
+            if safeFrameCount > 0, let tempo = state.takePendingTempo() {
+                if let ticksPerRow = tempo.ticksPerRow {
+                    state.ticksPerRow = ticksPerRow
+                }
+                if let bpm = tempo.bpm {
+                    state.bpm = bpm
+                }
+                SequencerCore.recalculateTickDuration(
+                    state: state,
+                    sampleRate: sampleRate)
+                appliedTempo = tempo
+            }
+            if safeFrameCount > 0,
+               let options = state.takePendingRenderOptions() {
+                state.stereoSeparation = options.stereoSeparation
+                state.useInterpolation = options.useInterpolation
+                state.palClock = options.palClock
             }
             if safeFrameCount > 0 {
                 let requestedElapsedFrames = state.takePendingElapsedFrames()
@@ -756,8 +1135,18 @@ public enum RenderEngine {
                 state.masterWaveWriteIndex = (state.masterWaveWriteIndex + 1) & 127
                 waveBuffer.masterWavesPointer[state.masterWaveWriteIndex] = (limitedL + limitedR) * 0.5
             }
+            if safeFrameCount > 0 {
+                visualizationExchange?.publish(
+                    channelCount: logicalChannelCount)
+            }
             state.publishElapsedFrames()
             state.publishTransportSnapshot()
+            if let appliedTempo {
+                // Erst der veroeffentlichte Transport-Snapshot bestaetigt dem
+                // MainActor, dass er seinen noch sichtbaren Stepper-Wert wieder
+                // aus dem Audiostand spiegeln darf.
+                state.markTempoApplied(appliedTempo)
+            }
             if let appliedSeekSequence {
                 // Erst nach dem vollstaendigen Zielblock freigeben: Der
                 // MainActor sieht durch Acquire danach den passenden atomaren
@@ -1144,6 +1533,13 @@ public enum RenderEngine {
         useInterpolation: Bool
     ) -> Float {
         if let loop, useInterpolation {
+            if loop.type == .pingpong {
+                let end = min(pcm.count, loop.start + loop.length)
+                if ch.sampleIndex >= Double(end - 1), end > 0 {
+                    return pcm[end - 1]
+                }
+                return ch.getInterpolatedSample(from: pcm, index: ch.sampleIndex)
+            }
             return ch.getInterpolatedSampleLooped(
                 from: pcm,
                 index: ch.sampleIndex,
@@ -1198,19 +1594,22 @@ public enum RenderEngine {
         let length = end - start
 
         if loop.type == .pingpong {
-            // Ping-Pong: an den Loop-Grenzen die Richtung umkehren und den
-            // Überschuss zurückreflektieren. Spiegel um die Grenze (2·Grenze−pos)
-            // OHNE Endpunkt-Duplizierung — wie openmpt/FT2. (Früher `end-1-over`:
-            // spiegelte einen Sample zu tief und wiederholte den Endpunkt, was bei
-            // langen gehaltenen Ping-Pong-Noten einen Timbre-Drift akkumulierte.)
-            if ch.sampleDirection > 0, ch.sampleIndex >= end {
-                let over = (ch.sampleIndex - end).truncatingRemainder(dividingBy: length)
-                ch.sampleIndex = end - over
-                ch.sampleDirection = -1
-            } else if ch.sampleDirection < 0, ch.sampleIndex < start {
-                let under = (start - ch.sampleIndex).truncatingRemainder(dividingBy: length)
-                ch.sampleIndex = start + under
+            let crossedEnd = ch.sampleDirection > 0 && ch.sampleIndex >= end
+            let crossedStart = ch.sampleDirection < 0 && ch.sampleIndex < start
+            guard crossedEnd || crossedStart else { return }
+            // Zwei Spannen erhalten auch bei grossen Schritten die Richtung.
+            // Das obere Ende ist exklusiv: exakt dort darf kein PCM-Zugriff landen.
+            let cycle = 2 * length
+            let offset = ch.sampleIndex - start
+            let unfolded = ch.sampleDirection > 0 ? offset : cycle - offset
+            var phase = unfolded.truncatingRemainder(dividingBy: cycle)
+            if phase < 0 { phase += cycle }
+            if phase < length {
+                ch.sampleIndex = start + phase
                 ch.sampleDirection = 1
+            } else {
+                ch.sampleIndex = min(end.nextDown, end - (phase - length))
+                ch.sampleDirection = -1
             }
         } else if ch.sampleIndex >= end {
             // Vorwärts-Loop: in den Repeat-Bereich zurückfalten. Der alte Swift-

@@ -122,6 +122,17 @@ final class ITSampleDecompressorTests: XCTestCase {
         XCTAssertEqual(result.bytesConsumed, compressed.count)
     }
 
+    func testOversizedOutputIsRejectedBeforeReadingCompressedBlocks() {
+        for (frames, stereo) in [(32 * 1_024 * 1_024 + 1, false), (16 * 1_024 * 1_024 + 1, true)] {
+            XCTAssertThrowsError(try ITSampleDecompressor.decompress(
+                data: Data(), offset: 0, frameCount: frames,
+                bitDepth: .eight, stereo: stereo, version: .it214
+            )) {
+                XCTAssertEqual($0 as? ITSampleDecompressor.DecompressionError, .invalidFrameCount(frames))
+            }
+        }
+    }
+
     func testMalformedAndMutatedInputsFailWithoutLooping() {
         XCTAssertThrowsError(try ITSampleDecompressor.decompress(
             data: Data([0, 0]), offset: 0, frameCount: 1,

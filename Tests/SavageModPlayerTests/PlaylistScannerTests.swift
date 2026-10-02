@@ -179,6 +179,22 @@ final class PlaylistScannerTests: XCTestCase {
         XCTAssertTrue(PlaylistScanner.directoryContainsPlayableContent(workDir.appendingPathComponent("MitMod")))
     }
 
+    func testDirectoryProbeIgnoresNonFilesWithModuleNames() throws {
+        let source = workDir.appendingPathComponent("Nur-Dateinamen", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: source.appendingPathComponent("ordner.xm", isDirectory: true),
+            withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: source.appendingPathComponent("kaputt.s3m"),
+            withDestinationURL: source.appendingPathComponent("fehlt"))
+
+        XCTAssertFalse(
+            PlaylistScanner.directoryContainsPlayableContent(source),
+            "Ordner und tote Links sind trotz Modulendung nicht spielbar")
+        XCTAssertTrue(
+            PlaylistScanner.collectEntries(from: [source], tempDir: tempDir).isEmpty)
+    }
+
     // Packt `sources` (relativ zu `directory`) in ein Archiv im Arbeitsordner.
     private func pack(_ names: [String], from directory: URL, as name: String) throws -> URL {
         let tool = try XCTUnwrap(PlaylistScanner.bsdtarURL)

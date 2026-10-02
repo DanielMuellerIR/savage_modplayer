@@ -151,11 +151,16 @@ public struct RescanReport: Sendable {
 // MARK: - Bibliothek
 
 public final class MusicLibrary: @unchecked Sendable {
+    public typealias ResourceValuesReader = (URL, Set<URLResourceKey>) throws -> URLResourceValues
+    public typealias FingerprintReader = (URL) throws -> (hash: String, size: Int64)
+
     public let rootURL: URL
     public let indexURL: URL
     public private(set) var index: LibraryIndex
 
     private let fileManager: FileManager
+    private let resourceValuesReader: ResourceValuesReader
+    private let fingerprintReader: FingerprintReader
     // Position jedes Eintrags in `index.items` — ohne diese Tabelle waere jeder
     // Import ein quadratisches Suchen ueber die ganze Bibliothek.
     private var positions: [String: Int] = [:]
@@ -163,10 +168,23 @@ public final class MusicLibrary: @unchecked Sendable {
     // (auf macOS ist z.B. /var ein Symlink auf /private/var).
     private let rootPathVariants: [String]
 
-    public init(rootURL: URL, indexURL: URL, fileManager: FileManager = .default) {
+    public init(
+        rootURL: URL,
+        indexURL: URL,
+        fileManager: FileManager = .default,
+        resourceValuesReader: @escaping ResourceValuesReader = {
+            try $0.resourceValues(forKeys: $1)
+        },
+        fingerprintReader: FingerprintReader? = nil
+    ) {
         self.rootURL = rootURL
         self.indexURL = indexURL
         self.fileManager = fileManager
+        self.resourceValuesReader = resourceValuesReader
+        self.fingerprintReader = fingerprintReader ?? { url in
+            let fingerprint = try ContentHasher.fingerprint(of: url)
+            return (fingerprint.hash, fingerprint.size)
+        }
         self.index = LibraryIndex()
         let plain = rootURL.standardizedFileURL.path
         let resolved = rootURL.resolvingSymlinksInPath().standardizedFileURL.path
@@ -278,7 +296,10 @@ public final class MusicLibrary: @unchecked Sendable {
         // Falls der Index doch einmal in der Bibliothek liegt: nie als Inhalt zaehlen.
         let indexRelativePath = relativePath(for: indexURL)
 
-        let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
+        let keys: [URLResourceKey] = [
+            .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey,
+            .fileSizeKey, .contentModificationDateKey
+        ]
         // Der errorHandler faengt Enumerationsfehler (etwa ein voruebergehend
         // unlesbares Unterverzeichnis). Ohne ihn endete der Durchlauf still,
         // und alle nicht mehr besuchten Indexeintraege galten faelschlich als
@@ -312,26 +333,75 @@ public final class MusicLibrary: @unchecked Sendable {
 
         while let fileURL = enumerator?.nextObject() as? URL {
             if isCancelled() { cancelled = true; break }
-            let values = try? fileURL.resourceValues(forKeys: Set(keys))
-            if values?.isDirectory == true { continue }
+            let relativeForError = relativePath(for: fileURL) ?? fileURL.lastPathComponent
+            let values: URLResourceValues
+            do {
+                values = try resourceValuesReader(fileURL, Set(keys))
+            } catch {
+                if enumerationError == nil {
+                    enumerationError =
+                        "Bibliotheks-Abgleich unvollständig — \(relativeForError): "
+                        + "Dateityp konnte nicht bestimmt werden: \(error.localizedDescription)"
+                }
+                continue
+            }
+            // Auch ein erfolgreicher Foundation-Aufruf kann einzelne angefragte
+            // Merkmale unbekannt lassen. Dann ist der Scan ebenso unvollstaendig
+            // wie bei einem geworfenen Fehler; insbesondere darf der bekannte
+            // Eintrag nicht ueber den spaeteren Loeschabgleich verschwinden.
+            guard let isSymbolicLink = values.isSymbolicLink,
+                  let isDirectory = values.isDirectory,
+                  let isRegularFile = values.isRegularFile else {
+                if enumerationError == nil {
+                    enumerationError =
+                        "Bibliotheks-Abgleich unvollständig — \(relativeForError): "
+                        + "Dateityp konnte nicht vollständig bestimmt werden."
+                }
+                continue
+            }
+            // Der Index darf nur Dateien besitzen, die wirklich unter der
+            // Bibliothekswurzel liegen. Eine dort abgelegte Verknuepfung kann
+            // auf beliebige externe Daten zeigen und waere nach dem Entfernen
+            // des Ziels zudem ein kaputter Bibliothekseintrag.
+            if isSymbolicLink {
+                enumerator?.skipDescendants()
+                continue
+            }
+            if isDirectory { continue }
             guard let relative = relativePath(for: fileURL), relative != indexRelativePath else { continue }
 
             if PlaylistScanner.isArchive(fileURL) {
                 archives.append(relative)
                 continue
             }
+            // Der Fingerabdruck oeffnet die Datei blockweise. Bei einer FIFO
+            // mit Modulendung wuerde er ohne diese Typgrenze auf einen Schreiber
+            // warten und der gesamte Bibliotheksabgleich bliebe stehen.
+            guard isRegularFile else { continue }
             guard PlaylistScanner.isModFile(fileURL) else { continue }
 
             seen.insert(relative)
-            let size = values?.fileSize.map(Int64.init)
-            let modified = values?.contentModificationDate
+            let size = values.fileSize.map(Int64.init)
+            let modified = values.contentModificationDate
 
-            if let known = item(withRelativePath: relative) {
-                if known.matchesFileOnDisk(size: size, modifiedAt: modified) {
-                    unchanged += 1
-                    continue
+            let known = item(withRelativePath: relative)
+            if let known, known.matchesFileOnDisk(size: size, modifiedAt: modified) {
+                unchanged += 1
+                continue
+            }
+            let fingerprint: (hash: String, size: Int64)
+            do {
+                fingerprint = try fingerprintReader(fileURL)
+            } catch {
+                if enumerationError == nil {
+                    enumerationError =
+                        "Bibliotheks-Abgleich unvollständig — \(relative): "
+                        + "Dateiinhalt konnte nicht gelesen werden: \(error.localizedDescription)"
                 }
-                guard let fingerprint = try? ContentHasher.fingerprint(of: fileURL) else { continue }
+                continue
+            }
+
+            if let known {
                 if fingerprint.hash == known.contentHash {
                     // Nur der Zeitstempel wanderte (z.B. durch eine Kopie) —
                     // Eintrag auffrischen, damit der naechste Lauf schneller ist.
@@ -348,7 +418,6 @@ public final class MusicLibrary: @unchecked Sendable {
                     changed.append(relative)
                 }
             } else {
-                guard let fingerprint = try? ContentHasher.fingerprint(of: fileURL) else { continue }
                 upsert(LibraryItem(
                     relativePath: relative,
                     displayName: fileURL.lastPathComponent,
@@ -384,7 +453,7 @@ public final class MusicLibrary: @unchecked Sendable {
 
     // Loescht die Datei, den Indexeintrag und leer gewordene Elternordner.
     public func remove(_ item: LibraryItem) throws {
-        let fileURL = url(for: item)
+        let fileURL = try validatedFileURL(relativePath: item.relativePath)
         if fileManager.fileExists(atPath: fileURL.path) {
             try fileManager.removeItem(at: fileURL)
         }
@@ -431,6 +500,32 @@ public final class MusicLibrary: @unchecked Sendable {
         } else {
             try save()
         }
+    }
+
+    // Vor Dateizugriffen auch vorhandene Eltern prüfen: Finder kann einen
+    // Bibliotheksordner nach dem letzten Scan durch einen Symlink ersetzen.
+    func validatedFileURL(relativePath: String) throws -> URL {
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard !components.isEmpty, components.allSatisfy({
+            !$0.isEmpty && $0 != "." && $0 != ".." && !$0.utf8.contains(0)
+        }) else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        var current = rootURL
+        for (index, component) in components.enumerated() {
+            current.appendPathComponent(String(component))
+            do {
+                let attributes = try fileManager.attributesOfItem(atPath: current.path)
+                let expectedType: FileAttributeType = index == components.count - 1 ? .typeRegular : .typeDirectory
+                guard attributes[.type] as? FileAttributeType == expectedType else {
+                    throw CocoaError(.fileWriteNoPermission)
+                }
+            } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+                // Noch nicht angelegte Zielordner sind beim Import zulässig.
+                continue
+            }
+        }
+        return current
     }
 
     // Pfad relativ zur Bibliothekswurzel, oder nil wenn die URL ausserhalb liegt.

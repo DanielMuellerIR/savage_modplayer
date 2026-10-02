@@ -11,6 +11,7 @@ public enum ITParser {
         case unsupportedCounts(orders: Int, instruments: Int, samples: Int, patterns: Int)
         case invalidHeaderValue(String, Int)
         case emptySong
+        case resourceLimitExceeded(String)
         case invalidOrder(Int)
         case invalidOffset(kind: String, index: Int, offset: Int)
         case invalidPatternRows(pattern: Int, rows: Int)
@@ -35,6 +36,8 @@ public enum ITParser {
                 return "IT-Anzahlen außerhalb der sicheren Grenzen (Orders \(orders), Instrumente \(instruments), Samples \(samples), Patterns \(patterns))."
             case let .invalidHeaderValue(field, value):
                 return "Ungültiger IT-Headerwert \(field)=\(value)."
+            case let .resourceLimitExceeded(resource):
+                return "IT-Modul überschreitet das sichere \(resource)-Budget."
             case .emptySong:
                 return "Leeres IT-Modul: keine abspielbaren Songpositionen."
             case let .invalidOrder(order):
@@ -78,6 +81,7 @@ public enum ITParser {
     // 200/32...200 werden nicht mehr künstlich als Parserlimit behandelt.
     private static let maximumPatterns = 240
     private static let maximumPatternRows = 1_024
+    private static let maximumPatternCells = 4 * 1_024 * 1_024
 
     private struct Reader {
         let data: Data
@@ -262,6 +266,26 @@ public enum ITParser {
         )
         let samples = parsedSamples.samples
 
+        var totalPatternCells = 0
+        for index in 0..<patternCount {
+            let offset = try reader.dword(patternOffsetsOffset + index * 4)
+            let rows: Int
+            if offset == 0 {
+                rows = 64
+            } else {
+                guard offset <= data.count - 8 else {
+                    throw ParserError.invalidOffset(kind: "Pattern", index: index, offset: offset)
+                }
+                rows = try reader.word(offset + 2)
+                guard (1...maximumPatternRows).contains(rows) else {
+                    throw ParserError.invalidPatternRows(pattern: index, rows: rows)
+                }
+            }
+            totalPatternCells += rows * channelCount
+            guard totalPatternCells <= maximumPatternCells else {
+                throw ParserError.resourceLimitExceeded("Pattern")
+            }
+        }
         var patterns = [Pattern]()
         patterns.reserveCapacity(patternCount)
         var payloadEnd = max(
@@ -291,7 +315,8 @@ public enum ITParser {
                     reader: reader,
                     patternIndex: patternIndex,
                     offset: offset,
-                    orderMap: orderMap
+                    orderMap: orderMap,
+                    songLength: patternTable.count
                 ))
             }
         }
@@ -550,9 +575,13 @@ public enum ITParser {
             .midiChannel, instrument: index, extensions: extensions
         ) ?? headerMIDIChannel
         let headerFadeout = try reader.word(offset + 0x14) << 5
-        let fadeout = extensionValue(
+        let extendedFadeout = extensionValue(
             .fadeout, instrument: index, extensions: extensions
-        ) ?? headerFadeout
+        )
+        if let extendedFadeout, !(0...32_768).contains(extendedFadeout) {
+            throw ParserError.invalidInstrumentValue(instrument: index, field: "fadeout", value: extendedFadeout)
+        }
+        let fadeout = extendedFadeout ?? headerFadeout
         let legacyPluginSlot = rawMIDIChannel & 0x80 != 0 ? rawMIDIChannel & 0x7F : 0
         let pluginSlot = extensionValue(
             .pluginSlot, instrument: index, extensions: extensions
@@ -817,6 +846,22 @@ public enum ITParser {
         offsets: [Int],
         createdWithVersion: Int
     ) throws -> (samples: [Sample], endOffset: Int) {
+        // Pointer dürfen sich wiederholen. Das Budget zählt jede entstehende
+        // PCM-Kopie und bei Stereo beide Kanäle, bevor der erste Puffer entsteht.
+        var totalPCMValues = 0
+        for (index, offset) in offsets.enumerated() {
+            guard offset <= reader.data.count - 80 else {
+                throw ParserError.invalidSampleHeader(index + 1)
+            }
+            let flags = try reader.byte(offset + 0x12)
+            guard flags & 0x01 != 0 else { continue }
+            let length = try reader.dword(offset + 0x30)
+            let channels = flags & 0x04 != 0 && createdWithVersion >= 0x0214 ? 2 : 1
+            guard length <= (ITSampleDecompressor.maximumPCMValues - totalPCMValues) / channels else {
+                throw ParserError.resourceLimitExceeded("PCM")
+            }
+            totalPCMValues += length * channels
+        }
         var samples = [Sample]()
         samples.reserveCapacity(offsets.count)
         var endOffset = 0
@@ -1092,8 +1137,8 @@ public enum ITParser {
             }
         }
 
-        var orderMap = [Int](repeating: 0, count: max(1, count))
-        var next = max(0, patternTable.count - 1)
+        var orderMap = [Int](repeating: patternTable.count, count: max(1, count))
+        var next = patternTable.count
         if count > 0 {
             for rawIndex in stride(from: count - 1, through: 0, by: -1) {
                 if let mapped = filteredIndex[rawIndex] {
@@ -1116,7 +1161,8 @@ public enum ITParser {
         reader: Reader,
         patternIndex: Int,
         offset: Int,
-        orderMap: [Int]
+        orderMap: [Int],
+        songLength: Int
     ) throws -> Pattern {
         guard offset >= 0, offset <= reader.data.count - 8 else {
             throw ParserError.invalidOffset(kind: "Pattern", index: patternIndex, offset: offset)
@@ -1219,7 +1265,8 @@ public enum ITParser {
                 instrumentValue: instrumentValue,
                 volumeValue: volumeValue,
                 commandValue: commandValue,
-                orderMap: orderMap
+                orderMap: orderMap,
+                songLength: songLength
             )
         }
 
@@ -1231,7 +1278,8 @@ public enum ITParser {
         instrumentValue: Int?,
         volumeValue: Int?,
         commandValue: (Int, Int)?,
-        orderMap: [Int]
+        orderMap: [Int],
+        songLength: Int
     ) -> Note {
         let key: Int
         if let noteValue {
@@ -1252,7 +1300,7 @@ public enum ITParser {
         let command = commandValue?.0 ?? 0
         var parameter = commandValue?.1 ?? 0
         if command == 2 { // Bxx: rohe Order-Position auf gefilterte Liste abbilden
-            parameter = parameter < orderMap.count ? orderMap[parameter] : 0
+            parameter = parameter < orderMap.count ? orderMap[parameter] : songLength
         }
         let effectPresent = commandValue != nil && command != 0
         let effectID = effectPresent ? ModuleEffect.impulseTrackerCommand(command) : 0

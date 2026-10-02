@@ -102,6 +102,27 @@ class ReferenceCompareTests(unittest.TestCase):
         self.assertEqual(lag, 0)
         self.assertAlmostEqual(correlation, 1.0)
 
+    def test_short_overlap_cannot_win_lag_search(self) -> None:
+        lag, _ = reference_compare.best_envelope_lag([1, 3, 2, 4, 5.1], [1, 3, 2, 4, 5])
+        self.assertEqual(lag, 0)
+
+    def test_surround_is_not_silence_and_stereo_loss_is_visible(self) -> None:
+        signal = test_signal(seconds=1.2, gain=0.3)
+        paths = [self.directory / name for name in ("surround.wav", "silent.wav", "mono.wav", "left.wav")]
+        for path, factors in zip(paths, [(1, -1), (0, 0), (1, 1), (2, 0)]):
+            with wave.open(str(path), "wb") as wav:
+                wav.setnchannels(2)
+                wav.setsampwidth(2)
+                wav.setframerate(44_100)
+                wav.writeframes(b"".join(struct.pack("<hh", round(value * 32767 * factors[0]),
+                                                    round(value * 32767 * factors[1])) for value in signal))
+        surround = reference_compare.analyze_wavs(paths[0], paths[1])
+        self.assertIsNotNone(surround["levels"]["savage_rms_dbfs"])
+        self.assertIsNone(surround["levels"]["reference_rms_dbfs"])
+        self.assertGreater(surround["timing"]["savage_active_end_frames"], 0)
+        stereo_loss = reference_compare.analyze_wavs(paths[2], paths[3])
+        self.assertLess(stereo_loss["stft_cosine"]["mean"], 0.8)
+
     def test_gain_change_preserves_similarity_and_reports_db(self) -> None:
         signal = test_signal(gain=0.6)
         quieter = [value * 0.5 for value in signal]

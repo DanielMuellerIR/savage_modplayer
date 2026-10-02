@@ -474,6 +474,14 @@ class ModPlayerWorklet extends AudioWorkletProcessor {
     }
 
     play(mod, sampleRate) {
+        this.channels = [1, 2, 3, 4].map(index => new Channel(this, index));
+        this.patternBreak = false;
+        this.positionJump = false;
+        this.patternLoopRow = false;
+        this.patternDelay = 0;
+        this.patternDelayCounter = 0;
+        this.channelPeaks.fill(0);
+        this.blocksUntilLevelPost = 0;
         this.mod = mod;
         this.sampleRate = sampleRate;
 
@@ -546,18 +554,20 @@ class ModPlayerWorklet extends AudioWorkletProcessor {
     nextRow() {
         let targetPosition = this.position;
         let targetRow = this.rowIndex + 1;
+        let songEnded = false;
 
         if (this.patternLoopRow !== false) {
             targetRow = this.patternLoopRow;
             this.patternLoopRow = false;
         } else {
-            if (this.positionJump !== false) {
+            const hasPositionJump = this.positionJump !== false;
+            if (hasPositionJump) {
                 targetPosition = this.positionJump;
                 targetRow = 0;
                 this.positionJump = false;
             }
             if (this.patternBreak !== false) {
-                if (targetPosition === this.position) {
+                if (!hasPositionJump) {
                     targetPosition = this.position + 1;
                 }
                 targetRow = this.patternBreak;
@@ -566,12 +576,17 @@ class ModPlayerWorklet extends AudioWorkletProcessor {
                 targetRow = 0;
                 targetPosition = this.position + 1;
             }
+            if (hasPositionJump) {
+                songEnded = targetPosition < this.position
+                    || (targetPosition === this.position && targetRow <= this.rowIndex);
+            }
         }
 
         this.position = targetPosition;
         this.rowIndex = targetRow;
 
         if (this.position >= this.mod.length) {
+            songEnded = true;
             this.position = 0;
         }
 
@@ -590,7 +605,8 @@ class ModPlayerWorklet extends AudioWorkletProcessor {
                 position: this.position,
                 rowIndex: this.rowIndex,
                 bpm: this.bpm,
-                speed: this.ticksPerRow
+                speed: this.ticksPerRow,
+                songEnded
             });
         }
     }

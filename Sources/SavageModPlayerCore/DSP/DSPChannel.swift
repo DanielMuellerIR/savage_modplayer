@@ -1,5 +1,31 @@
 import Foundation
 
+/// Thread-sicherer Bedienzustand fuer Mute und Solo. Der MainActor ist der
+/// einzige Writer; der Audiothread liest beide Bits ohne Lock pro Frame.
+final class RealtimeMuteSoloState: Sendable {
+    private let storage: LockFreeAtomicUInt64
+
+    init(isMuted: Bool = false, isSoloed: Bool = false) {
+        storage = LockFreeAtomicUInt64(
+            (isMuted ? UInt64(1) : 0) | (isSoloed ? UInt64(2) : 0))
+    }
+
+    var isMuted: Bool {
+        get { storage.loadAcquire() & 1 != 0 }
+        set { update(bit: 1, enabled: newValue) }
+    }
+
+    var isSoloed: Bool {
+        get { storage.loadAcquire() & 2 != 0 }
+        set { update(bit: 2, enabled: newValue) }
+    }
+
+    private func update(bit: UInt64, enabled: Bool) {
+        let current = storage.loadRelaxed()
+        storage.storeRelease(enabled ? current | bit : current & ~bit)
+    }
+}
+
 public final class DSPChannel: Sendable {
     public let channelIndex: Int
 
@@ -167,9 +193,18 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var arpX: Int = 0
     nonisolated(unsafe) public var arpY: Int = 0
     
-    // Mute and Solo
-    nonisolated(unsafe) public var isMuted: Bool = false
-    nonisolated(unsafe) public var isSoloed: Bool = false
+    // Mute und Solo schreibt der MainActor, waehrend der Audiothread sie pro
+    // Frame liest. Beide Bits liegen deshalb in einem lockfreien Wort. Es gibt
+    // nur einen Writer; der Audio-Callback aendert diesen Bedienzustand nie.
+    private let muteSoloState = RealtimeMuteSoloState()
+    public var isMuted: Bool {
+        get { muteSoloState.isMuted }
+        set { muteSoloState.isMuted = newValue }
+    }
+    public var isSoloed: Bool {
+        get { muteSoloState.isSoloed }
+        set { muteSoloState.isSoloed = newValue }
+    }
 
     // ---- Format-Konfiguration (vom Coordinator pro Modul gesetzt) ----
     // S3M-Modus: Perioden aus Key+C2Spd, Effekt-Memory, ST3-Clock.
@@ -843,6 +878,9 @@ public final class DSPChannel: Sendable {
             break
         case .noteOff:
             keyReleased = true
+            if sample?.sustainLoop?.type == .pingpong {
+                sampleDirection = 1
+            }
             if instrument?.volumeEnvelope == nil
                 || (instrument?.volumeEnvelope?.loopEnabled == true
                     && (instrument?.fadeout ?? 0) > 0) {
@@ -2001,7 +2039,7 @@ public final class DSPChannel: Sendable {
             }
 
             if noteFadeActive, let inst = instrument, inst.fadeout > 0 {
-                fadeVolume = max(0, fadeVolume - inst.fadeout * 2)
+                fadeVolume = max(0, fadeVolume - min(32_768, max(0, inst.fadeout)) * 2)
                 if fadeVolume == 0 { playing = false }
             }
             itEnvelopeReleased = keyReleased

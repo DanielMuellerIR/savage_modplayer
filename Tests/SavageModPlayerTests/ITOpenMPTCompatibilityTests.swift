@@ -104,6 +104,19 @@ final class ITOpenMPTCompatibilityTests: XCTestCase {
         XCTAssertEqual((wav.count - 44) / 4, 128 * 6 * 48)
     }
 
+    func testExtendedFadeoutRejectsValuesOutsideItsPlaybackDomain() throws {
+        for value in [32_769, Int.max] {
+            let data = makeIT(
+                flags: 0x0005, instruments: [instrument()],
+                endExtensions: instrumentExtensions([("..OF", 8, [value])]))
+            XCTAssertThrowsError(try ITParser.parse(data: data))
+        }
+        let valid = try ITParser.parse(data: makeIT(
+            flags: 0x0005, instruments: [instrument()],
+            endExtensions: instrumentExtensions([("..OF", 2, [32_768])])))
+        XCTAssertEqual(valid.instruments[1]?.fadeout, 32_768)
+    }
+
     func testInstrumentExtensionsOverrideFadeoutAndPanning() throws {
         let extensionData = instrumentExtensions([
             ("..OF", 2, [1_234]),

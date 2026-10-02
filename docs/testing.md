@@ -271,6 +271,16 @@ Prüfliste am Gerät:
    Pegel, Master- und Kanal-Oszilloskope starten sofort. Wieder hochscrollen,
    kurz in einen anderen Tab wechseln und zurückkehren; beim erneuten
    Sichtbarwerden starten alle drei Anzeigen wieder.
+8. **Ziehen aus der Dateien-App.** Eine Moduldatei in die Bibliothek ziehen.
+   Der Titel wird importiert und lässt sich abspielen; ein erneutes Ziehen
+   derselben Datei erzeugt kein Duplikat. Diesen Bedienweg am Gerät prüfen,
+   weil der Simulator keine von außen auslösbare Ziehgeste bietet.
+9. **Hängender File Provider (gesonderte Abnahme).** Falls ein Anbieter mit
+   reproduzierbar hängendem koordiniertem Lesen verfügbar ist: Import starten,
+   abbrechen und prüfen, dass die App wieder bedienbar ist. Zusätzlich ohne
+   Nutzerabbruch den Stall-Timeout prüfen. Anbieter, Auslöser und Ergebnis
+   festhalten. Ohne reproduzierbaren Hänger bleibt diese Abnahme offen;
+   `CoordinationWatchdogTests` allein belegt das Verhalten des Anbieters nicht.
 
 ## Release und Notarisierung
 
@@ -285,3 +295,6 @@ Prüfliste am Gerät:
   Profilnamen gehören in private Setup-Doku.
 - `publish_github.sh`, Tags, GitHub-Releases und Notary-Uploads nur nach
   ausdrücklichem Auftrag. Vorher Dry-run und Public-Leak-Prüfung.
+
+Web-Ladezustand und Songende: `node Tests/js/playback-state.mjs` prüft Titelwechsel,
+Stop während Audio-Vorbereitung, endliche Pattern-Loops und kombinierte Sprungbefehle.

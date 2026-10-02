@@ -23,7 +23,7 @@
 # Referenzwerte (2026-08-23, Mac mit M5-Chip, 4-Kanal-MOD, Fenster 1354x830, stumm):
 #   30 Hz ≈ 22 %, 24 Hz ≈ 20 %, 15 Hz ≈ 18 %, 10 Hz ≈ 14 % eines Kerns.
 
-set -uo pipefail
+set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MODULE="${1:-}"
@@ -36,44 +36,100 @@ RATES=("$@")
 [ ${#RATES[@]} -eq 0 ] && RATES=(30 10)
 
 APP="Savage Mod Player.app"
-BIN="$APP/Contents/MacOS/SavageModPlayerApp"
+BIN="${SAVAGE_VISUALIZER_BIN:-$APP/Contents/MacOS/SavageModPlayerApp}"
 DOMAIN=com.viben.SavageModPlayer
 # Einschwingzeit vor der Messung: Fenster, Audio-Engine und Visualisierungen
 # brauchen ein paar Sekunden, bis die Last stabil ist.
-SETTLE=12
-WINDOW=30
+SETTLE="${SAVAGE_VISUALIZER_SETTLE:-12}"
+WINDOW="${SAVAGE_VISUALIZER_WINDOW:-30}"
 
 if [ ! -x "$BIN" ]; then
     echo "FEHLER: $BIN fehlt. Zuerst 'bash build_app.sh' laufen lassen." >&2
     exit 2
 fi
 
-BACKUP="$(mktemp -t savage-visualizer-defaults).plist"
-cleanup() {
-    pkill -f "$BIN" 2>/dev/null
-    if [ -s "$BACKUP" ]; then
-        defaults import "$DOMAIN" "$BACKUP" 2>/dev/null
+WORK="$(mktemp -d -t savage-visualizer-defaults)"
+BACKUP="$WORK/defaults-backup.plist"
+DEFAULTS_STATE=unknown
+DEFAULTS_TOUCHED=0
+MEASUREMENT_PID=""
+
+stop_measurement_process() {
+    if [ -n "$MEASUREMENT_PID" ] && kill -0 "$MEASUREMENT_PID" 2>/dev/null; then
+        kill "$MEASUREMENT_PID" 2>/dev/null || true
+        wait "$MEASUREMENT_PID" 2>/dev/null || true
     fi
-    rm -f "$BACKUP"
+    MEASUREMENT_PID=""
+}
+
+cleanup() {
+    status=$?
+    trap - EXIT
+    stop_measurement_process
+    restore_failed=0
+    if [ "$DEFAULTS_STATE" = present ]; then
+        if defaults import "$DOMAIN" "$BACKUP" >/dev/null 2>&1; then
+            # Nur eine nachweislich importierte Sicherung darf verschwinden.
+            rm -f "$BACKUP"
+        else
+            echo "FEHLER: Voreinstellungen konnten nicht wiederhergestellt werden; Sicherung bleibt unter $BACKUP" >&2
+            restore_failed=1
+        fi
+    elif [ "$DEFAULTS_STATE" = absent ] && [ "$DEFAULTS_TOUCHED" -eq 1 ]; then
+        # Gab es vor der Messung noch keine Domain, darf der Lauf auch keine
+        # mit Messwerten fuer Lautstaerke und Bildrate zuruecklassen.
+        if ! defaults delete "$DOMAIN" >/dev/null 2>&1; then
+            echo "FEHLER: Neu angelegte Voreinstellungen konnten nicht entfernt werden." >&2
+            restore_failed=1
+        fi
+    fi
+    rmdir "$WORK" 2>/dev/null || true
+    if [ "$restore_failed" -ne 0 ] && [ "$status" -eq 0 ]; then
+        status=1
+    fi
+    exit "$status"
 }
 trap cleanup EXIT
-defaults export "$DOMAIN" "$BACKUP" 2>/dev/null || true
+
+# `defaults export` meldet sowohl eine fehlende Domain als auch echte Lese- oder
+# Schreibfehler mit ungleich null. Erst die erfolgreiche Domain-Liste
+# unterscheidet beide Faelle; bei einer vorhandenen Domain ist ein gescheitertes
+# Backup ein harter Fehler, bevor der erste Messwert geschrieben wird.
+if ! DEFAULT_DOMAINS="$(defaults domains 2>/dev/null)"; then
+    echo "FEHLER: Voreinstellungs-Domains konnten nicht gelesen werden." >&2
+    exit 1
+fi
+# Die lange Liste wird zuerst vollstaendig normalisiert. Ein direktes `grep -q`
+# in der Pipe beendet seine Vorgaenger nach dem Treffer und sieht mit `pipefail`
+# deshalb faelschlich wie ein Fehler aus.
+NORMALIZED_DOMAINS="$(printf '%s\n' "$DEFAULT_DOMAINS" \
+    | tr ',' '\n' \
+    | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+if grep -Fxq "$DOMAIN" <<< "$NORMALIZED_DOMAINS"; then
+    DEFAULTS_STATE=present-unbacked
+    if ! defaults export "$DOMAIN" "$BACKUP" >/dev/null 2>&1; then
+        echo "FEHLER: Vorhandene Voreinstellungen konnten nicht gesichert werden." >&2
+        exit 1
+    fi
+    DEFAULTS_STATE=present
+else
+    DEFAULTS_STATE=absent
+fi
 
 echo "=== Visualizer-CPU: $(basename "$MODULE") ==="
 for hz in "${RATES[@]}"; do
-    pkill -f "$BIN" 2>/dev/null
-    sleep 1
+    stop_measurement_process
+    DEFAULTS_TOUCHED=1
     defaults write "$DOMAIN" savage.volume -float 0
     defaults write "$DOMAIN" savage.visualizerHz -float "$hz"
 
     "$BIN" -ApplePersistenceIgnoreState YES "$MODULE" >/dev/null 2>&1 &
-    pid=$!
+    MEASUREMENT_PID=$!
     sleep "$SETTLE"
-    before="$(ps -o cputime= -p $pid | tr -d ' ')"
+    before="$(ps -o cputime= -p "$MEASUREMENT_PID" | tr -d ' ')"
     sleep "$WINDOW"
-    after="$(ps -o cputime= -p $pid | tr -d ' ')"
-    kill $pid 2>/dev/null
-    wait $pid 2>/dev/null
+    after="$(ps -o cputime= -p "$MEASUREMENT_PID" | tr -d ' ')"
+    stop_measurement_process
 
     python3 - "$before" "$after" "$WINDOW" "$hz" <<'PY'
 import sys

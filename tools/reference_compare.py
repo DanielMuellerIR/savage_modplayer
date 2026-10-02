@@ -134,37 +134,34 @@ def _read_pcm(path: Path) -> tuple[array.array, int]:
 
 def _signal(path: Path) -> dict[str, object]:
     pcm, frames = _read_pcm(path)
-    if frames == 0:
-        return {"frames": 0, "rms": 0.0, "dbfs": None, "samples": array.array("d")}
-
-    mono_sum = 0.0
-    mono_square_sum = 0.0
-    for index in range(0, len(pcm), 2):
-        value = (float(pcm[index]) + float(pcm[index + 1])) / (2.0 * 32768.0)
-        mono_sum += value
-        mono_square_sum += value * value
-    dc = mono_sum / frames
-    variance = max(0.0, mono_square_sum / frames - dc * dc)
-    rms = math.sqrt(variance)
-
-    # Fuer Huelle und STFT genuegt jedes vierte Frame. Die feste Auswahl ist
-    # deterministisch und vermeidet songlange Float-Puffer bei 44,1 kHz.
-    downsampled = array.array("d")
-    append = downsampled.append
-    for frame in range(0, frames, DOWNSAMPLE):
-        index = frame * 2
-        value = (float(pcm[index]) + float(pcm[index + 1])) / (2.0 * 32768.0)
-        append(value - dc)
-    del pcm
+    channels = (array.array("d"), array.array("d"))
+    variance_sum = 0.0
+    for channel in range(2):
+        total = 0.0
+        square_sum = 0.0
+        for index in range(channel, len(pcm), 2):
+            value = float(pcm[index]) / 32768.0
+            total += value
+            square_sum += value * value
+        dc = total / frames if frames else 0.0
+        variance_sum += max(0.0, square_sum / frames - dc * dc) if frames else 0.0
+        # Kanäle getrennt halten: Surround (L = -R) darf nicht als Stille gelten.
+        for frame in range(0, frames, DOWNSAMPLE):
+            channels[channel].append(float(pcm[frame * 2 + channel]) / 32768.0 - dc)
+    rms = math.sqrt(variance_sum / 2.0)
     return {
         "frames": frames,
         "rms": rms,
         "dbfs": 20.0 * math.log10(rms) if rms > 0.0 else None,
-        "samples": downsampled,
+        "samples": channels[0],
+        "right_samples": channels[1],
     }
 
 
-def rms_envelope(samples: Sequence[float]) -> list[float]:
+def rms_envelope(samples: Sequence[float], right: Sequence[float] | None = None) -> list[float]:
+    if right is not None:
+        return [math.sqrt((a * a + b * b) / 2.0)
+                for a, b in zip(rms_envelope(samples), rms_envelope(right))]
     if len(samples) < RMS_WINDOW:
         if not samples:
             return []
@@ -211,6 +208,7 @@ def best_envelope_lag(
     savage: Sequence[float], reference: Sequence[float]
 ) -> tuple[int, float | None]:
     max_lag = round(MAX_LAG_SECONDS * ANALYSIS_RATE / RMS_HOP)
+    minimum_overlap = max(3, math.ceil(min(len(savage), len(reference)) / 2))
     best_lag = 0
     best_correlation: float | None = None
     for lag in range(-max_lag, max_lag + 1):
@@ -220,6 +218,8 @@ def best_envelope_lag(
         else:
             left = savage
             right = reference[-lag:]
+        if min(len(left), len(right)) < minimum_overlap:
+            continue
         correlation = _pearson(left, right)
         if correlation is None:
             continue
@@ -355,6 +355,8 @@ def stft_metrics(
     savage_rms: float,
     reference_rms: float,
     lag_envelope_hops: int,
+    savage_right: Sequence[float] | None = None,
+    reference_right: Sequence[float] | None = None,
 ) -> dict[str, object]:
     lag_samples = lag_envelope_hops * RMS_HOP
     values: list[float] = []
@@ -367,6 +369,13 @@ def stft_metrics(
         right = _spectrum(reference, reference_start, reference_rms)
         if left is None or right is None:
             break
+        if savage_right is not None and reference_right is not None:
+            savage_spectrum = _spectrum(savage_right, savage_start, savage_rms)
+            reference_spectrum = _spectrum(reference_right, reference_start, reference_rms)
+            if savage_spectrum is None or reference_spectrum is None:
+                break
+            left.extend(savage_spectrum)
+            right.extend(reference_spectrum)
         cosine = _cosine(left, right)
         if cosine is not None and math.isfinite(cosine):
             values.append(cosine)
@@ -390,8 +399,8 @@ def analyze_wavs(
     reference_samples = reference["samples"]
     assert isinstance(savage_samples, array.array)
     assert isinstance(reference_samples, array.array)
-    savage_envelope = rms_envelope(savage_samples)
-    reference_envelope = rms_envelope(reference_samples)
+    savage_envelope = rms_envelope(savage_samples, savage["right_samples"])
+    reference_envelope = rms_envelope(reference_samples, reference["right_samples"])
     lag_hops, correlation = best_envelope_lag(savage_envelope, reference_envelope)
     lag_frames = lag_hops * RMS_HOP * DOWNSAMPLE
     savage_frames = int(savage["frames"])
@@ -447,6 +456,8 @@ def analyze_wavs(
             savage_rms,
             reference_rms,
             lag_hops,
+            savage["right_samples"],
+            reference["right_samples"],
         ),
     }
 

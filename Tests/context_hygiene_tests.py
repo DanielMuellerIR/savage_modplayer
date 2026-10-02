@@ -109,7 +109,8 @@ class ContextHygieneTests(unittest.TestCase):
             "Produktversion nicht",
             "docs/testing.md",
             "tasks/backlog.md",
-            "geschlossen und dürfen nicht reaktiviert",
+            "historische Start-/Branch-Anweisungen aus dem IT-Task dürfen",
+            "nicht reaktiviert werden",
         ):
             self.assertIn(marker, agents)
 

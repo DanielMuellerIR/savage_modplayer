@@ -3,6 +3,9 @@ import Foundation
 // Isolierte IT214-/IT215-Dekompression. Der Decoder arbeitet ausschließlich auf
 // Integer-Samplewerten; Normalisierung und Sample-Metadaten bleiben im ITParser.
 public enum ITSampleDecompressor {
+    // Gesamtzahl dekodierter Kanalwerte, entsprechend dem PCM-Budget der Parser.
+    static let maximumPCMValues = 32 * 1_024 * 1_024
+
     public enum BitDepth: Int, Sendable, Equatable {
         case eight = 8
         case sixteen = 16
@@ -97,7 +100,7 @@ public enum ITSampleDecompressor {
         guard offset >= 0, offset <= data.count else {
             throw DecompressionError.invalidOffset(offset)
         }
-        guard frameCount >= 0 else {
+        guard frameCount >= 0, frameCount <= maximumPCMValues / (stereo ? 2 : 1) else {
             throw DecompressionError.invalidFrameCount(frameCount)
         }
 

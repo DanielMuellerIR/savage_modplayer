@@ -81,6 +81,7 @@ If no preview appears:
 - **Folder import**: pick one folder and everything playable inside is copied into the library with its structure intact. ZIP archives are unpacked, duplicates are skipped, progress is shown, and the import can be cancelled. Nested archives share one safety budget for bytes, entries, and archive count; links are rejected, and the source is retained whenever the import is incomplete. Files stored in a cloud file provider are downloaded and read through a file coordinator first.
 - **Finder file sharing**: connect the iPhone, open Files in the Finder, and drag whole folders or ZIP archives onto the app; the same library appears in the iOS Files app under "On My iPhone". The index is reconciled with the file system on every launch, and ZIPs are unpacked automatically.
 - **Visibility-driven visualizations**: scroll down and the master oscilloscope, VU meters, and channel scopes start immediately; scroll away, switch tabs, or lock the screen and their views and waveform caches are discarded. Up to 32 channel scopes use a readable four-column phone or eight-column wide layout.
+- **iPad**: on wide screens the library sits on the left and the running track on the right. Master and channel oscilloscopes grow into the free height of the playback column. Modules and ZIP archives can be dragged straight from the Files app into the library — they are imported and archives unpacked without interrupting playback. With a keyboard attached, space toggles play/pause, Cmd+← and Cmd+→ change track, and Cmd+Shift+← / Cmd+Shift+→ skip ten seconds. While the search field is active, space types a space. Hold Cmd to see every shortcut.
 - **Appearance**: uses the same restrained blue/cyan and graphite palette and the same app icon as the Mac app. It follows the system by default and can be forced to light or dark. German and English.
 
 ---
@@ -140,6 +141,10 @@ Compatibility messages are capability-based. `cwtv` identifies the creating trac
 - Deprecated OpenMPT bug-emulation modes for pre-1.17 swing, the superseded old pattern-loop/jump rule, imprecise legacy ping-pong overshoot, and proprietary envelope release nodes are not emulated. They produce a feature-specific warning only if used.
 - Extended IT patterns from 1 through 1,024 rows and up to 240 patterns are accepted. Deleted pattern references in the order list are skipped like OpenMPT.
 
+IT loading is limited to 33,554,432 decoded PCM values (counting both stereo
+channels) and 4,194,304 expanded pattern cells per module. Files exceeding these
+limits are rejected before allocating the corresponding buffers.
+
 ### Architecture
 
 | Layer | macOS and iOS (Swift) | Bonus HTML5 player |
@@ -158,7 +163,7 @@ Compatibility messages are capability-based. `cwtv` identifies the creating trac
 ### macOS app
 
 ```bash
-bash build_app.sh                 # → "Savage Mod Player.app" (incl. Quick Look appex)
+./build.sh                        # → "Savage Mod Player.app" (incl. Quick Look appex; wrapper for build_app.sh)
 ```
 
 Besides the app itself, `build_app.sh` compiles the Quick Look extension

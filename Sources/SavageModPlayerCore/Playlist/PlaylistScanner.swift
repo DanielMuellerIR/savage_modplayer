@@ -120,17 +120,28 @@ public enum PlaylistScanner {
             guard visitedDirectories.insert(resolved).inserted,
                   let children = try? fm.contentsOfDirectory(
                     at: directory,
-                    includingPropertiesForKeys: [.isDirectoryKey],
+                    includingPropertiesForKeys: [
+                        .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey
+                    ],
                     options: [.skipsHiddenFiles]) else { return false }
             for child in children {
-                if isModFile(child) || isArchive(child) { return true }
-                var isDirectory: ObjCBool = false
-                let directoryCandidate = child.resolvingSymlinksInPath()
-                if fm.fileExists(atPath: directoryCandidate.path, isDirectory: &isDirectory),
-                   isDirectory.boolValue,
-                   containsPlayableContent(directoryCandidate) {
+                let values = try? child.resourceValues(forKeys: [
+                    .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey
+                ])
+                let readableURL = values?.isSymbolicLink == true
+                    ? child.resolvingSymlinksInPath()
+                    : child
+                let readableValues = values?.isSymbolicLink == true
+                    ? try? readableURL.resourceValues(forKeys: [
+                        .isDirectoryKey, .isRegularFileKey
+                    ])
+                    : values
+                if readableValues?.isRegularFile == true,
+                   isModFile(child) || isArchive(child) {
                     return true
                 }
+                if readableValues?.isDirectory == true,
+                   containsPlayableContent(readableURL) { return true }
             }
             return false
         }
@@ -161,6 +172,13 @@ public enum PlaylistScanner {
             // ausgewaehlten Link. Gelesen wird dagegen dessen Ziel, damit die
             // Temp-Kopie nach Ende des Security-Scopes eine echte Datei ist.
             let readableURL = sourceURL ?? fileURL
+            // Namen klassifizieren nur regulaere Dateien. Ein leerer Ordner
+            // `sammlung.mod`, eine FIFO oder ein toter Link sind trotz passender
+            // Endung nicht spielbar; die FIFO duerfte insbesondere nie in einen
+            // spaeteren Data(contentsOf:)-Zugriff gelangen.
+            let readableValues = try? readableURL.resourceValues(
+                forKeys: [.isRegularFileKey])
+            guard readableValues?.isRegularFile == true else { return }
             // Archive ZUERST klassifizieren: `mod.collection.zip` matcht sonst
             // die Amiga-Namenskonvention `mod.<name>` und wuerde als
             // unspielbare "Moduldatei" kopiert statt entpackt.

@@ -1,5 +1,10 @@
 import Foundation
 import SavageModPlayerCore
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 // ============================================================================
 // Echtzeit-Wiedergabe von einem oder mehreren Modulen, mit Tastatursteuerung.
@@ -23,6 +28,59 @@ private enum TrackOutcome {
     case failed(String)
 }
 
+enum RegularInputError: Error, LocalizedError {
+    case openFailed(String)
+    case inspectFailed(String)
+    case notRegular
+    case configureFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .openFailed(let detail):
+            return "Datei liess sich nicht oeffnen: \(detail)"
+        case .inspectFailed(let detail):
+            return "Dateityp liess sich nicht bestimmen: \(detail)"
+        case .notRegular:
+            return "Quelle ist keine reguläre Datei."
+        case .configureFailed(let detail):
+            return "Dateizugriff liess sich nicht vorbereiten: \(detail)"
+        }
+    }
+}
+
+/// Oeffnet direkte CLI-Eingaben zunaechst nichtblockierend und prueft danach
+/// mit `fstat` GENAU den geoeffneten Deskriptor. Eine FIFO mit Modulendung darf
+/// dadurch weder schon in `open` auf einen Schreiber warten noch zwischen einer
+/// Pfadpruefung und dem eigentlichen Lesen untergeschoben werden.
+func readRegularInput(at url: URL) throws -> Data {
+    let descriptor = url.path.withCString { path in
+        open(path, O_RDONLY | O_NONBLOCK)
+    }
+    guard descriptor >= 0 else {
+        throw RegularInputError.openFailed(String(cString: strerror(errno)))
+    }
+    var descriptorNeedsClose = true
+    defer {
+        if descriptorNeedsClose { _ = close(descriptor) }
+    }
+
+    var info = stat()
+    guard fstat(descriptor, &info) == 0 else {
+        throw RegularInputError.inspectFailed(String(cString: strerror(errno)))
+    }
+    guard (info.st_mode & S_IFMT) == S_IFREG else {
+        throw RegularInputError.notRegular
+    }
+
+    let flags = fcntl(descriptor, F_GETFL)
+    guard flags >= 0, fcntl(descriptor, F_SETFL, flags & ~O_NONBLOCK) == 0 else {
+        throw RegularInputError.configureFailed(String(cString: strerror(errno)))
+    }
+    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    descriptorNeedsClose = false
+    return try handle.readToEnd() ?? Data()
+}
+
 /// Sammelt alle spielbaren Module unterhalb eines Ordners, sortiert nach Pfad.
 ///
 /// Bewusst direkt enumeriert statt ueber `PlaylistScanner.collectEntries`:
@@ -30,13 +88,23 @@ private enum TrackOutcome {
 /// `--list` noch die Wiedergabe sollen etwas auf die Platte schreiben.
 func playableModules(in directory: URL) -> [URL]? {
     guard let enumerator = FileManager.default.enumerator(
-        at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        at: directory,
+        includingPropertiesForKeys: [.isRegularFileKey],
+        options: [.skipsHiddenFiles]
     ) else {
         return nil
     }
     var found: [URL] = []
     while let fileURL = enumerator.nextObject() as? URL {
-        if PlaylistScanner.isModFile(fileURL) { found.append(fileURL) }
+        // Die Endung allein reicht nicht: Ein Ordner `sammlung.mod` wurde
+        // bislang aufgelistet, eine FIFO `stream.xm` bei --play sogar mit
+        // Data(contentsOf:) geoeffnet und konnte dadurch unbegrenzt blockieren.
+        // Symlinks sind ebenfalls keine regulaeren Dateien; Foundation meldet
+        // sie ueber diesen Wert deshalb als false.
+        let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey])
+        if values?.isRegularFile == true, PlaylistScanner.isModFile(fileURL) {
+            found.append(fileURL)
+        }
     }
     return found.sorted { $0.path < $1.path }
 }
@@ -218,8 +286,11 @@ private func outcome(for reason: PCMSinkFinishReason) -> TrackOutcome {
 /// gemeldet und uebersprungen. Bleibt am Ende kein einziger spielbarer Titel
 /// uebrig, endet der Prozess mit 1 — die Meldung geht also nie verloren.
 private func loadModule(at url: URL) -> Mod? {
-    guard let data = try? Data(contentsOf: url) else {
-        reportError("Datei nicht lesbar: \(url.path)")
+    let data: Data
+    do {
+        data = try readRegularInput(at: url)
+    } catch {
+        reportError("Datei nicht lesbar: \(url.path): \(error.localizedDescription)")
         return nil
     }
     do {

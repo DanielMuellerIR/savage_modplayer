@@ -26,11 +26,31 @@ final class AppModel: ObservableObject {
     // Bei gesperrtem Bildschirm laeuft der Ton weiter, die Scope-Arbeit stoppt.
     @Published private(set) var isSceneActive = true
 
-    // Per "Oeffnen mit" hereingereichte Dateien, die noch auf den Import
-    // warten. Sie treffen typischerweise beim Kaltstart ein — genau dann, wenn
-    // die Bibliothek noch mit dem Startabgleich beschaeftigt ist und keinen
-    // Import annimmt.
-    private var pendingOpenURLs: [URL] = []
+    // Ist gerade das Suchfeld der Bibliothek aktiv?
+    //
+    // Das Kuerzel fuer Abspielen/Pause liegt auf der Leertaste, ohne Zusatz.
+    // Waehrend jemand einen Titel sucht, muss die Leertaste aber ein
+    // Leerzeichen tippen. Darauf zu hoffen, dass iOS richtig entscheidet, waere
+    // geraten: Ein Menuebefehl der Szene wird vor dem Texteingabefeld gefragt.
+    // Deshalb schaltet PlaybackCommands das Kuerzel hier ausdruecklich ab —
+    // ein abgeschalteter Befehl greift die Taste nicht, und sie erreicht das
+    // Feld.
+    @Published var isSearchFieldActive = false
+
+    // Von aussen hereingereichte Dateien, die noch auf den Import warten. Sie
+    // treffen typischerweise beim Kaltstart ein — genau dann, wenn die
+    // Bibliothek noch mit dem Startabgleich beschaeftigt ist und keinen Import
+    // annimmt.
+    //
+    // `playFirst` unterscheidet die beiden Wege: "Oeffnen mit" reicht genau eine
+    // Datei herein und der Nutzer will sie hoeren; ein Fallenlassen aus der
+    // Dateien-App kann ein ganzer Ordner sein und soll die laufende Wiedergabe
+    // nicht unterbrechen.
+    private struct PendingSource {
+        let url: URL
+        let playFirst: Bool
+    }
+    private var pendingOpenURLs: [PendingSource] = []
     private var cancellables = Set<AnyCancellable>()
 
     // Die Vorgaben sind der Normalfall der App. Tests reichen eine Bibliothek
@@ -72,16 +92,41 @@ final class AppModel: ObservableObject {
     // wertlos — iOS raeumt den Uebergabeordner wieder auf. Ein Archiv wird dabei
     // wie jede andere Quelle behandelt und unterwegs ausgepackt.
     func open(_ url: URL) {
-        pendingOpenURLs.append(url)
+        pendingOpenURLs.append(PendingSource(url: url, playFirst: true))
+        openPendingFiles()
+    }
+
+    // MARK: - Fallenlassen aus der Dateien-App
+
+    // Auf breiten Bildschirmen zieht man Dateien direkt aus der Dateien-App in
+    // die Bibliothek. Der Weg ist derselbe wie bei "Oeffnen mit" — Uebernahme
+    // nach `Documents/`, Archive unterwegs ausgepackt —, nur ohne anschliessend
+    // etwas abzuspielen: Wer waehrend eines laufenden Titels zehn Module
+    // ablegt, will sie sortiert wissen und nicht mitten im Stueck unterbrochen
+    // werden.
+    func importDropped(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        pendingOpenURLs.append(contentsOf: urls.map { PendingSource(url: $0, playFirst: false) })
         openPendingFiles()
     }
 
     private func openPendingFiles() {
-        guard !pendingOpenURLs.isEmpty, !library.isBusy else { return }
-        let urls = pendingOpenURLs
-        pendingOpenURLs = []
-        library.importSources(urls) { [weak self] report in
-            guard let self, let report else { return }
+        guard let first = pendingOpenURLs.first, !library.isBusy else { return }
+        // Immer nur einen Stapel gleicher Art auf einmal: Sonst muesste der
+        // Bericht rueckwaerts einzelnen Quellen zugeordnet werden, und dafuer
+        // gibt es keine verlaessliche Zuordnung. Der Rest kommt beim naechsten
+        // Durchlauf dran — dafuer sorgt der Sink auf `isBusy`.
+        let playFirst = first.playFirst
+        let batchEnd = pendingOpenURLs.firstIndex { $0.playFirst != playFirst }
+            ?? pendingOpenURLs.endIndex
+        let batch = pendingOpenURLs[..<batchEnd]
+        pendingOpenURLs.removeSubrange(..<batchEnd)
+
+        library.importSources(batch.map(\.url)) { [weak self] report in
+            guard let self else { return }
+            // Wartet noch ein Stapel der anderen Art, kommt er jetzt dran.
+            defer { self.openPendingFiles() }
+            guard playFirst, let report else { return }
             // Ein bereits vorhandener Titel ist kein Fehlschlag: Dann spielt
             // eben der, der schon in der Bibliothek steht.
             guard let path = report.imported.first ?? report.duplicates.first,

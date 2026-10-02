@@ -96,7 +96,9 @@ window.__savageDebug = {
   }
 };
 let currentMod = null;
-let currentFilename = '';
+let currentFile = null;
+let loadRevision = 0;
+let playRequested = false;
 let currentPosition = 0;
 let lastPosition = 0;
 let previousVolume = 1.0;
@@ -160,19 +162,30 @@ volumeSlider.addEventListener('input', (e) => {
 
 playBtn.addEventListener('click', async () => {
   if (!currentMod) return;
-  if (player.playing) {
+  if (player.playing || playRequested) {
+    ++loadRevision;
+    playRequested = false;
     player.stop();
     setPlayingUI(false);
   } else {
+    const revision = ++loadRevision;
+    playRequested = true;
+    setPlayingUI(true);
     try {
       player.resumeContext();
       const startPos = currentPosition;
       lastPosition = startPos; // Letzte Position vor Wiedergabe zurücksetzen
-      await player.play();
+      const started = await player.play();
+      if (revision !== loadRevision) return;
+      playRequested = false;
+      if (!started) { setPlayingUI(false); return; }
       // Beim Starten direkt auf die aktuelle Slider-Position springen
       player.setPosition(startPos, 0);
       setPlayingUI(true);
     } catch (err) {
+      if (revision !== loadRevision) return;
+      playRequested = false;
+      setPlayingUI(false);
       console.error('play() fehlgeschlagen:', err);
       showError('Wiedergabe fehlgeschlagen: ' + err.message);
     }
@@ -246,9 +259,9 @@ modSelect.addEventListener('change', (e) => {
   if (entry) loadFile(entry.file, { autoplay: true });
 });
 
-// Markiert den aktuell geladenen Eintrag im Dropdown (per Name+Size-Match).
+// Markiert genau die geladene Datei, auch bei gleichen Dateinamen.
 function syncModSelectSelection(file) {
-  const idx = modList.findIndex(m => m.name === file.name && m.file.size === file.size);
+  const idx = modList.findIndex(m => m.file === file);
   if (idx >= 0) modSelect.value = String(idx);
 }
 
@@ -305,7 +318,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (modList.length <= 1) return;
     player.resumeContext();
-    const currentIdx = modList.findIndex(m => m.name === currentFilename);
+    const currentIdx = modList.findIndex(m => m.file === currentFile);
     if (currentIdx >= 0) {
       const dir = e.key === 'ArrowUp' ? -1 : 1;
       const nextIdx = (currentIdx + dir + modList.length) % modList.length;
@@ -406,16 +419,22 @@ async function walkEntry(entry, out) {
 // ─── 6. File-Laden + Rendering ───────────────────────────────────────────────
 
 async function loadFile(file, options = {}) {
+  const revision = ++loadRevision;
   const autoplay = options.autoplay !== false;
+  playRequested = autoplay;
+  player.stop();
+  setPlayingUI(autoplay);
   const audioReady = options.audioReady || null;
   try {
     const buf = await file.arrayBuffer();
+    if (revision !== loadRevision) return;
     const mod = parseModBuffer(buf, file.name);
     player.stop();
     player.setMod(mod, WORKLET_BLOB_URL);
     setUpPlayerCallbacks();
     currentMod = mod;
-    currentFilename = file.name;
+    currentFile = modList.find(m => m.file === file)?.file
+      || modList.find(m => m.name === file.name && m.file.size === file.size)?.file || file;
     currentPosition = 0;
     lastPosition = 0;
     currentRow = 0;
@@ -425,7 +444,7 @@ async function loadFile(file, options = {}) {
     statusFile.title = file.name;
     statusFile.textContent = file.name;
     playBtn.disabled = false;
-    syncModSelectSelection(file);
+    syncModSelectSelection(currentFile);
     renderInstruments();
     renderPattern();
     
@@ -439,12 +458,18 @@ async function loadFile(file, options = {}) {
       // nötige User-Geste; bei Ordner-Drops wurde Audio oben schon vorbereitet.
       if (audioReady) await audioReady;
       else await player.prepareAudioForGesture(WORKLET_BLOB_URL);
-      await player.play();
-      setPlayingUI(true);
+      if (revision !== loadRevision) return;
+      const started = await player.play();
+      if (revision !== loadRevision) return;
+      playRequested = false;
+      setPlayingUI(started);
     } else {
       setPlayingUI(false);
     }
   } catch (err) {
+    if (revision !== loadRevision) return;
+    playRequested = false;
+    setPlayingUI(false);
     console.error('loadFile fehlgeschlagen:', err);
     showError('Fehler beim Laden: ' + err.message);
   }
@@ -487,19 +512,15 @@ function setPlayingUI(isPlaying) {
 function setUpPlayerCallbacks() {
   if (playerCallbacksConfigured) return;
   playerCallbacksConfigured = true;
-  player.watchRows((pos, row, bpm, speed) => {
-    const totalPatterns = currentMod?.length || 1;
-    // Heuristik: wenn die Position rückwärts springt oder ein
-    // Single-Pattern-Mod den Anfang erneut erreicht, gilt das als Ende.
-    // codereview-ok: der Wrap auf 0 loest bereits `pos < lastPosition` aus (0 < N-1); die zweite Klausel deckt nur den Single-Pattern-Fall (N==1) (2026-07-01)
-    if (pos < lastPosition || (totalPatterns === 1 && row === 0 && currentRow === 63)) {
+  player.watchRows((pos, row, bpm, speed, songEnded) => {
+    if (songEnded) {
       player.stop();
       setPlayingUI(false);
       
       // Playlist Auto-Next Logik
       if (playlistMode && playlistMode.checked && modList.length > 1) {
         let nextIdx = 0;
-        const currentIdx = modList.findIndex(m => m.name === currentFilename);
+        const currentIdx = modList.findIndex(m => m.file === currentFile);
         if (currentIdx >= 0) {
           nextIdx = (currentIdx + 1) % modList.length;
         }

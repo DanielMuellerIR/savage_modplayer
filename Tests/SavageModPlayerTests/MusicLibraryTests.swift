@@ -58,6 +58,21 @@ final class MusicLibraryTests: XCTestCase {
         return result
     }
 
+    func testRemoveRejectsAParentReplacedByASymlink() throws {
+        try writeFile("Pack/song.mod")
+        let library = makeLibrary()
+        _ = try library.rescan()
+        let item = try XCTUnwrap(library.item(withRelativePath: "Pack/song.mod"))
+        let outside = workDir.appendingPathComponent("Outside", isDirectory: true)
+        try FileManager.default.moveItem(at: rootURL.appendingPathComponent("Pack"), to: outside)
+        try FileManager.default.createSymbolicLink(
+            at: rootURL.appendingPathComponent("Pack"), withDestinationURL: outside)
+
+        XCTAssertThrowsError(try library.remove(item))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.appendingPathComponent("song.mod").path))
+        XCTAssertNotNil(library.item(withRelativePath: item.relativePath))
+    }
+
     // MARK: - Index laden und speichern
 
     func testLoadWithoutIndexFileStartsEmpty() throws {
@@ -145,6 +160,39 @@ final class MusicLibraryTests: XCTestCase {
         XCTAssertTrue(second.changed.isEmpty)
     }
 
+    // Finder oder ein anderer Prozess kann eine Verknuepfung direkt unter der
+    // Bibliothekswurzel ablegen. Der Abgleich darf dadurch keine externe Datei
+    // in den Index aufnehmen.
+    func testRescanIgnoresSymbolicLinksToExternalModules() throws {
+        let outside = workDir.appendingPathComponent("Ausserhalb/song.mod")
+        try FileManager.default.createDirectory(
+            at: outside.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 0x23, count: 100).write(to: outside)
+        let link = rootURL.appendingPathComponent("extern.mod")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+
+        let library = makeLibrary()
+        try library.load()
+        let report = try library.rescan()
+
+        XCTAssertTrue(report.added.isEmpty)
+        XCTAssertTrue(library.index.items.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: link.path))
+    }
+
+    func testRescanIgnoresNamedPipeWithModuleExtension() throws {
+        let fifo = rootURL.appendingPathComponent("haenger.mod")
+        try XCTSkipIf(mkfifo(fifo.path, 0o644) != 0, "FIFO liess sich nicht anlegen")
+        let library = makeLibrary()
+        try library.load()
+
+        let report = try library.rescan()
+
+        XCTAssertTrue(report.added.isEmpty)
+        XCTAssertTrue(library.index.items.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fifo.path))
+    }
+
     // Wird eine bekannte Datei von aussen ersetzt, faellt das ueber Groesse
     // bzw. Zeitstempel auf und der Eintrag wird neu gehasht.
     func testRescanDetectsChangedContent() throws {
@@ -210,6 +258,72 @@ final class MusicLibraryTests: XCTestCase {
         XCTAssertTrue(report.removed.isEmpty, "Teil-Scan darf keine Loeschungen ableiten")
         XCTAssertNotNil(library.item(withRelativePath: "Gesperrt/drin.mod"))
         XCTAssertEqual(library.index.items.count, 2)
+    }
+
+    /// Scheitert die Typabfrage einer bereits enumerierten Datei, ist auch das
+    /// ein Teil-Scan. Vorher wurde der Fehler mit `try?` verschluckt; weil der
+    /// Pfad nie in `seen` gelangte, loeschte der Abgleich den real vorhandenen
+    /// Indexeintrag anschliessend als angeblich verschwunden.
+    func testResourceClassificationErrorKeepsKnownItemAndMarksScanIncomplete() throws {
+        try writeFile("a.mod", marker: 0x44)
+        let initial = makeLibrary()
+        try initial.load()
+        _ = try initial.rescan()
+
+        let failing = MusicLibrary(
+            rootURL: rootURL,
+            indexURL: indexURL,
+            resourceValuesReader: { url, keys in
+                if url.lastPathComponent == "a.mod" {
+                    throw NSError(
+                        domain: "MusicLibraryTests", code: 44,
+                        userInfo: [NSLocalizedDescriptionKey: "simulierter Metadatenfehler"])
+                }
+                return try url.resourceValues(forKeys: keys)
+            })
+        try failing.load()
+
+        let report = try failing.rescan()
+
+        XCTAssertFalse(report.isComplete)
+        XCTAssertNotNil(report.enumerationError)
+        XCTAssertTrue(report.removed.isEmpty)
+        XCTAssertNotNil(failing.item(withRelativePath: "a.mod"))
+    }
+
+    /// Auch nach erfolgreicher Typabfrage kann das blockweise Lesen scheitern.
+    /// Dann darf der Abgleich weder einen veralteten Fingerabdruck als aktuellen
+    /// Erfolg ausgeben noch aus dem Teilbestand Loeschungen ableiten.
+    func testFingerprintReadErrorKeepsKnownItemAndMarksScanIncomplete() throws {
+        let file = try writeFile("a.mod", marker: 0x45)
+        let initial = makeLibrary()
+        try initial.load()
+        _ = try initial.rescan()
+        let original = try XCTUnwrap(initial.item(withRelativePath: "a.mod"))
+
+        try Data(repeating: 0x46, count: 91).write(to: file)
+        let failing = MusicLibrary(
+            rootURL: rootURL,
+            indexURL: indexURL,
+            fingerprintReader: { url in
+                if url.lastPathComponent == "a.mod" {
+                    throw NSError(
+                        domain: "MusicLibraryTests", code: 45,
+                        userInfo: [NSLocalizedDescriptionKey: "simulierter Lesefehler"])
+                }
+                let fingerprint = try ContentHasher.fingerprint(of: url)
+                return (fingerprint.hash, fingerprint.size)
+            })
+        try failing.load()
+
+        let report = try failing.rescan()
+
+        XCTAssertFalse(report.isComplete)
+        XCTAssertTrue(report.enumerationError?.contains("Lesefehler") == true)
+        XCTAssertTrue(report.changed.isEmpty)
+        XCTAssertTrue(report.removed.isEmpty)
+        XCTAssertEqual(failing.item(withRelativePath: "a.mod")?.contentHash,
+                       original.contentHash)
     }
 
     // MARK: - Anzeigebaum

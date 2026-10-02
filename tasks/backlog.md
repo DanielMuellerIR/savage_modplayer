@@ -1,21 +1,31 @@
 # Aktiver Projekt-Backlog
 
-Stand: 2026-08-23 · Version 1.6.10.
+Stand: 2026-10-02 · Version 1.6.18.
 
 Diese Datei ist die einzige aktive Projektliste. Erledigte Chronik liegt in
 Release Notes, abgeschlossenen Tasks und `archive/`.
 
 ## Priorisiert
 
-0. **Gerätetest der iPhone-App.** Der einzige noch offene Punkt aus dem
-   iOS-Vorhaben, und der einzige, der sich nicht headless erledigen lässt.
-   `bash ios/scripts/build-device.sh --install`, danach die Prüfliste in
-   [docs/testing.md](../docs/testing.md) unter „Gerätetest" abarbeiten:
-   Sperrbildschirm-Steuerung, AirPods, eingehender Anruf, Kopfhörer abziehen,
-   Speicherverhalten beim Import eines großen Archivs, Dauerlauf mit einem
-   anspruchsvollen IT-Modul. Bis dahin gilt keiner dieser Punkte als verifiziert.
-   Fällt dabei der IO-Puffer auf: Startwert sind 10 ms in
-   `AudioSessionController`, der Ist-Wert ist über `ioBufferDuration` auslesbar.
+0. **Gerätetest der iPhone-App: verbleibende Abnahmen.** Auf einem echten iPhone stehen
+   noch Dateiziehen aus der Dateien-App, Wiederanlauf der Visualisierungen nach
+   Scrollen/Tabwechsel, Großarchivimport und ein zehnminütiger Dauerlauf mit
+   anspruchsvollem IT-Modul aus. Die Prüfliste steht in
+   [docs/testing.md](../docs/testing.md) unter „Gerätetest“.
+   Sperrbildschirm-Steuerung, AirPods, eingehender Anruf und Kopfhörerabziehen
+   sind mit Version 1.6.16 am iPhone 16 Pro Max bestanden (2026-10-01).
+   Der File-Provider-Wächter braucht weiterhin einen realen reproduzierbaren
+   Hänger; seine Unit-Tests ersetzen diese Abnahme nicht.
+
+1. **Gezielte Audio-Gegenproben nach dem Review vom 2026-10-02.** Die korrigierte
+   Ping-Pong-Grenzbehandlung ist synthetisch geprüft; die exakte originale
+   IT-Endpunktkonvention braucht noch eine passende Referenzaufnahme. Zwei
+   weitere Prüfkandidaten ohne bestätigten Produktfehler bleiben: möglicher
+   AVAudioEngine-Ausgabetail beim CLI-Ende und erste Initialisierung der
+   Vibratotabelle im Echtzeitpfad. Siehe [Reviewbericht](../docs/reviews/2026-10-02.md).
+   Für den iPhone-Gerätetest zusätzlich Unterbrechung → Kopfhörer entfernen →
+   Ende der Unterbrechung prüfen; der Simulator belegt den Zustandswechsel,
+   nicht das reale Audio-Routing.
 
 ## Optionaler Feinschliff
 
@@ -39,9 +49,35 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
   Was die Messung stattdessen zeigt: Die reine Wiedergabe kostet 3,6 %
   (`savage-cli --play`, derselbe Titel). Von den 22 % der App sind also rund
   18 Prozentpunkte Oberfläche, und davon hängen etwa 8 an der Bildrate allein
-  (die Einstellung dazu kam mit 1.6.10). Der Rest verteilt sich über den
-  übrigen SwiftUI-Baum — wer da weiter will, braucht ein Profil, keine
-  Vermutung. Gemessen wird mit `Tests/measure_visualizer_cpu.sh`.
+  (die Einstellung dazu kam mit 1.6.10). Gemessen wird mit
+  `Tests/measure_visualizer_cpu.sh`.
+
+- **Tracker-Raster: begrenzt und gemessen — mehr ist hier nicht zu holen.**
+  Der Canvas mit den Kanalzellen ist so hoch wie das ganze Pattern (64 Zeilen à
+  18 Punkte = 1152), CoreAnimation fordert ihn aber kachelweise an. Eine Sonde
+  im Zeichenblock zeigte Ausschnitte von 512 bis 519 Punkten — 29 der 64 Zeilen.
+  Die übrigen 35 wurden jedes Mal vollständig gesetzt, ohne je sichtbar zu sein.
+  Seit 1.6.11 zeichnet der Canvas nur noch die Zeilen des angeforderten
+  Ausschnitts (`TrackerGridGeometry.visibleRowRange`, sieben Tests auf die
+  Ränder). Ergebnis, derselbe 4-Kanal-MOD, stumm, je 30 s CPU-Zeit bei 30 Hz:
+  26,2 / 26,4 % vorher, 25,8 / 25,8 % nachher — 0,5 Prozentpunkte, in beiden
+  Läufen identisch.
+
+  Warum nicht mehr: Ein Blattprofil (`sample`, 20 s, Abschnitt „Sort by top of
+  stack") zeigt, dass die Oberflächenlast keinen großen Einzelposten mehr hat.
+  Auf dem Hauptthread verteilt sie sich auf SwiftUIs eigene Maschinerie —
+  `AG::Graph::UpdateStack::update` (189 Proben), `AG::Graph::propagate_dirty`
+  (185), `AG::Subgraph::update` (94), dazu rund 380 Proben dynamischer
+  Zugriffsprüfung (`swift_beginAccess` samt Umfeld) und die Vergleiche der
+  Layout-Vorschläge. Das ist der Preis dafür, dass sich der View-Baum überhaupt
+  aktualisiert; kein eigener View steht mehr oben. Der Audio-DSP liegt bei 80
+  Proben und deckt sich mit den 3,6 % aus dem CLI-Vergleich.
+
+  Damit ist die Frage aus dem vorigen Eintrag beantwortet: Die Bildrate bleibt
+  der einzige wirksame Regler. Wer trotzdem weiter will, muss die Zahl der
+  Aktualisierungen selbst senken, nicht einzelne Views verbilligen — und sollte
+  die gescheiterte Trennung von Uhr und Visualizer als Warnung lesen.
+
 - **Audioqualität:** optionale Anti-Click-Hüllkurve und JavaScript-
   Sampleinterpolation nur mit hörbarem A/B-, Timing- und Swift-Paritätsnachweis.
 - **PCMSink-Extraktion:** Die Ausgabeschicht liegt als bewusste Kopie in
@@ -63,14 +99,17 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
 - **Zip64.** Der ZIP-Reader lehnt Zip64-Archive mit klarer Meldung ab, statt
   falsche Offsets zu lesen. Erst umsetzen, wenn ein Archiv über 4 GB oder mit
   mehr als 65535 Einträgen real auftritt.
-- **iPad-Feinschliff.** Das zweispaltige Grundlayout steht seit 1.6.10
-  (Bibliothek links, Wiedergabe rechts, umgeschaltet über die Größenklasse).
-  Was darüber hinaus möglich wäre: Tastaturkürzel für die Wiedergabe, Drag &
-  Drop von Modulen aus der Dateien-App in die Bibliothek, und ein Blick darauf,
-  ob die Visualisierungen die zusätzliche Breite gut nutzen. Alles offen, nichts
-  davon versprochen.
+- **iPad-Feinschliff:** Die Visualisierungen nutzen seit 1.6.16 auch die freie
+  Höhe der Wiedergabespalte. Das Ziehen aus der Dateien-App bleibt Teil der
+  echten Geräteabnahme oben.
 
 ## Nicht offen
+
+Das Finder-Layout des DMG ist seit 1.6.16 korrigiert: gespeicherte
+Fenstergröße 600 × 600 Punkte und Icons in den vorgesehenen Plätzen.
+
+Die Kontext-Auslagerung aus `AGENTS.md` ist seit Commit `99f3449` erledigt.
+Bestätigte Fallen stehen in `docs/fallen.md`; offene Abnahmen stehen hier.
 
 Compact-Header/Layout, UI-Plan 1–10, IT M0–M10, Capability-Härtung sowie
 Linux-Port Phase 0 bis 2 (Core + CLI bauen, testen und spielen unter Linux;

@@ -2,7 +2,7 @@
 # release.sh — Release-DMG bauen: App bauen, notarisieren, DMG packen und notarisieren.
 #
 # Die drei Einstiegspunkte des Projekts trennen bewusst:
-#   bash build_app.sh   baut die App im Projektverzeichnis, mehr nicht
+#   ./build.sh          baut die App im Projektverzeichnis, mehr nicht (Unterbau: build_app.sh)
 #   ./install.sh        baut, notarisiert und installiert nach /Applications
 #   ./release.sh        baut, notarisiert und packt das DMG — installiert NIE
 #
@@ -54,7 +54,7 @@ VERSION="$(cat VERSION)"
 DMG="build/Savage Mod Player.dmg"
 
 echo "=== 1/3 App bauen (mit erzwungener Developer-ID-Signatur) ==="
-REQUIRE_CODESIGN=1 bash build_app.sh
+REQUIRE_CODESIGN=1 bash build.sh
 
 echo "=== 2/3 App notarisieren ==="
 notarize_app "$APP"

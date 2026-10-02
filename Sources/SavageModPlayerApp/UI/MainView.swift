@@ -76,6 +76,8 @@ struct MainView: View {
     // (Tiefensuche durch den Baum) — Weiter/Zurueck/Shuffle/Loop arbeiten
     // damit unveraendert ueber alle Ordner hinweg.
     @State var playlist: [URL] = []
+    @State var playlistRequestID = UUID()
+    @State var loadedModuleID = UUID()
     @State var currentPlaylistIndex: Int = -1
     // Hierarchische Anzeige: Ordner-/Archiv-Baum der aktuellen Playlist,
     // Menge der aufgeklappten Ordner-Pfade und Ordner-Pfad je Datei
@@ -312,6 +314,7 @@ struct MainView: View {
                                                          // Tempo wird rekonstruiert. Play/Weiter spielt ab hier.
                                                          coordinator.seek(toPosition: coordinator.currentPosition, row: row)
                                                      })
+                                    .id(loadedModuleID)
                                     .padding()
                             } else {
                                 dropZonePrompt
@@ -476,6 +479,7 @@ struct MainView: View {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("mediaPause"))) { _ in
+                playlistRequestID = UUID()
                 coordinator.pause()
             }
             // "Now Playing"-Infos fuer die Media-Tasten-Zuordnung aktuell halten.

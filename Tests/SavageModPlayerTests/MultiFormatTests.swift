@@ -269,6 +269,19 @@ final class MultiFormatTests: XCTestCase {
         XCTAssertEqual(mod.length, 1)
     }
 
+    func testS3MRejectsOrderReferencingUndeclaredPattern() {
+        var data = makeS3M()
+        // Es ist nur Pattern 0 deklariert. Ein echter Order-Eintrag 1 ist
+        // deshalb strukturell kaputt; nur 254 und 255 sind Sondermarker.
+        data[0x60] = 1
+
+        XCTAssertThrowsError(try S3MParser.parse(data: data)) { error in
+            guard case .corruptPattern? = error as? S3MParser.ParserError else {
+                return XCTFail("erwartet corruptPattern, war \(error)")
+            }
+        }
+    }
+
     func testS3MJumpBeyondEndMarkerMapsToSongEnd() throws {
         var data = makeS3M()
         data[0x20] = 3
@@ -308,6 +321,31 @@ final class MultiFormatTests: XCTestCase {
 
         XCTAssertThrowsError(try S3MParser.parse(data: data)) { error in
             XCTAssertEqual(error as? S3MParser.ParserError, .truncatedSample(1))
+        }
+    }
+
+    func testS3MRejectsInstrumentHeaderPointerOutsideFile() {
+        var data = makeS3M()
+        data[0x62] = 0xFF
+        data[0x63] = 0xFF
+
+        XCTAssertThrowsError(try S3MParser.parse(data: data)) { error in
+            guard case .corruptInstrument? = error as? S3MParser.ParserError else {
+                return XCTFail("erwartet corruptInstrument, war \(error)")
+            }
+        }
+    }
+
+    func testS3MRejectsNonEmptySampleWithZeroPointer() {
+        var data = makeS3M()
+        data[0x7D] = 0
+        data[0x7E] = 0
+        data[0x7F] = 0
+
+        XCTAssertThrowsError(try S3MParser.parse(data: data)) { error in
+            guard case .corruptInstrument? = error as? S3MParser.ParserError else {
+                return XCTFail("erwartet corruptInstrument, war \(error)")
+            }
         }
     }
 

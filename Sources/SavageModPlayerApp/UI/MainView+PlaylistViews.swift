@@ -253,7 +253,7 @@ extension MainView {
                     .help(favoritesOnly ? "Alle Titel zeigen" : "Nur Favoriten zeigen")
                     .padding(.trailing, 4)
                     Button("Leeren") {
-                        coordinator.stop()
+                        stopPlayback()
                         playlist.removeAll()
                         playlistTree = nil
                         expandedFolders.removeAll()

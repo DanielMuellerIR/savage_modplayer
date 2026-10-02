@@ -31,6 +31,19 @@ final class ITSampleParserTests: XCTestCase {
         var vibratoType = 0
     }
 
+    func testDeclaredPCMTotalIsBoundedBeforeAnySampleDecode() {
+        for specs in [
+            [SampleSpec(name: "mono", frameCount: 32 * 1_024 * 1_024 + 1, data: [], compressed: true)],
+            [SampleSpec(name: "stereo", frameCount: 16 * 1_024 * 1_024 + 1, data: [], isStereo: true, compressed: true)],
+            [SampleSpec(name: "one", frameCount: 16 * 1_024 * 1_024 + 1, data: [], compressed: true),
+             SampleSpec(name: "two", frameCount: 16 * 1_024 * 1_024 + 1, data: [], compressed: true)]
+        ] {
+            XCTAssertThrowsError(try ITParser.parse(data: makeSampleIT(specs))) {
+                XCTAssertTrue($0.localizedDescription.contains("PCM"), "\($0)")
+            }
+        }
+    }
+
     func testEightBitSignedUnsignedAndDeltaGoldenVectors() throws {
         let specs = [
             SampleSpec(name: "signed8", frameCount: 3, data: [0x80, 0x00, 0x7F]),

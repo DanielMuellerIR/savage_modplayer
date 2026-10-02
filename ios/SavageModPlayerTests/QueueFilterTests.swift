@@ -116,9 +116,18 @@ final class QueueFilterTests: XCTestCase {
         // Ein zweiter Favorit kommt dazu: Die Liste waechst um genau diesen
         // Titel — und nicht auf die ganze Bibliothek.
         store.toggleFavorite("pc-eins.s3m")
-        engine.refreshQueueFromLibrary()
         XCTAssertEqual(
             Set(engine.queue.map(\.relativePath)), ["amiga-eins.mod", "pc-eins.s3m"])
+    }
+
+    func testRemovingAFavoriteImmediatelyRemovesItFromTheQueue() async {
+        await waitForTracks()
+        store.toggleFavorite("amiga-eins.mod")
+        store.toggleFavorite("pc-eins.s3m")
+        engine.setQueue(store.filteredTracks(search: "", favoritesOnly: true),
+                        filter: QueueFilter(search: "", favoritesOnly: true))
+        store.toggleFavorite("pc-eins.s3m")
+        XCTAssertEqual(engine.queue.map(\.relativePath), ["amiga-eins.mod"])
     }
 
     // MARK: - Ohne Filter

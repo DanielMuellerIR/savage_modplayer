@@ -139,6 +139,78 @@ final class ITSoundDetailTests: XCTestCase {
                        "Pitch-Pan darf sich bei instrumentlosen Folgenoten nicht aufsummieren")
     }
 
+    func testPingPongInterpolationDoesNotBlendTheEndWithTheLoopStart() {
+        for trailingSample in [false, true] {
+            let pcm: [Float] = trailingSample ? [0.25, 0.5, 0.75, 1, -1] : [0.25, 0.5, 0.75, 1]
+            let loop = Sample(pcm: pcm, loopStart: 0, loopLength: 4, loopType: .pingpong,
+                              volume: 64, finetune: 0)
+            for index in [3.5, 4.0] {
+                let channel = voice(sample: loop)
+                channel.sampleIndex = index
+                XCTAssertEqual(RenderEngine.renderChannelStereoSampleForTesting(
+                    channel: channel, useInterpolation: true).left, 1)
+            }
+        }
+    }
+
+    func testPingPongLoopRemainsAudibleAtTheExclusiveSampleEnd() {
+        for speed in [0.5, 1.0, 9.0] {
+            let loop = Sample(pcm: [0.25, 0.25, 0.25, 0.25],
+                              loopStart: 0, loopLength: 4, loopType: .pingpong,
+                              volume: 64, finetune: 0)
+            let channel = voice(sample: loop)
+            channel.sampleSpeed = speed
+            for _ in 0..<32 {
+                XCTAssertEqual(RenderEngine.renderChannelStereoSampleForTesting(
+                    channel: channel, useInterpolation: false).left, 0.25)
+                XCTAssertGreaterThanOrEqual(channel.sampleIndex, 0)
+                XCTAssertLessThan(channel.sampleIndex, 4)
+            }
+        }
+    }
+
+    func testPingPongReflectionKeepsParityAcrossSeveralLoopSpans() {
+        let loop = Sample(pcm: [0, 0.25, 0.5, 0.75],
+                          loopStart: 1, loopLength: 3, loopType: .pingpong,
+                          volume: 64, finetune: 0)
+        let channel = voice(sample: loop)
+        channel.sampleIndex = 1
+        channel.sampleSpeed = 7
+        _ = RenderEngine.renderChannelStereoSampleForTesting(channel: channel, useInterpolation: false)
+        XCTAssertEqual(channel.sampleIndex, 2, accuracy: 0.000_001)
+        XCTAssertEqual(channel.sampleDirection, 1)
+        channel.sampleIndex = 2
+        channel.sampleDirection = -1
+        _ = RenderEngine.renderChannelStereoSampleForTesting(channel: channel, useInterpolation: false)
+        XCTAssertEqual(channel.sampleIndex, 1, accuracy: 0.000_001)
+        XCTAssertEqual(channel.sampleDirection, 1)
+    }
+
+    func testNNANoteOffReleasesABackwardSustainIntoTheForwardTail() {
+        let held = Sample(pcm: [0.1, 0.2, 0.3, 0.4, 0.5],
+                          loopStart: 0, loopLength: 0, loopType: .none,
+                          volume: 64, finetune: 0,
+                          sustainLoop: SampleLoop(start: 1, length: 2, type: .pingpong))
+        let channel = voice(sample: held)
+        channel.sampleIndex = 2
+        channel.sampleDirection = -1
+        channel.applyITVoiceAction(.noteOff)
+        let frames = (0..<4).map { _ in
+            RenderEngine.renderChannelStereoSampleForTesting(channel: channel, useInterpolation: false).left
+        }
+        XCTAssertEqual(frames, [0.3, 0.4, 0.5, 0])
+        XCTAssertFalse(channel.playing)
+    }
+
+    func testProgrammaticExtremeFadeoutSaturatesWithoutOverflow() {
+        let instrument = Instrument(index: 1, name: "fade", samples: [sample()], fadeout: Int.max)
+        let channel = instrumentVoice(instrument: instrument)
+        channel.instrument = instrument
+        channel.noteFadeActive = true
+        channel.performTick(tick: 1, sampleRate: sampleRate, clockRate: clockRate)
+        XCTAssertEqual(channel.fadeVolume, 0)
+    }
+
     func testSustainLoopHoldsThenReleasesIntoOneShotTail() {
         let held = Sample(
             pcm: [0.1, 0.2, 0.3, 0.4, 0.5],

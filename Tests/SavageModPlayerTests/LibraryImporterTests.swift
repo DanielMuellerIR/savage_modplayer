@@ -67,6 +67,36 @@ final class LibraryImporterTests: XCTestCase {
         Set(library.index.items.map(\.relativePath))
     }
 
+    func testImportRejectsSymlinkedDestinationDirectory() throws {
+        try writeSource("song.mod", marker: 0x31)
+        let outside = workDir.appendingPathComponent("Outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: rootURL.appendingPathComponent("Sammlung"), withDestinationURL: outside)
+
+        let report = try LibraryImporter(library: library).importContents(of: [sourceDir])
+
+        XCTAssertTrue(report.imported.isEmpty)
+        XCTAssertEqual(report.failures.count, 1)
+        XCTAssertTrue(library.index.items.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("song.mod").path))
+    }
+
+    func testImportRejectsSymlinkedDestinationFileInsteadOfDeduplicating() throws {
+        let source = try writeSource("song.mod", marker: 0x32)
+        let outside = try write(workDir.appendingPathComponent("outside.mod"), marker: 0x32)
+        try FileManager.default.createSymbolicLink(
+            at: rootURL.appendingPathComponent("song.mod"), withDestinationURL: outside)
+
+        let report = try LibraryImporter(library: library).importContents(of: [source])
+
+        XCTAssertTrue(report.imported.isEmpty)
+        XCTAssertTrue(report.duplicates.isEmpty)
+        XCTAssertEqual(report.failures.count, 1)
+        XCTAssertTrue(library.index.items.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: outside), try Data(contentsOf: source))
+    }
+
     // MARK: - Struktur und Filterung
 
     func testImportKeepsStructureAndSkipsUnplayableFiles() throws {
@@ -123,6 +153,63 @@ final class LibraryImporterTests: XCTestCase {
             Set(report.imported),
             ["Sammlung/Gemeinsam/song.mod", "Zweite/Gemeinsam/song.mod"])
         XCTAssertTrue(report.duplicates.isEmpty)
+    }
+
+    // Eine Verknuepfung ist kein eigener Bibliotheksinhalt. Insbesondere darf
+    // eine direkt ausgewaehlte Verknuepfung auf einen Ordner nicht dazu
+    // fuehren, dass der Importer den Zielordner ausserhalb der Quelle ablaeuft.
+    func testSymbolicLinksInSelectedSourcesAreRejected() throws {
+        let outside = workDir.appendingPathComponent("Ausserhalb", isDirectory: true)
+        let target = try write(outside.appendingPathComponent("extern.mod"), marker: 0x12)
+        let fileLink = sourceDir.appendingPathComponent("verknuepft.mod")
+        let directoryLink = workDir.appendingPathComponent("Ordner-Link")
+        try FileManager.default.createSymbolicLink(at: fileLink, withDestinationURL: target)
+        try FileManager.default.createSymbolicLink(at: directoryLink, withDestinationURL: outside)
+
+        let report = try LibraryImporter(library: library).importContents(
+            of: [sourceDir, directoryLink])
+
+        XCTAssertTrue(report.imported.isEmpty)
+        XCTAssertEqual(report.failures.count, 2)
+        XCTAssertTrue(report.failures.allSatisfy { $0.reason.contains("Verknuepfung") })
+        XCTAssertTrue(library.index.items.isEmpty)
+        XCTAssertTrue(modulesOnDisk().isEmpty)
+    }
+
+    func testNamedPipeNamedLikeAModuleIsRejectedBeforeFingerprinting() throws {
+        let fifo = sourceDir.appendingPathComponent("haenger.mod")
+        try XCTSkipIf(mkfifo(fifo.path, 0o644) != 0, "FIFO liess sich nicht anlegen")
+
+        let report = try LibraryImporter(library: library).importContents(of: [fifo])
+
+        XCTAssertTrue(report.imported.isEmpty)
+        XCTAssertEqual(report.failures.count, 1)
+        XCTAssertTrue(report.failures[0].reason.contains("reguläre Datei"))
+        XCTAssertTrue(library.index.items.isEmpty)
+    }
+
+    /// `contentsOfDirectory` hat das Kind bereits geliefert; scheitert danach
+    /// seine Typabfrage, darf es nicht lautlos aus einem angeblich erfolgreichen
+    /// Import verschwinden.
+    func testChildResourceClassificationErrorIsReportedWithRelativePath() throws {
+        try writeSource("Sub/kaputt.mod", marker: 0x13)
+        let importer = LibraryImporter(
+            library: library,
+            resourceValuesReader: { url, keys in
+                if url.lastPathComponent == "kaputt.mod" {
+                    throw NSError(
+                        domain: "LibraryImporterTests", code: 13,
+                        userInfo: [NSLocalizedDescriptionKey: "simulierter Metadatenfehler"])
+                }
+                return try url.resourceValues(forKeys: keys)
+            })
+
+        let report = try importer.importContents(of: [sourceDir])
+
+        XCTAssertTrue(report.imported.isEmpty)
+        XCTAssertEqual(report.failures.count, 1)
+        XCTAssertEqual(report.failures[0].path, "Sammlung/Sub/kaputt.mod")
+        XCTAssertTrue(report.failures[0].reason.contains("Metadatenfehler"))
     }
 
     // MARK: - Dedupe

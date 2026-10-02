@@ -31,5 +31,9 @@ struct SavageModPlayerApp: App {
                     model.open(url)
                 }
         }
+        // Tastaturkuerzel fuer die Wiedergabe. Auf einem iPad mit Tastatur
+        // erscheinen sie beim Halten von Cmd; ohne Tastatur ist das Menue
+        // unsichtbar und kostet nichts.
+        .commands { PlaybackCommands(model: model) }
     }
 }

@@ -14,8 +14,7 @@ import SavageModPlayerCore
 /// * Ein neuer Auftrag ueberholt den alten.
 /// * Ein kaputter Titel wird uebersprungen, nicht zum Abbruch.
 ///
-/// Alle Tests laden nur (`select`) und spielen nicht ab — der Simulator soll
-/// waehrend eines Testlaufs still bleiben.
+/// Die Fixtures enthalten nur stumme Samples, auch beim Test der Audio-Unterbrechung.
 @MainActor
 final class PlaybackLoadingTests: XCTestCase {
 
@@ -132,6 +131,80 @@ final class PlaybackLoadingTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertEqual(engine.currentTrack, second)
         XCTAssertEqual(engine.coordinator.trackName, "ZWEITER")
+    }
+
+    /// Stoppen gilt auch fuer einen Ladeauftrag, der noch gar nicht auf der
+    /// Hintergrundschlange begonnen hat. Sonst startet der Auftrag nach dem
+    /// Stoppen verspaetet doch noch die Wiedergabe.
+    func testStopCancelsAPendingAutoplayLoad() async throws {
+        let track = try writeModule(named: "stop.mod", title: "STOP")
+
+        engine.play(track)
+        // Der neu erzeugte Task kann erst laufen, wenn diese MainActor-Methode
+        // aussetzt. `stop()` trifft ihn deshalb sicher noch im wartenden Zustand.
+        engine.stop()
+
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertNil(engine.currentTrack)
+        XCTAssertFalse(engine.coordinator.isPlaying)
+        XCTAssertFalse(engine.isPlaying)
+    }
+
+    func testPauseCancelsAPendingAutoplayLoad() async throws {
+        let track = try writeModule(named: "pause.mod", title: "PAUSE")
+        engine.play(track)
+        engine.pause()
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertNil(engine.currentTrack)
+        XCTAssertFalse(engine.coordinator.isPlaying)
+    }
+
+    func testOutputLossAndInterruptionCancelPendingAutoplay() async throws {
+        let track = try writeModule(named: "route.mod", title: "ROUTE")
+        for event in [AudioSessionController.Event.outputDeviceLost, .interruptionBegan] {
+            engine.play(track)
+            engine.handleAudioSessionEvent(event)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            XCTAssertNil(engine.currentTrack)
+            XCTAssertFalse(engine.coordinator.isPlaying)
+        }
+    }
+
+    func testLoadedTrackUsesItsIndexInTheUpdatedQueue() async throws {
+        let first = try writeModule(named: "a.mod", title: "A")
+        let selected = try writeModule(named: "b.mod", title: "B")
+        let last = try writeModule(named: "c.mod", title: "C")
+        let started = CancellationFlag()
+        let release = DispatchSemaphore(value: 0)
+        engine = PlaybackEngine(settings: settings, library: LibraryStore(), readModule: { url in
+            started.set()
+            guard release.wait(timeout: .now() + 5) == .success else {
+                throw CocoaError(.fileReadUnknown)
+            }
+            return try Data(contentsOf: url)
+        })
+        defer { release.signal() }
+        engine.setQueue([selected, last])
+        engine.select(selected)
+        await waitUntil("Leser hat begonnen") { started.isSet }
+        engine.setQueue([first, selected, last])
+        release.signal()
+        await waitUntil("Titel ist geladen") { self.engine.currentTrack == selected }
+        XCTAssertEqual(engine.currentIndex, 1)
+        XCTAssertEqual(engine.queue[engine.currentIndex + 1], last)
+    }
+
+    func testHeadphoneRemovalDuringInterruptionPreventsAutomaticResume() async throws {
+        let track = try writeModule(named: "interrupted.mod", title: "INTERRUPTED")
+        engine.setQueue([track])
+        engine.select(track)
+        await waitUntil("Titel ist geladen") { self.engine.currentTrack == track }
+        engine.coordinator.play()
+        engine.handleAudioSessionEvent(.interruptionBegan)
+        XCTAssertTrue(engine.coordinator.isPaused)
+        engine.handleAudioSessionEvent(.outputDeviceLost)
+        engine.handleAudioSessionEvent(.interruptionEnded(shouldResume: true))
+        XCTAssertTrue(engine.coordinator.isPaused)
     }
 
     // MARK: - Kaputte Titel

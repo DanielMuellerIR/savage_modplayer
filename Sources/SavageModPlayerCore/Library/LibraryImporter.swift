@@ -64,6 +64,7 @@ public struct ImportReport: Sendable {
 }
 
 public final class LibraryImporter: @unchecked Sendable {
+    public typealias ResourceValuesReader = (URL, Set<URLResourceKey>) throws -> URLResourceValues
 
     // Diese Grenzen gelten fuer den GESAMTEN rekursiven Importlauf, nicht pro
     // Archiv. So koennen viele kleine innere Archive weder das Byte- noch das
@@ -103,15 +104,20 @@ public final class LibraryImporter: @unchecked Sendable {
     private let coordinatedRead: CoordinatedRead
     private let archiveLimits: ArchiveLimits
     private let fileManager = FileManager.default
+    private let resourceValuesReader: ResourceValuesReader
 
     public init(
         library: MusicLibrary,
         archiveLimits: ArchiveLimits = .default,
-        coordinatedRead: @escaping CoordinatedRead = { url, body in try body(url) }
+        coordinatedRead: @escaping CoordinatedRead = { url, body in try body(url) },
+        resourceValuesReader: @escaping ResourceValuesReader = {
+            try $0.resourceValues(forKeys: $1)
+        }
     ) {
         self.library = library
         self.archiveLimits = archiveLimits
         self.coordinatedRead = coordinatedRead
+        self.resourceValuesReader = resourceValuesReader
     }
 
     // MARK: - Oeffentlicher Einstieg
@@ -173,6 +179,17 @@ public final class LibraryImporter: @unchecked Sendable {
                 break
             }
             withAccess(to: source) {
+                // Eine ausgewaehlte Verknuepfung auf einen Ordner sieht fuer
+                // `fileExists(..., isDirectory:)` wie der Zielordner aus. Ohne
+                // diese Pruefung wuerde der Importer dessen Inhalt ausserhalb
+                // der ausgewaehlten Quelle rekursiv einlesen. Datei-Links
+                // duerfen ebenso wenig in der Bibliothek landen.
+                guard !isSymbolicLink(source) else {
+                    session.failures.append(ImportFailure(
+                        path: source.lastPathComponent,
+                        reason: "Symbolische Verknuepfung in der Quelle wurde abgelehnt."))
+                    return
+                }
                 var isDirectory: ObjCBool = false
                 guard fileManager.fileExists(atPath: source.path, isDirectory: &isDirectory) else {
                     session.failures.append(ImportFailure(
@@ -184,6 +201,12 @@ public final class LibraryImporter: @unchecked Sendable {
                         source, targetFolder: [source.lastPathComponent],
                         session: session, progress: progress, isCancelled: isCancelled)
                 } else {
+                    guard isRegularFile(source) else {
+                        session.failures.append(ImportFailure(
+                            path: source.lastPathComponent,
+                            reason: "Quelle ist keine reguläre Datei."))
+                        return
+                    }
                     importFile(
                         source, targetFolder: [],
                         session: session, progress: progress, isCancelled: isCancelled)
@@ -250,7 +273,11 @@ public final class LibraryImporter: @unchecked Sendable {
         let children: [URL]
         do {
             children = try fileManager.contentsOfDirectory(
-                at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+                at: directory,
+                includingPropertiesForKeys: [
+                    .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey
+                ],
+                options: [.skipsHiddenFiles])
         } catch {
             // Ein unlesbarer (oder von einem File Provider noch nicht
             // materialisierter) Ordner darf nicht still uebersprungen werden —
@@ -267,15 +294,44 @@ public final class LibraryImporter: @unchecked Sendable {
         }
         for child in sorted {
             if session.cancelled { return }
-            let isDirectory = (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            let relative = Self.joined(targetFolder + [child.lastPathComponent])
+            let values: URLResourceValues
+            do {
+                values = try resourceValuesReader(child, [
+                    .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey
+                ])
+            } catch {
+                session.failures.append(ImportFailure(
+                    path: relative,
+                    reason: "Dateityp konnte nicht bestimmt werden: \(Self.reason(for: error))"))
+                continue
+            }
+            guard let isSymbolicLink = values.isSymbolicLink,
+                  let isDirectory = values.isDirectory,
+                  let isRegularFile = values.isRegularFile else {
+                session.failures.append(ImportFailure(
+                    path: relative,
+                    reason: "Dateityp konnte nicht vollständig bestimmt werden."))
+                continue
+            }
+            guard !isSymbolicLink else {
+                session.failures.append(ImportFailure(
+                    path: relative,
+                    reason: "Symbolische Verknuepfung in der Quelle wurde abgelehnt."))
+                continue
+            }
             if isDirectory {
                 importDirectory(
                     child, targetFolder: targetFolder + [child.lastPathComponent],
                     session: session, progress: progress, isCancelled: isCancelled)
-            } else {
+            } else if isRegularFile {
                 importFile(
                     child, targetFolder: targetFolder,
                     session: session, progress: progress, isCancelled: isCancelled)
+            } else {
+                session.failures.append(ImportFailure(
+                    path: relative,
+                    reason: "Quelle ist weder Ordner noch reguläre Datei."))
             }
         }
     }
@@ -446,7 +502,9 @@ public final class LibraryImporter: @unchecked Sendable {
             if isCancelled() { session.cancelled = true; return }
             let values: URLResourceValues
             do {
-                values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                values = try child.resourceValues(forKeys: [
+                    .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey
+                ])
             } catch {
                 session.failures.append(ImportFailure(
                     path: Self.joined(targetFolder + [child.lastPathComponent]),
@@ -467,6 +525,10 @@ public final class LibraryImporter: @unchecked Sendable {
                 ingestStaged(child, targetFolder: targetFolder + [child.lastPathComponent],
                              session: session, progress: progress, isCancelled: isCancelled,
                              depth: depth)
+            } else if values.isRegularFile != true {
+                session.failures.append(ImportFailure(
+                    path: Self.joined(targetFolder + [child.lastPathComponent]),
+                    reason: "Archiveintrag ist keine reguläre Datei."))
             } else if PlaylistScanner.isArchive(child) {
                 // Archive ZUERST klassifizieren — genau wie in `importFile`:
                 // `mod.collection.zip` matcht sonst die Amiga-Namenskonvention
@@ -526,7 +588,7 @@ public final class LibraryImporter: @unchecked Sendable {
 
         while true {
             let relative = Self.joined(targetFolder + [candidate])
-            let destination = library.rootURL.appendingPathComponent(relative)
+            let destination = try library.validatedFileURL(relativePath: relative)
 
             if fileManager.fileExists(atPath: destination.path) {
                 let existing = try fingerprintOfExisting(at: destination, relativePath: relative)
@@ -606,17 +668,30 @@ public final class LibraryImporter: @unchecked Sendable {
         for source in sources {
             if isCancelled() { break }
             withAccess(to: source) {
+                guard !isSymbolicLink(source) else { return }
                 var isDirectory: ObjCBool = false
                 guard fileManager.fileExists(atPath: source.path, isDirectory: &isDirectory) else { return }
                 if isDirectory.boolValue {
                     guard let enumerator = fileManager.enumerator(
-                        at: source, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+                        at: source,
+                        includingPropertiesForKeys: [
+                            .isRegularFileKey, .isSymbolicLinkKey
+                        ],
+                        options: [.skipsHiddenFiles])
                     else { return }
                     while let url = enumerator.nextObject() as? URL {
                         if isCancelled() { return }
-                        if PlaylistScanner.isModFile(url) || PlaylistScanner.isArchive(url) { total += 1 }
+                        if isSymbolicLink(url) {
+                            enumerator.skipDescendants()
+                            continue
+                        }
+                        if isRegularFile(url),
+                           PlaylistScanner.isModFile(url) || PlaylistScanner.isArchive(url) {
+                            total += 1
+                        }
                     }
-                } else if PlaylistScanner.isModFile(source) || PlaylistScanner.isArchive(source) {
+                } else if isRegularFile(source),
+                          PlaylistScanner.isModFile(source) || PlaylistScanner.isArchive(source) {
                     total += 1
                 }
             }
@@ -628,10 +703,20 @@ public final class LibraryImporter: @unchecked Sendable {
     // Dateien-App abgelegt).
     private func archivesInLibrary() -> [URL] {
         guard let enumerator = fileManager.enumerator(
-            at: library.rootURL, includingPropertiesForKeys: nil, options: [])
+            at: library.rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: [])
         else { return [] }
         var result: [URL] = []
         while let url = enumerator.nextObject() as? URL {
+            let values = try? url.resourceValues(forKeys: [
+                .isDirectoryKey, .isSymbolicLinkKey
+            ])
+            if values?.isSymbolicLink == true {
+                enumerator.skipDescendants()
+                continue
+            }
+            if values?.isDirectory == true { continue }
             if PlaylistScanner.isArchive(url) { result.append(url) }
         }
         return result.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
@@ -652,6 +737,14 @@ public final class LibraryImporter: @unchecked Sendable {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
 
+    private func isSymbolicLink(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
+    }
+
+    private func isRegularFile(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+    }
+
     private static func joined(_ components: [String]) -> String {
         components.joined(separator: "/")
     }
@@ -669,7 +762,13 @@ public final class LibraryImporter: @unchecked Sendable {
     private static func isCancellation(_ error: Error) -> Bool {
         if error is ImportCancellationError { return true }
         if case PlaylistScanner.ArchiveError.cancelled = error { return true }
-        #if canImport(Compression)
+        // Dieselbe Bedingung wie beim ZIP-Leser selbst
+        // (`ZipArchiveReader.swift`, `PlaylistScanner.unpackArchive`). Stand
+        // hier nur `canImport(Compression)`, fiel ein unter Linux abgebrochener
+        // ZIP-Import nicht durch den Abbruchpfad, sondern wurde als
+        // Archivfehler gemeldet — der Importvertrag wich zwischen Apple und
+        // Linux ab (Review-Fund 2026-08-25).
+        #if canImport(Compression) || canImport(CZlib)
         if case ZipArchiveError.cancelled = error { return true }
         #endif
         return false

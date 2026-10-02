@@ -16,6 +16,7 @@ nicht im Repo liegt.
 """
 
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
@@ -134,6 +135,22 @@ class CLIContractTests(unittest.TestCase):
             capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, EXIT_ARGUMENT)
 
+    def test_play_together_with_an_analysis_option_is_rejected(self):
+        """Review-Fund 2026-08-25: `--play --info` startete die Wiedergabe.
+
+        Der Wiedergabe-Zweig steht im Ablauf vor der Textausgabe. Eine
+        Automatisierung, die eine endliche Ausgabe erwartet, blieb daran hängen
+        — und gab womöglich noch Ton aus.
+        """
+        for option in (["--info"], ["--pattern", "0"]):
+            with self.subTest(option=option):
+                result = subprocess.run(
+                    [str(self.binary), str(self.module), "--play", *option],
+                    capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, EXIT_ARGUMENT,
+                                 result.stderr + result.stdout)
+                self.assertIn("--play", result.stderr)
+
     def test_list_prints_one_path_per_line(self):
         folder = Path(self._tempdir.name) / "liste"
         (folder / "unterordner").mkdir(parents=True, exist_ok=True)
@@ -148,6 +165,42 @@ class CLIContractTests(unittest.TestCase):
         self.assertEqual(len(printed), 3, result.stdout)
         self.assertEqual(printed, sorted(printed), "Ausgabe muss nach Pfad sortiert sein")
         self.assertNotIn("notiz.txt", result.stdout)
+
+    def test_list_ignores_non_regular_files_with_module_names(self):
+        """Eine passende Endung macht weder Ordner noch FIFO zum Modul.
+
+        Besonders die FIFO ist fuer --play gefaehrlich: Data(contentsOf:)
+        wartet dort auf einen Schreiber und der Player bleibt unbegrenzt stehen.
+        """
+        folder = Path(self._tempdir.name) / "dateitypen"
+        folder.mkdir(exist_ok=True)
+        (folder / "echt.mod").write_bytes(_minimal_mod())
+        (folder / "ordner.xm").mkdir()
+        fifo = folder / "stream.s3m"
+        os.mkfifo(fifo)
+
+        result = subprocess.run(
+            [str(self.binary), "--list", str(folder)],
+            capture_output=True, text=True, timeout=60)
+
+        self.assertEqual(result.returncode, EXIT_OK, result.stderr)
+        printed = result.stdout.splitlines()
+        self.assertEqual(len(printed), 1, result.stdout)
+        # macOS kanonisiert /var beim Enumerieren zu /private/var.
+        self.assertEqual(Path(printed[0]).resolve(), (folder / "echt.mod").resolve())
+
+    def test_direct_input_rejects_fifo_without_waiting_for_a_writer(self):
+        """Analyse und --play muessen VOR Data-Lesen auf regulär pruefen."""
+        fifo = Path(self._tempdir.name) / "direkt.mod"
+        os.mkfifo(fifo)
+
+        for arguments in (["--info"], ["--play", "--seconds", "0.1"]):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [str(self.binary), str(fifo), *arguments],
+                    capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, EXIT_RUNTIME)
+                self.assertIn("reguläre Datei", result.stderr)
 
     def test_list_on_an_empty_folder_is_a_runtime_error(self):
         empty = Path(self._tempdir.name) / "leer-liste"

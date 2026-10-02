@@ -7,8 +7,15 @@ public final class ITPatternChannelState: Sendable {
     nonisolated(unsafe) public var channelVolume: Float
     nonisolated(unsafe) public var channelPanning: Float
     nonisolated(unsafe) public var foregroundVoiceIndex: Int
-    nonisolated(unsafe) public var isMuted: Bool
-    nonisolated(unsafe) public var isSoloed: Bool
+    private let muteSoloState: RealtimeMuteSoloState
+    public var isMuted: Bool {
+        get { muteSoloState.isMuted }
+        set { muteSoloState.isMuted = newValue }
+    }
+    public var isSoloed: Bool {
+        get { muteSoloState.isSoloed }
+        set { muteSoloState.isSoloed = newValue }
+    }
     nonisolated(unsafe) public var isSurround: Bool
     nonisolated(unsafe) public var channelVolumeSlide: Float = 0
     // Panning-Schritt in normierten 0...1-Einheiten pro Tick.
@@ -46,8 +53,8 @@ public final class ITPatternChannelState: Sendable {
         self.channelVolume = Float(max(0, min(64, channelVolume)))
         self.channelPanning = max(0, min(1, channelPanning))
         self.foregroundVoiceIndex = foregroundVoiceIndex ?? channelIndex
-        self.isMuted = isMuted
-        self.isSoloed = isSoloed
+        self.muteSoloState = RealtimeMuteSoloState(
+            isMuted: isMuted, isSoloed: isSoloed)
         self.isSurround = isSurround
         self.effectMemory = [UInt8](repeating: 0, count: 27)
     }

@@ -64,7 +64,8 @@ class PreviewProvider: QLPreviewProvider, QLPreviewingController {
         let dir = fm.temporaryDirectory.appendingPathComponent("SavagePreviews", isDirectory: true)
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        let cachedURL = dir.appendingPathComponent("\(cacheKey).wav")
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        let cachedURL = dir.appendingPathComponent("\(version)-\(cacheKey).wav")
         if fm.fileExists(atPath: cachedURL.path) {
             return cachedURL
         }

@@ -13,6 +13,8 @@ extension MainView {
     // App-Start (audio-Ordner), damit sofort etwas klingt. Echte Drag&Drops
     // rufen mit dem Default false auf und laden nur, ohne loszuspielen.
     func handleDroppedURLs(_ urls: [URL], autoPlay: Bool = false) {
+        let requestID = UUID()
+        playlistRequestID = requestID
         self.errorMessage = nil
         self.compatibilityMessage = nil
         // Dateisystem-Traversal + Kopieren laufen im Hintergrund — ein grosser
@@ -27,6 +29,7 @@ extension MainView {
             let tree = PlaylistScanner.buildTree(entries)
             let flat = PlaylistScanner.flattenedFiles(tree)
             DispatchQueue.main.async {
+                guard self.playlistRequestID == requestID else { return }
                 guard !flat.isEmpty else {
                     self.errorMessage = "Keine unterstützten Tracker-Dateien gefunden."
                     return
@@ -121,6 +124,7 @@ extension MainView {
     
     @discardableResult
     func loadModFile(from url: URL) -> Bool {
+        playlistRequestID = UUID()
         self.errorMessage = nil
         self.compatibilityMessage = nil
         let accessed = url.startAccessingSecurityScopedResource()
@@ -134,6 +138,7 @@ extension MainView {
             // Fallback-Titel, falls das Modul kein Titelfeld gesetzt hat.
             let fallbackName = (cleanFilename(url) as NSString).deletingPathExtension
             coordinator.setMod(mod, fallbackName: fallbackName)
+            loadedModuleID = UUID()
             if !mod.compatibilityWarnings.isEmpty {
                 self.compatibilityMessage = mod.compatibilityWarnings.joined(separator: "\n")
             }
@@ -195,6 +200,8 @@ extension MainView {
     }
     
     func triggerDemoPlay() {
+        playlistRequestID = UUID()
+        loadedModuleID = UUID()
         let demoMod = ModParser.generateDemoMod()
         coordinator.setMod(demoMod)
         coordinator.play()

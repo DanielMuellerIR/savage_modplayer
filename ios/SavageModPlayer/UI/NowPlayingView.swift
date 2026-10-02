@@ -24,6 +24,12 @@ struct NowPlayingView: View {
             onOpenLibrary: onOpenLibrary)
     }
 
+    static let contentMaximumWidth: CGFloat = 900
+
+    static func visualizerWidth(viewportWidth: CGFloat) -> CGFloat {
+        max(1, min(contentMaximumWidth, viewportWidth) - 40)
+    }
+
     private struct Content: View {
         @ObservedObject var player: PlaybackEngine
         @ObservedObject var settings: PlayerSettings
@@ -33,6 +39,8 @@ struct NowPlayingView: View {
         let isSelected: Bool
         let sceneIsActive: Bool
         let onOpenLibrary: () -> Void
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+        @State private var controlsHeight: CGFloat = 0
         @State private var visualizerIsInViewport = false
 
         var body: some View {
@@ -74,25 +82,27 @@ struct NowPlayingView: View {
             GeometryReader { viewport in
                 ScrollView {
                     LazyVStack(spacing: 20) {
-                        artwork(mod: mod)
-                        titleBlock(track: track, mod: mod)
-                        positionBlock(mod: mod)
-                        transportRow
-                        secondaryRow(track: track)
-                        PlaybackStatusRow(
-                            coordinator: player.coordinator,
-                            positionCount: mod.length,
-                            channelCount: mod.usedChannelCount)
+                        VStack(spacing: 20) {
+                            artwork(mod: mod)
+                            titleBlock(track: track, mod: mod)
+                            positionBlock(mod: mod)
+                            transportRow
+                            secondaryRow(track: track)
+                            PlaybackStatusRow(
+                                coordinator: player.coordinator,
+                                positionCount: mod.length,
+                                channelCount: mod.usedChannelCount)
+                        }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { controlsHeight = $0 }
                         visualizers(
                             mod: mod,
                             viewportHeight: viewport.size.height,
-                            availableWidth: min(520, max(1, viewport.size.width - 40)))
+                            availableWidth: NowPlayingView.visualizerWidth(viewportWidth: viewport.size.width))
                     }
                     .padding(.horizontal, 20)
                     .padding(.vertical, 16)
-                    .frame(maxWidth: 520)
-                    // Im Querformat bleibt der Inhalt mittig statt in die Breite
-                    // gezogen zu werden.
+                    .frame(maxWidth: NowPlayingView.contentMaximumWidth)
+                    // Die begrenzte Spalte bleibt auch auf breiten iPads mittig.
                     .frame(maxWidth: .infinity)
                 }
                 .coordinateSpace(name: VisualizerViewport.coordinateSpace)
@@ -274,6 +284,8 @@ struct NowPlayingView: View {
                 sceneIsActive: sceneIsActive,
                 viewportHeight: viewportHeight,
                 availableWidth: availableWidth,
+                minimumHeight: horizontalSizeClass == .regular
+                    ? max(0, viewportHeight - controlsHeight - 52) : 0,
                 onVisibilityChanged: { visible in
                     visualizerIsInViewport = visible
                     applyVisualizerVisibility()
@@ -315,6 +327,7 @@ private struct VisualizerSection: View {
     let sceneIsActive: Bool
     let viewportHeight: CGFloat
     let availableWidth: CGFloat
+    let minimumHeight: CGFloat
     let onVisibilityChanged: (Bool) -> Void
 
     @State private var isVisible = false
@@ -327,12 +340,15 @@ private struct VisualizerSection: View {
                 sectionVisible: isVisible
             ) {
                 VStack(alignment: .leading, spacing: 8) {
-                    MasterScopeView(visualizer: visualizer, frameRate: frameRate)
+                    MasterScopeView(
+                        visualizer: visualizer, frameRate: frameRate,
+                        height: 64 + extraHeight / 3)
                     ChannelScopesView(
                         visualizer: visualizer,
                         channelIndices: channelIndices,
                         frameRate: frameRate,
-                        availableWidth: availableWidth)
+                        availableWidth: availableWidth,
+                        minimumHeight: channelHeight + extraHeight * 2 / 3)
                     if channelIndices.count < totalChannels {
                         Text("player.scopes.limited \(channelIndices.count) \(totalChannels)")
                             .font(.caption2)
@@ -352,10 +368,20 @@ private struct VisualizerSection: View {
         .onDisappear { setVisible(false) }
     }
 
-    private var reservedHeight: CGFloat {
-        let channelHeight = ChannelScopesView.height(
+    private var channelHeight: CGFloat {
+        ChannelScopesView.height(
             channelCount: channelIndices.count,
             availableWidth: availableWidth)
+    }
+
+    private var extraHeight: CGFloat {
+        // Nur freie iPad-Hoehe verteilen; viele Kanaele behalten ihren Scrollbereich.
+        max(0, minimumHeight - naturalHeight)
+    }
+
+    private var reservedHeight: CGFloat { max(naturalHeight, minimumHeight) }
+
+    private var naturalHeight: CGFloat {
         let limitHeight: CGFloat = channelIndices.count < totalChannels ? 22 : 0
         return 64 + 8 + channelHeight + limitHeight
     }

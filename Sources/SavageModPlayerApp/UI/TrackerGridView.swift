@@ -29,6 +29,11 @@ struct RowIndexCell: View {
 // (CoreAnimation), NICHT neu gelayoutet. Das ersetzt den mit Abstand teuersten
 // Posten: die 2048-Zellen-ScrollView-Layout-Rekursion pro Zeilenwechsel (2026-07-09,
 // per `sample` verifiziert — ScrollView-`sizeThatFits` sättigte den Main-Thread).
+//
+// Gezeichnet werden nur die Zeilen im aktuellen Ausschnitt (2026-08-23): Der
+// Canvas ist so hoch wie das ganze Pattern, CoreAnimation fordert ihn aber
+// kachelweise an — gemessen rund 519 von 1152 Punkten, also 29 von 64 Zeilen.
+// Der Rest wurde vorher vollständig gesetzt, ohne je sichtbar zu sein.
 struct ChannelCellsCanvas: View, Equatable {
     let pattern: SavageModPlayerCore.Pattern
     let patternIndex: Int
@@ -60,7 +65,15 @@ struct ChannelCellsCanvas: View, Equatable {
         let font = Font.system(size: fontSize, weight: .semibold, design: .monospaced)
 
         return Canvas { ctx, size in
-            for r in 0..<rowCount {
+            // Nur die Zeilen der angeforderten Kachel. `clipBoundingRect` ist
+            // der Ausschnitt, den CoreAnimation gerade neu haben will; liegt
+            // kein engerer Ausschnitt vor, kommt der ganze Canvas zurück und
+            // es wird wie vorher alles gezeichnet.
+            let clip = ctx.clipBoundingRect
+            let rows = TrackerGridGeometry.visibleRowRange(
+                clipMinY: clip.minY, clipMaxY: clip.maxY,
+                rowHeight: rowHeight, rowCount: rowCount)
+            for r in rows {
                 let y = CGFloat(r) * rowHeight
                 let notes = pattern.rows[r].notes
                 for (column, channelIndex) in channelIndices.enumerated()

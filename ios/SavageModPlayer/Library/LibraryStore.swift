@@ -38,6 +38,19 @@ final class LibraryStore: ObservableObject {
     @Published private(set) var tree: PlaylistScanner.FolderNode?
     @Published private(set) var tracks: [TrackRef] = []
 
+    // Feuert NACH dem Setzen von `tracks` — und genau darin liegt der
+    // Unterschied zu `$tracks`.
+    //
+    // `@Published` meldet in `willSet`. Wer `$tracks` abonniert, bekommt die
+    // neue Liste zwar als Parameter, liest aus `library.tracks` und aus
+    // `filteredTracks(...)` aber noch den ALTEN Stand. Genau daran ist die
+    // Sitzungswiederherstellung gescheitert (2026-08-23, im iPad-Simulator mit
+    // einer Sonde belegt): Die Oberflaeche baute beim ersten Eintreffen der
+    // Titel die Wiedergabeliste neu auf, bekam die leere alte Liste — und
+    // suchte den zuletzt gespielten Titel darin vergeblich.
+    let tracksDidChange = PassthroughSubject<[TrackRef], Never>()
+    let favoritesDidChange = PassthroughSubject<Void, Never>()
+
     // Laeuft gerade ein Vorgang? Solange das gilt, wird kein zweiter gestartet.
     @Published private(set) var isBusy = false
     // Welcher Vorgang das ist — fuer die Beschriftung waehrend der Arbeit.
@@ -429,6 +442,7 @@ final class LibraryStore: ObservableObject {
         }
         persistFavorites()
         invalidateFilters()
+        favoritesDidChange.send()
     }
 
     private func clearFavorites() {
@@ -436,6 +450,7 @@ final class LibraryStore: ObservableObject {
         favorites = []
         persistFavorites()
         invalidateFilters()
+        favoritesDidChange.send()
     }
 
     private func persistFavorites() {
@@ -514,6 +529,9 @@ final class LibraryStore: ObservableObject {
             snapshot.tracks.map { ($0.relativePath, $0) },
             uniquingKeysWith: { first, _ in first })
         invalidateFilters()
+        // Ganz zum Schluss: Jetzt stimmen `tracks`, `tree`, der Suchindex und
+        // die Filter-Zwischenspeicher alle miteinander ueberein.
+        tracksDidChange.send(snapshot.tracks)
     }
 
     private func beginOperation(_ kind: LibraryActivity) {

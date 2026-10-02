@@ -33,7 +33,11 @@ struct LibraryView: View {
             player: model.player,
             settings: model.settings,
             embedsNavigation: embedsNavigation,
-            onOpenSettings: onOpenSettings)
+            onOpenSettings: onOpenSettings,
+            // Nur die Weitergabe, keine Beobachtung: Der innere Aufbau soll
+            // AppModel nicht beobachten muessen, um Dateien annehmen zu koennen.
+            onDropFiles: { [model] urls in model.importDropped(urls) },
+            onSearchActiveChange: { [model] active in model.isSearchFieldActive = active })
     }
 
     private struct Content: View {
@@ -42,6 +46,8 @@ struct LibraryView: View {
         let settings: PlayerSettings
         let embedsNavigation: Bool
         let onOpenSettings: (() -> Void)?
+        let onDropFiles: ([URL]) -> Void
+        let onSearchActiveChange: (Bool) -> Void
 
         @State private var search = ""
         @State private var favoritesOnly = false
@@ -49,6 +55,8 @@ struct LibraryView: View {
         // zum laufenden Titel klappt von selbst auf.
         @State private var expandedFolders: Set<String> = []
         @State private var showImport = false
+        // Schwebt gerade etwas ueber der Bibliothek? Nur fuer die Rueckmeldung.
+        @State private var isDropTargeted = false
 
         var body: some View {
             if embedsNavigation {
@@ -67,11 +75,41 @@ struct LibraryView: View {
                 }
             }
             .background(Color.playerBackground)
+            // Module und Archive aus der Dateien-App hereinziehen. Der Weg
+            // dahinter ist derselbe wie bei "Oeffnen mit": Uebernahme nach
+            // `Documents/`, Archive unterwegs ausgepackt. Nur abgespielt wird
+            // nichts — wer zehn Dateien ablegt, will sie einsortiert wissen.
+            .dropDestination(for: URL.self) { urls, _ in
+                onDropFiles(urls)
+                return true
+            } isTargeted: { isDropTargeted = $0 }
+            .overlay {
+                if isDropTargeted {
+                    dropIndicator
+                }
+            }
             .navigationTitle("tab.library")
             .toolbar { toolbarContent }
             .sheet(isPresented: $showImport) { LibraryImportSheet() }
             .onAppear { expandPath(to: player.currentTrack) }
             .onChange(of: player.currentTrack) { _, track in expandPath(to: track) }
+        }
+
+        // Sichtbare Rueckmeldung, solange etwas ueber der Bibliothek schwebt.
+        // Ohne sie ist nicht zu erkennen, ob das Ziel ueberhaupt annimmt.
+        private var dropIndicator: some View {
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [8, 6]))
+                .background(Color.accentColor.opacity(0.08))
+                .overlay {
+                    Text("library.drop.hint")
+                        .font(.headline)
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 24)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(8)
+                .allowsHitTesting(false)
         }
 
         // MARK: - Werkzeugleiste
@@ -220,6 +258,9 @@ struct LibraryView: View {
                 .bottom,
                 player.currentTrack == nil ? 0 : 72,
                 for: .scrollContent)
+            // Vor `searchable`, damit der Melder INNERHALB des durchsuchbaren
+            // Bereichs liegt — nur dort gibt es `isSearching`.
+            .background { SearchStateReporter(onChange: onSearchActiveChange) }
             .searchable(text: $search, prompt: Text("library.search.prompt"))
             .overlay {
                 if rows.isEmpty && isFiltering {

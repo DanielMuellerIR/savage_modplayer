@@ -65,9 +65,37 @@ if [ ! -x "$BINARY" ]; then
     exit 2
 fi
 
+if [[ -L "$DESKTOP_FILE" || ( -e "$DESKTOP_FILE" && ! -f "$DESKTOP_FILE" ) ]]; then
+    echo "FEHLER: Desktop-Ziel ist keine reguläre Datei: $DESKTOP_FILE" >&2
+    exit 2
+fi
 mkdir -p "$BIN_DIR" "$APP_DIR"
 install -m 0755 "$BINARY" "$BIN_DIR/savage-cli"
-install -m 0644 linux/savage-cli.desktop "$DESKTOP_FILE"
+# Exec verwendet zwei Escape-Ebenen: Desktop-String und dessen Argumentliste.
+# Der Zielpfad bleibt ein Argument: GIO sucht sonst vor der Feldcode-Expansion
+# nach einem Programmnamen mit %% statt %. Das feste Shellskript führt nur die
+# übergebenen Argumente aus; auch ein Gleichheitszeichen bleibt Teil des Pfads.
+EXEC_PATH="$(cd "$BIN_DIR" && pwd -P)/savage-cli"
+EXEC_PATH="${EXEC_PATH//\\/\\\\\\\\}"
+EXEC_PATH="${EXEC_PATH//\"/\\\\\"}"
+EXEC_PATH="${EXEC_PATH//\$/\\\\\$}"
+EXEC_PATH="${EXEC_PATH//\`/\\\\\`}"
+EXEC_PATH="${EXEC_PATH//%/%%}"
+EXEC_PATH="${EXEC_PATH//$'\n'/\\n}"
+EXEC_PATH="${EXEC_PATH//$'\r'/\\r}"
+EXEC_PATH="${EXEC_PATH//$'\t'/\\t}"
+DESKTOP_TEMP="$(mktemp "$APP_DIR/.savage-cli.desktop.XXXXXX")"
+trap 'rm -f -- "$DESKTOP_TEMP"' EXIT
+while IFS= read -r line; do
+    if [[ "$line" == Exec=* ]]; then
+        printf '%s' 'Exec=/bin/sh -c "exec \\"\\$@\\"" savage-cli '
+        printf '"%s" %%f --play\n' "$EXEC_PATH"
+    else
+        printf '%s\n' "$line"
+    fi
+done < linux/savage-cli.desktop > "$DESKTOP_TEMP"
+chmod 0644 "$DESKTOP_TEMP"
+mv -f "$DESKTOP_TEMP" "$DESKTOP_FILE"
 refresh_desktop_database
 
 echo "Installiert:"
