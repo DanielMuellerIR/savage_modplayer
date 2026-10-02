@@ -7,7 +7,8 @@ Titelwechsel zurück, erhält endliche Pattern-Loops und navigiert anhand der ge
 Datei. Quick Look erneuert Audiocaches nach Updates. Linux-Desktop-Einträge verwenden
 den installierten Programmpfad; die DMG-Bereinigung hängt nur ihr eigenes Volume aus.
 Der DMG-Bau übernimmt den tatsächlichen Mountpunkt und wartet vor dem Einrichten
-des Installationsfensters, bis Finder das Volume erkennt.
+des Installationsfensters, bis Finder das Volume erkennt. Das Fenster lässt Platz
+für Finders Tab- und Pfadleiste, damit die untere Beschriftung sichtbar bleibt.
 
 Der Referenzvergleich erhält die Stereoenergie und verwirft irreführende
 Zeitverschiebungen mit nur zwei überlappenden Hüllkurvenwerten.
