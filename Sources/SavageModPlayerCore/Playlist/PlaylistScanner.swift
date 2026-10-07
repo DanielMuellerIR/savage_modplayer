@@ -154,6 +154,14 @@ public enum PlaylistScanner {
     // entpackt) nach `tempDir` und liefert die Eintraege samt Ordner-Pfad.
     // Beruehrt keinen UI-State — laeuft sicher abseits des Main-Threads.
     public static func collectEntries(from urls: [URL], tempDir: URL) -> [Entry] {
+        collectEntries(from: urls, tempDir: tempDir, archiveLimits: .default, maxArchives: 128)
+    }
+
+    static func collectEntries(from urls: [URL], tempDir: URL,
+                               archiveLimits: ArchiveUnpackLimits, maxArchives: Int) -> [Entry] {
+        var remainingBytes = archiveLimits.maxUncompressedBytes
+        var remainingEntries = archiveLimits.maxEntries
+        var remainingArchives = maxArchives
         let fm = FileManager.default
         try? fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
         var entries: [Entry] = []
@@ -191,7 +199,15 @@ public enum PlaylistScanner {
             // trennt beides bereits so.
             if isArchive(fileURL) {
                 guard archiveDepth < maxArchiveDepth else { return }
-                if let extractedDir = extractArchive(readableURL, tempDir: tempDir) {
+                guard remainingArchives > 0, remainingBytes > 0, remainingEntries > 0 else { return }
+                remainingArchives -= 1
+                let limits = ArchiveUnpackLimits(maxUncompressedBytes: remainingBytes,
+                                                maxEntries: remainingEntries)
+                if let (extractedDir, result) = extractArchive(readableURL, tempDir: tempDir, limits: limits) {
+                    remainingBytes -= result.totalUncompressedBytes
+                    remainingEntries -= result.entryCount
+                    // Nach dem Scan bleiben nur die eigenständigen Modul-Kopien.
+                    defer { try? fm.removeItem(at: extractedDir) }
                     // Archivname ohne Endung als Ordner-Name — dass es ein
                     // Archiv war, soll man in der Playlist nicht merken.
                     let nodeName = (fileURL.lastPathComponent as NSString).deletingPathExtension
@@ -232,7 +248,7 @@ public enum PlaylistScanner {
             guard let children = try? fm.contentsOfDirectory(
                 at: dir,
                 includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-                options: [.skipsHiddenFiles]
+                options: insideExtractedArchive ? [] : [.skipsHiddenFiles]
             ) else { return }
             for child in children {
                 // Das eigene Temp-Wurzelverzeichnis nie als Kind mitscannen —
@@ -310,11 +326,12 @@ public enum PlaylistScanner {
     // - iOS hat weder `Process` noch ein Kommandozeilen-Werkzeug. Dort
     //   uebernimmt der eigene `ZipArchiveReader` (reines Swift); `.7z` bleibt
     //   dort unlesbar und wird sauber gemeldet statt still zu scheitern.
-    private static func extractArchive(_ archive: URL, tempDir: URL) -> URL? {
+    private static func extractArchive(_ archive: URL, tempDir: URL,
+                                       limits: ArchiveUnpackLimits) -> (URL, ArchiveUnpackResult)? {
         let dest = tempDir.appendingPathComponent("extracted-\(UUID().uuidString)", isDirectory: true)
         do {
-            try unpackArchive(archive, into: dest, isCancelled: { false })
-            return dest
+            let result = try unpackArchive(archive, into: dest, limits: limits, isCancelled: { false })
+            return (dest, result)
         } catch {
             print("Archiv-Entpacken fehlgeschlagen: \(error)")
             try? FileManager.default.removeItem(at: dest)

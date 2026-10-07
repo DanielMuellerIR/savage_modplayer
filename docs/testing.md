@@ -53,6 +53,11 @@ Consumer muss sauber als `outputClosed` enden.
 
 ## CLI-Suiten
 
+- macOS-Ausgabetail und Stop mit mehreren Wartern:
+  `swift test --filter AVAudioEnginePCMSinkTests`. Die endlichen Nullsamples
+  sind lautlos. Der Test braucht eine echte Audioausgabe; ein Skip ist kein
+  Ausgabebeleg.
+
 - Exit-Codes, Zahlgrenzen und `--list`: `python3 Tests/cli_contract_tests.py`.
 - Echtzeit-Wiedergabe, Playlist, Tastatursteuerung und Ctrl-C:
   `python3 Tests/cli_playback_tests.py`. Die Suite hängt ein Pseudoterminal an
@@ -151,6 +156,13 @@ LaunchServices („Öffnen mit“). Das Skript braucht weder Bedienungshilfen- n
 Bildschirmaufnahme-Rechte: Es zählt Fenster über `CGWindowListCopyWindowInfo`
 und liest das geladene Modul aus der Voreinstellung `savage.lastPlayed`. Der
 Lauf bleibt stumm und stellt die Voreinstellungen danach wieder her.
+
+`python3 Tests/launch_smoke_contract_tests.py` prüft Backupfehler, erhaltene
+Sicherungen nach Restorefehlern und das Beenden ausschließlich eigener Prozesse.
+`python3 Tests/publish_contract_tests.py` prüft ohne Netzwerk-Schreibzugriff
+GitHub-Ziel, vollständige Refs, zusätzliche Tags und umgebogene Push-URLs.
+`swift test --filter PCMSinkConcurrencyTests` prüft parallele Start-/Stop-Aufrufe;
+unter Linux kann eine ALSA-Nullausgabe den Hardwarebedarf für diesen Vertrag ersetzen.
 
 Pflicht bei allem, was den App-Start betrifft: `AppMain.swift`,
 `MainView.onAppear`, `.onOpenURL` und `LaunchArguments`. Ein reiner
@@ -347,3 +359,42 @@ Ein fokusfreier Browser-Smoke auf macOS ist mit WebKit möglich:
 Der Test setzt die Lautstärke auf null, lädt den echten AudioWorklet, prüft Drop-Autoplay
 und Stop und sichert einen Screenshot. Die WebKit-Testkonfiguration erlaubt Autoplay;
 die Freigabe nach einer echten Browser-Nutzergeste bleibt eine separate Prüfung.
+
+
+## Linux-MPRIS2
+
+Linux-Builds benötigen zusätzlich `libdbus-1-dev`; das ausgelieferte Binary
+benötigt `libdbus-1.so.3`. Auf einem Linux-Testdesktop mit Audioausgabe:
+
+```bash
+python3 Tests/mpris_contract_tests.py -v
+dbus-run-session -- python3 Tests/mpris_contract_tests.py -v
+```
+
+Die Suite spielt ausschließlich synthetische Nullsamples. Sie prüft Play/Pause,
+Stop → Play, Titelwechsel unter Pause, Position, Metadaten, PropertiesChanged,
+Introspection, Fehlerantworten, mehrere Instanzen und Wiedergabe ohne Bus.
+Fehlender Bus/Audioausgabe ist ein Skip und belegt keine Desktopfunktion.
+Der Audiocallback ruft keine D-Bus-Funktion auf; Pegel und Framezähler sind
+lockfreie 64-Bit-Atomics in der C-Brücke.
+
+
+## Linux-AppImage
+
+Zuerst `bash linux/build-static.sh`, dann `bash linux/build-appimage.sh` auf
+Linux x86_64. Das zweite Skript prüft Werkzeug und enthaltene Runtime per
+SHA-256; ein aktueller Runtime-Download ist ausgeschlossen. Systembibliotheken
+bleiben ALSA, D-Bus, zlib, libstdc++ und glibc; die tatsächliche glibc-Grenze
+steht im eingebetteten `usr/share/doc/savage-cli/build-info.txt`.
+
+```bash
+SAVAGE_APPIMAGE="$PWD/build/Savage-Mod-Player-$(cat VERSION)-x86_64.AppImage" \
+  python3 Tests/appimage_contract_tests.py -v
+SAVAGE_CLI_TEST_BINARY="$PWD/build/Savage-Mod-Player-$(cat VERSION)-x86_64.AppImage" \
+  python3 Tests/mpris_contract_tests.py -v
+```
+
+Die AppImage-Suite prüft echten FUSE-Start, Extraktionsfallback, relative
+Dateipfade mit Leerzeichen, identisches WAV-Rendering, Ressourcen/Lizenzen,
+Prüfsummen-Abbruch und Schutz des Eingabebinarys. Ein FUSE-Startfehler darf
+nicht als erfolgreicher nativer Start gezählt werden.

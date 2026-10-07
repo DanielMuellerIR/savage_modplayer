@@ -16,6 +16,8 @@ build/
 *.mp3
 *.flac
 *.dmg
+*.AppImage
+*.AppImage.sha256
 *.zip
 *.tar
 *.tar.gz

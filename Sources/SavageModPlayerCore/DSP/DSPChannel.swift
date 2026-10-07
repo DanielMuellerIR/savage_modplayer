@@ -37,6 +37,8 @@ public final class DSPChannel: Sendable {
         0, 24, 49, 74, 97, 120, 141, 161, 180, 197, 212, 224, 235, 244, 250, 253,
         255, 253, 250, 244, 235, 224, 212, 197, 180, 161, 141, 120, 97, 74, 49, 24
     ]
+    // Die statische Tabelle vor dem Audiocallback initialisieren und uebernehmen.
+    private let sineTable: [Float]
 
     // ScreamTracker-3-Periodentabelle für Oktave 0 (Index = Halbton C..B).
     // Die Werte sind 4x so fein wie Amiga-Perioden; höhere Oktaven halbieren.
@@ -374,6 +376,8 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) private var xmMultiRetrigActive = false
     
     // Temp-Zustände für Ticks
+    nonisolated(unsafe) private var pendingInstrumentChange = false
+    nonisolated(unsafe) private var pendingSampleChange = false
     nonisolated(unsafe) public var setInstrument: Instrument?
     nonisolated(unsafe) public var setSample: Sample?
     nonisolated(unsafe) public var setVolume: Float?
@@ -385,6 +389,7 @@ public final class DSPChannel: Sendable {
     
     public init(index: Int) {
         self.channelIndex = index
+        self.sineTable = Self.ptSineTable
         // Amiga Standard-Panning LRRL (0 = Left, 1.0 = Right)
         // Kanal 1 und 4 sind links (0.1), 2 und 3 sind rechts (0.9) mit etwas Bleed
         self.panning = (index == 1 || index == 4) ? 0.1 : 0.9
@@ -520,6 +525,8 @@ public final class DSPChannel: Sendable {
         xmPanSlideMemory = 0
         xmMultiRetrigActive = false
 
+        pendingInstrumentChange = false
+        pendingSampleChange = false
         setInstrument = nil
         setSample = nil
         setVolume = nil
@@ -740,7 +747,7 @@ public final class DSPChannel: Sendable {
             let effectCommand = note.effectId - ModuleEffect.impulseTrackerCommandBase
             let volumePortamento = note.volume >= 193 && note.volume <= 202
             itPendingSourceKey = note.key
-            itPendingRetriggering = effectCommand != 7 && !volumePortamento
+            itPendingRetriggering = effectCommand != 7 && effectCommand != 12 && !volumePortamento
         }
 
         // S3M-Volume-Column überschreibt die Instrument-Default-Lautstärke.
@@ -771,6 +778,8 @@ public final class DSPChannel: Sendable {
         pendingVisualNoteKey = note.period > 0
             ? Int((36 + 12 * log2(428.0 / Double(note.period))).rounded())
             : playbackKey
+        pendingInstrumentChange = hasSetInstrument
+        pendingSampleChange = hasSetSample || (hasSetInstrument && !(itMode && itInstrumentMode))
         if self.delayNote > 0 {
             return
         }
@@ -1825,7 +1834,7 @@ public final class DSPChannel: Sendable {
                 let p = Int(self.vibratoIndex) & (itMode ? 255 : 63)
                 let amp = itMode
                     ? itTrackerWaveform(type: itPatternState?.vibratoWaveform ?? 0, position: p)
-                    : (p < 32 ? DSPChannel.ptSineTable[p & 31] : -DSPChannel.ptSineTable[p & 31])
+                    : (p < 32 ? sineTable[p & 31] : -sineTable[p & 31])
                 // periodScale: S3M-Perioden sind 4x feiner, das Vibrato-Delta
                 // muss entsprechend groesser ausfallen (ST3-Verhalten).
                 let frequencySlide = itMode
@@ -1844,7 +1853,7 @@ public final class DSPChannel: Sendable {
                 let p = Int(self.tremoloIndex) & (itMode ? 255 : 63)
                 let amp = itMode
                     ? itTrackerWaveform(type: itPatternState?.tremoloWaveform ?? 0, position: p)
-                    : (p < 32 ? DSPChannel.ptSineTable[p & 31] : -DSPChannel.ptSineTable[p & 31])
+                    : (p < 32 ? sineTable[p & 31] : -sineTable[p & 31])
                 let volDelta = amp * self.tremoloDepth / (itMode ? 32.0 : 64.0)
                 self.currentVolume = max(0.0, min(64.0, self.volume + volDelta))
                 let phaseStep = itMode ? 4 * self.tremoloSpeed : self.tremoloSpeed
@@ -1914,8 +1923,8 @@ public final class DSPChannel: Sendable {
                 itPendingSourceKey = -1
                 itPendingRetriggering = false
             }
-            self.instrument = self.setInstrument
-            self.sample = self.setSample
+            if pendingInstrumentChange { self.instrument = self.setInstrument }
+            if pendingSampleChange { self.sample = self.setSample }
             if let vol = self.setVolume {
                 self.volume = vol
                 self.currentVolume = vol

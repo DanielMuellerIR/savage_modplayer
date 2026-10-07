@@ -467,21 +467,21 @@ struct MainView: View {
             }
             // Menue-Befehle (Cmd+P / Cmd+Pfeile) aus AppMain wieder anschliessen —
             // sie posteten bisher NSNotifications, die niemand beobachtet hat.
-            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuPlayStop"))) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuPlayStop")).receive(on: DispatchQueue.main)) { _ in
                 togglePlayback()
             }
-            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuStop"))) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuStop")).receive(on: DispatchQueue.main)) { _ in
                 stopPlayback()
             }
             // Media-Tasten: explizites Play/Pause (im Gegensatz zum Toggle).
-            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("mediaPlay"))) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("mediaPlay")).receive(on: DispatchQueue.main)) { _ in
                 if coordinator.isPaused {
                     coordinator.resume()
                 } else if !coordinator.isPlaying {
                     togglePlayback()
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("mediaPause"))) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("mediaPause")).receive(on: DispatchQueue.main)) { _ in
                 playlistRequestID = UUID()
                 coordinator.pause()
             }
@@ -489,10 +489,10 @@ struct MainView: View {
             .onChange(of: coordinator.isPaused) { _ in updateNowPlayingInfo() }
             .onChange(of: coordinator.isPlaying) { _ in updateNowPlayingInfo() }
             .onChange(of: coordinator.trackName) { _ in updateNowPlayingInfo() }
-            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuNextTrack"))) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuNextTrack")).receive(on: DispatchQueue.main)) { _ in
                 nextTrack()
             }
-            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuPrevTrack"))) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuPrevTrack")).receive(on: DispatchQueue.main)) { _ in
                 prevTrack()
             }
             

@@ -104,6 +104,7 @@ enum SequencerCore {
             ? state.clockRateOverride
             : (state.palClock ? 3546894.6 : 3579545.25)
         if let pool = channels.first?.itVoicePool, pool.usesBackgroundVoices {
+            pool.triggerDelayedNotes(tick: state.tick, voices: channels, instruments: mod.instruments)
             pool.performPatternChannelTick(tick: state.tick, voices: channels)
             pool.compactActiveVoices(channels)
             for position in 0..<pool.activeVoiceCount {
@@ -298,7 +299,10 @@ enum SequencerCore {
             let command = note.effectId - ModuleEffect.impulseTrackerCommandBase
             switch command {
             case 1: // Axx: Speed
-                if note.effectData > 0 { state.ticksPerRow = note.effectData }
+                if note.effectData > 0 {
+                    state.ticksPerRow = note.effectData
+                    recalculateTickDuration(state: state, sampleRate: sampleRate)
+                }
             case 2: // Bxx: Order-Sprung; Parser hat das Ziel bereits remappt.
                 state.positionJump = note.effectData
             case 3: // Cxx: hexadezimale Zielzeile im nächsten Pattern.

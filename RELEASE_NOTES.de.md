@@ -1,3 +1,36 @@
+Savage Mod Player 1.6.28 behebt Fehler aus einem vollständigen Quellcode-Review:
+paralleles Starten/Stoppen der Audioausgabe, verzögerte Noten, kombiniertes
+IT-Portamento, moderne Tempoänderungen, kurze explizite Sampleloops,
+beschädigte S3M-PCM-Header und übergroße numerische IT-Erweiterungen.
+macOS-Medientasten erreichen sicher den Hauptthread; der Sample-Export hält
+das gewählte Stück auch bei Playlistwechsel fest. Verschachtelte Archive teilen
+Entpackgrenzen, versteckte Musikdateien in Archiven bleiben enthalten.
+Fehler beim Bibliotheksleeren werden gemeldet; der Restbestand bleibt im Index.
+Browser-Pegel fallen bei Stop ab. Release- und Starttest-Skripte schützen
+Zielrepository, Tags, Prozesse und gesicherte Voreinstellungen.
+
+Savage Mod Player 1.6.27 ergänzt ein Linux-x86_64-AppImage mit festem
+appimagetool 1.9.1 und geprüfter Runtime. Es enthält den Terminalplayer
+samt Swift-Laufzeit, Icon, Dokumentation und Lizenzen.
+Ausdrückliche CLI-Hilfe endet jetzt mit Erfolgscode 0.
+
+Savage Mod Player 1.6.26 ergänzt MPRIS2 für die Linux-CLI-Wiedergabe über
+libdbus-1. Desktop-Steuerungen können pausieren, fortsetzen, stoppen, neu
+starten sowie Titel und Lautstärke wechseln und Titel/Position lesen.
+
+Savage Mod Player 1.6.25 übernimmt die Pingpong-Umkehrpunkte von Original
+Impulse Tracker 2.14, auch bei gebrochenen Sampleschritten. Zwei synthetische
+Referenzaufnahmen belegten eine zu lange Loop-Periode im bisherigen Renderer.
+
+Savage Mod Player 1.6.24 übernimmt die ProTracker-Vibrato-/Tremolotabelle
+beim Aufbau der Wiedergabekanäle. Damit liegt ihre erste Initialisierung auch
+im Debug-Build außerhalb des Audiothreads. Tabellenwerte und Audioausgabe
+bleiben unverändert.
+
+Savage Mod Player 1.6.23 lässt bei der macOS-CLI-Wiedergabe den letzten
+Audiopuffer auslaufen, bevor das natürliche Ende gemeldet wird. Ein ausdrücklicher
+Stop unterbricht weiterhin. Renderer und Audiosamples bleiben unverändert.
+
 Savage Mod Player 1.6.22 verkleinert das Notenregen-Fenster bei **Tonumfang**
 und erhält dabei exakt die Breite von Tasten und Notenbalken der Gesamtansicht.
 **Klaviatur** stellt die vorherige Fensterbreite wieder her, auch nach einer

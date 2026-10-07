@@ -256,7 +256,8 @@ Vergleiche weglassen.
 Läuft `--play` an einem Terminal, steuern einzelne Tasten die Wiedergabe:
 Leertaste oder `p` pausiert und setzt fort, `n` oder Pfeil rechts springt zum
 nächsten Titel, `b` oder Pfeil links zurück, `q` beendet. Ohne Terminal (Pipe,
-Cron, CI) läuft die Wiedergabe einfach durch. Ctrl-C schließt die Audio-Ausgabe
+Cron, CI) läuft die Wiedergabe durch, sofern keine Linux-Mediensteuerung genutzt
+wird. Ctrl-C schließt die Audio-Ausgabe
 und endet mit Exit-Code 130.
 
 #### Linux
@@ -267,7 +268,7 @@ ausgeblendet.
 
 ```bash
 docker run --rm -v "$PWD":/src -w /src swift:6.0 \
-  bash -c "apt-get update -qq && apt-get install -y -qq libasound2-dev zlib1g-dev libarchive-tools && swift build && swift test"
+  bash -c "apt-get update -qq && apt-get install -y -qq libasound2-dev libdbus-1-dev zlib1g-dev libarchive-tools && swift build && swift test"
 ```
 
 `libasound2-dev` liefert die ALSA-Header für die Linux-Audioausgabe;
@@ -280,6 +281,16 @@ das Paket läuft alles weiter, nur `.7z` wird übersprungen.
 unter Linux (braucht `libasound2-dev` zum Bauen). Der Wiedergabepfad liefert
 sample-identisch dasselbe wie der Offline-Renderer; beide holen aus derselben
 Engine.
+
+`libdbus-1-dev` liefert die Anbindung an die Linux-Mediensteuerung; das Binary
+benötigt zur Laufzeit `libdbus-1.so.3`. Während `--play` bietet MPRIS2
+Play/Pause, Stop, Vor/Zurück, Titel, Position und Lautstärke (0–1), auch ohne
+Terminal. Nach Stop bleibt der Prozess erreichbar; Play beginnt den aktuellen
+Titel von vorn. Quit beendet ihn. Titelwechsel erhalten Pause/Stop. Jeder
+Prozess nutzt `org.mpris.MediaPlayer2.savage.instance<PID>`. Ohne Sitzungsbus
+bleibt die normale CLI-Wiedergabe nutzbar. Seek, URI-Öffnen, Wiederholung und
+Zufallsfolge werden nicht angeboten; Desktop-Clients erhalten die passenden
+Fähigkeitsangaben.
 
 ##### Auf dem Desktop installieren
 
@@ -298,8 +309,22 @@ Dateitypen sind bei freedesktop.org bereits definiert; der Eintrag meldet sich
 nur dafür an, statt eigene zu erfinden.
 
 Das statische Binary ist rund 70 MB groß und läuft ohne installierte
-Swift-Laufzeit. Ein AppImage gibt es bewusst nicht: Dafür bräuchte es
-`appimagetool`, das nicht aus den Paketquellen kommt.
+Swift-Laufzeit. Zusätzlich gibt es ein AppImage für Linux x86_64
+(geprüft auf Ubuntu 24.04):
+
+```bash
+bash linux/build-appimage.sh
+chmod +x build/Savage-Mod-Player-*.AppImage
+./build/Savage-Mod-Player-*.AppImage track.mod --play
+```
+
+Das Bauskript verpackt das vorhandene statische CLI nach `build/`, mit
+geprüftem appimagetool 1.9.1 und festgelegter Runtime. ALSA, libdbus-1, zlib,
+libstdc++ und glibc bleiben Systembibliotheken; eine installierte Swift-Laufzeit
+ist unnötig. Die tatsächliche minimale glibc-Version steht in der enthaltenen
+`build-info.txt`. Terminalsteuerung und MPRIS bleiben nutzbar. Fehlt FUSE:
+`./build/Savage-Mod-Player-*.AppImage --appimage-extract-and-run track.mod --play`.
+Es handelt sich um eine Terminalanwendung.
 
 Der Render ist je Plattform deterministisch, aber **nicht** bitgleich *zwischen*
 den Plattformen: `tanh` im Limiter rundet in glibc und Darwin-libm

@@ -21,6 +21,27 @@ let appProducts: [Product] = []
 let appTargets: [Target] = []
 #endif
 
+#if os(Linux)
+let mediaTargets: [Target] = [
+    .systemLibrary(
+        name: "CDBus",
+        path: "Sources/CDBus",
+        pkgConfig: "dbus-1",
+        providers: [.apt(["libdbus-1-dev"])]
+    ),
+    .target(
+        name: "CMPRIS",
+        dependencies: ["CDBus"],
+        path: "Sources/CMPRIS",
+        publicHeadersPath: "include"
+    )
+]
+let cliDependencies: [Target.Dependency] = ["SavageModPlayerCore", "CMPRIS"]
+#else
+let mediaTargets: [Target] = []
+let cliDependencies: [Target.Dependency] = ["SavageModPlayerCore"]
+#endif
+
 let package = Package(
     name: "SavageModPlayerApp",
     platforms: [
@@ -35,7 +56,7 @@ let package = Package(
         .executable(name: "savage-cli", targets: ["SavageCLI"]),
         .library(name: "SavageModPlayerCore", targets: ["SavageModPlayerCore"])
     ],
-    targets: appTargets + [
+    targets: appTargets + mediaTargets + [
         // Kleine C11-Atomik-Bruecke fuer den Echtzeit-Renderzustand. Swifts
         // Synchronization.Atomic ist erst ab macOS 15 verfuegbar; die App
         // unterstuetzt weiterhin macOS 13 und Linux.
@@ -81,7 +102,7 @@ let package = Package(
         // Kopfloser CLI-Renderer (headless Tests + Linux-Port-Fundament).
         .executableTarget(
             name: "SavageCLI",
-            dependencies: ["SavageModPlayerCore"],
+            dependencies: cliDependencies,
             path: "Sources/SavageCLI"
         ),
         .testTarget(

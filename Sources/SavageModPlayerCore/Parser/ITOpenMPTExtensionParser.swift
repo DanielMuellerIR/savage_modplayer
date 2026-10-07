@@ -366,6 +366,15 @@ enum ITOpenMPTExtensionParser {
         payload: Data,
         builder: inout Builder
     ) throws {
+        // Diese Songfelder sind höchstens UInt32 breit (OpenMPT Load_it.cpp).
+        // Größere Payloads könnten beim bisherigen Int-Cast negativ werden.
+        switch id {
+        case "..TD", "DTFR", ".BPR", ".MPR", "...C", ".APS", "VTSV", "..PR":
+            guard (1...4).contains(payload.count) else {
+                throw ITParser.ParserError.invalidExtension("ungueltige Zahlgroesse fuer \(id)")
+            }
+        default: break
+        }
         let value = sizedUnsigned(payload, 0, payload.count)
         switch id {
         case "..TD":

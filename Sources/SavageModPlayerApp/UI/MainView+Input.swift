@@ -61,28 +61,40 @@ extension MainView {
         mediaCommandsConfigured = true
 
         let center = MPRemoteCommandCenter.shared()
-        center.togglePlayPauseCommand.addTarget { _ in
-            NotificationCenter.default.post(name: NSNotification.Name("menuPlayStop"), object: nil)
+        center.togglePlayPauseCommand.addTarget { @Sendable _ in
+            Task { @MainActor in
+                NotificationCenter.default.post(name: NSNotification.Name("menuPlayStop"), object: nil)
+            }
             return .success
         }
-        center.playCommand.addTarget { _ in
-            NotificationCenter.default.post(name: NSNotification.Name("mediaPlay"), object: nil)
+        center.playCommand.addTarget { @Sendable _ in
+            Task { @MainActor in
+                NotificationCenter.default.post(name: NSNotification.Name("mediaPlay"), object: nil)
+            }
             return .success
         }
-        center.pauseCommand.addTarget { _ in
-            NotificationCenter.default.post(name: NSNotification.Name("mediaPause"), object: nil)
+        center.pauseCommand.addTarget { @Sendable _ in
+            Task { @MainActor in
+                NotificationCenter.default.post(name: NSNotification.Name("mediaPause"), object: nil)
+            }
             return .success
         }
-        center.stopCommand.addTarget { _ in
-            NotificationCenter.default.post(name: NSNotification.Name("menuStop"), object: nil)
+        center.stopCommand.addTarget { @Sendable _ in
+            Task { @MainActor in
+                NotificationCenter.default.post(name: NSNotification.Name("menuStop"), object: nil)
+            }
             return .success
         }
-        center.nextTrackCommand.addTarget { _ in
-            NotificationCenter.default.post(name: NSNotification.Name("menuNextTrack"), object: nil)
+        center.nextTrackCommand.addTarget { @Sendable _ in
+            Task { @MainActor in
+                NotificationCenter.default.post(name: NSNotification.Name("menuNextTrack"), object: nil)
+            }
             return .success
         }
-        center.previousTrackCommand.addTarget { _ in
-            NotificationCenter.default.post(name: NSNotification.Name("menuPrevTrack"), object: nil)
+        center.previousTrackCommand.addTarget { @Sendable _ in
+            Task { @MainActor in
+                NotificationCenter.default.post(name: NSNotification.Name("menuPrevTrack"), object: nil)
+            }
             return .success
         }
     }

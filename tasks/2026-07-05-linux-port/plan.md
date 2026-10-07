@@ -333,15 +333,15 @@ pactl unload-module $SINK          # aufräumen nicht vergessen
   (69 MB), das ohne Swift-Laufzeit auf dem Zielrechner startet — im Präfix
   ausgeführt und mit `--help` belegt.
 
-**Bewusst nicht gemacht:**
+**Ergänzungen und Grenzen:**
 
-- **AppImage.** Braucht `appimagetool`, das nicht aus den Paketquellen kommt,
-  sondern als Binary aus dem Netz. Das statische Programm plus `install.sh`
-  deckt denselben Zweck ohne Download ab.
-- **MPRIS2.** Braucht eine D-Bus-Anbindung und damit eine neue
-  Systemabhängigkeit (libdbus oder sd-bus als weiteres `systemLibrary`-Ziel).
-  Das ist eine eigene Entscheidung, kein Nebenbei — und ohne laufende
-  Desktop-Sitzung auf dem Testhost auch nicht ehrlich belegbar.
+- **AppImage ist seit 1.6.27 verfügbar.** `linux/build-appimage.sh` verpackt
+  das statische CLI für Linux x86_64, mit per SHA-256 festem appimagetool 1.9.1
+  und eingebetteter Runtime. Zielsystem bleibt ein Desktop mit ALSA/D-Bus.
+- **MPRIS2 ist seit 1.6.26 umgesetzt.** Linux-CLI-Anbindung über libdbus-1;
+  Play/Pause, Stop/Neustart, pausierter Titelwechsel, Statussignale, Fehler und
+  mehrere Instanzen sind auf einem echten Desktopbus geprüft.
+  `Tests/mpris_contract_tests.py` nutzt lautlose synthetische Module.
 - Ein natives Linux-GUI bleibt ausgeschlossen.
 
 ## Rahmenbedingungen
@@ -357,7 +357,7 @@ pactl unload-module $SINK          # aufräumen nicht vergessen
   ssh <host> 'git clone -q --branch main ~/git/savage_modplayer.git ~/savage-linux-check/repo && \
     cd ~/savage-linux-check/repo && \
     docker run --rm -v "$PWD":/src -w /src swift:6.0 bash -c \
-    "apt-get update -qq && apt-get install -y -qq libasound2-dev libarchive-tools; \
+    "apt-get update -qq && apt-get install -y -qq libasound2-dev libdbus-1-dev zlib1g-dev libarchive-tools; \
      swift build -c release && swift test -c release"'
   ```
 

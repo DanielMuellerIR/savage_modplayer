@@ -186,6 +186,30 @@ final class ITSoundDetailTests: XCTestCase {
         XCTAssertEqual(channel.sampleDirection, 1)
     }
 
+    func testPingPongMatchesOriginalITIntegerAndHalfSamplePeriods() {
+        // IT 2.14 Patch 3 / ITWAV.DRV: Integerphasen ergeben nach der
+        // Einschwingzeit diese Folgen (Pegel und Interpolator separat).
+        let loop = Sample(pcm: [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0, -0.5],
+                          loopStart: 1, loopLength: 5, loopType: .pingpong,
+                          volume: 64, finetune: 0)
+        for (speed, expected) in [
+            (1.0, [1, 2, 3, 4, 5, 5, 4, 3, 2]),
+            (0.5, [2, 3, 4, 5, 5, 4, 3, 2])
+        ] {
+            let channel = voice(sample: loop)
+            channel.sampleSpeed = speed
+            channel.sampleIndex = speed == 1 ? 1 : 2
+            let stride = speed == 1 ? 1 : 2
+            var actual: [Int] = []
+            for frame in 0..<(expected.count * stride * 3) {
+                let value = RenderEngine.renderChannelStereoSampleForTesting(
+                    channel: channel, useInterpolation: false).left
+                if frame % stride == 0 { actual.append(Int((value * 8).rounded())) }
+            }
+            XCTAssertEqual(actual, Array(repeating: expected, count: 3).flatMap { $0 })
+        }
+    }
+
     func testNNANoteOffReleasesABackwardSustainIntoTheForwardTail() {
         let held = Sample(pcm: [0.1, 0.2, 0.3, 0.4, 0.5],
                           loopStart: 0, loopLength: 0, loopType: .none,

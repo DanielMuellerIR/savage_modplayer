@@ -30,6 +30,65 @@ final class PlaylistScannerTests: XCTestCase {
         workDir.appendingPathComponent("scan-temp", isDirectory: true)
     }
 
+    private func storedZip(_ items: [(String, Data)]) -> Data {
+        func word<T: FixedWidthInteger>(_ value: T) -> Data {
+            var value = value.littleEndian
+            return withUnsafeBytes(of: &value) { Data($0) }
+        }
+        var body = Data(), directory = Data()
+        for (name, payload) in items {
+            let name = Data(name.utf8), offset = UInt32(body.count)
+            var crc: UInt32 = 0xFFFFFFFF
+            for byte in payload {
+                crc ^= UInt32(byte)
+                for _ in 0..<8 { crc = (crc >> 1) ^ (crc & 1 == 0 ? 0 : 0xEDB88320) }
+            }
+            crc ^= 0xFFFFFFFF
+            body += word(UInt32(0x04034B50)) + word(UInt16(20))
+            body += Data(repeating: 0, count: 8)
+            body += word(crc) + word(UInt32(payload.count)) + word(UInt32(payload.count))
+            body += word(UInt16(name.count)) + word(UInt16(0)) + name + payload
+            directory += word(UInt32(0x02014B50)) + word(UInt16(20)) + word(UInt16(20))
+            directory += Data(repeating: 0, count: 8)
+            directory += word(crc) + word(UInt32(payload.count)) + word(UInt32(payload.count))
+            directory += word(UInt16(name.count)) + Data(repeating: 0, count: 12)
+            directory += word(offset) + name
+        }
+        let offset = UInt32(body.count)
+        body += directory
+        body += word(UInt32(0x06054B50)) + Data(repeating: 0, count: 4)
+        body += word(UInt16(items.count)) + word(UInt16(items.count))
+        body += word(UInt32(directory.count)) + word(offset) + word(UInt16(0))
+        return body
+    }
+
+    func testNestedArchivesShareBudgetsAndReleaseExtractionTrees() throws {
+        let innerA = storedZip([("a.mod", Data(repeating: 1, count: 32))])
+        let innerB = storedZip([("b.mod", Data(repeating: 2, count: 32))])
+        let outer = workDir.appendingPathComponent("outer.zip")
+        try storedZip([("a.zip", innerA), ("b.zip", innerB)]).write(to: outer)
+        let limits = PlaylistScanner.ArchiveUnpackLimits(
+            maxUncompressedBytes: Int64(innerA.count + innerB.count + 32), maxEntries: 3)
+        let entries = PlaylistScanner.collectEntries(from: [outer], tempDir: tempDir,
+            archiveLimits: limits, maxArchives: 3)
+        XCTAssertEqual(entries.count, 1)
+        let children = try FileManager.default.contentsOfDirectory(atPath: tempDir.path)
+        XCTAssertFalse(children.contains { $0.hasPrefix("extracted-") })
+        let none = PlaylistScanner.collectEntries(from: [outer], tempDir: tempDir,
+            archiveLimits: .default, maxArchives: 1)
+        XCTAssertTrue(none.isEmpty)
+    }
+
+    func testHiddenFilesAndNestedArchivesRemainPlayable() throws {
+        let inner = storedZip([("inside.it", Data([3]))])
+        let archive = workDir.appendingPathComponent("hidden.zip")
+        try storedZip([(".direct.mod", Data([1])), (".folder/song.xm", Data([2])),
+                       (".inner.zip", inner)]).write(to: archive)
+        let entries = PlaylistScanner.collectEntries(from: [archive], tempDir: tempDir)
+        XCTAssertEqual(Set(entries.map(\.displayName)), [".direct.mod", "song.xm", "inside.it"])
+        for entry in entries { XCTAssertTrue(FileManager.default.fileExists(atPath: entry.url.path)) }
+    }
+
     // MARK: - Einsammeln mit Hierarchie
 
     func testCollectEntriesKeepsFolderHierarchy() throws {

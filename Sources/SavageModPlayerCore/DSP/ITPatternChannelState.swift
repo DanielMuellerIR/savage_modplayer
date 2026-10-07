@@ -33,6 +33,9 @@ public final class ITPatternChannelState: Sendable {
     // 0 = erste Ausfuehrung der Zeile, >0 = Wiederholung durch SEx.
     nonisolated(unsafe) public var rowRepeatIndex: Int = 0
 
+    nonisolated(unsafe) var pendingNote: Note?
+    nonisolated(unsafe) var pendingNoteTick: Int = -1
+
     // Index 1...26 entspricht A...Z. Das Array wird vor dem Audiostart einmal
     // angelegt; Zugriffe im Renderpfad ändern nur vorhandene Integerwerte.
     nonisolated(unsafe) private var effectMemory: [UInt8]

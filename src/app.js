@@ -507,6 +507,7 @@ function setPlayingUI(isPlaying) {
   footerState.style.color = isPlaying ? '#008800' : '#888';
   
   if (!isPlaying) {
+    vuTargets.fill(0);
     statusBpm.textContent = '---';
     statusSpeed.textContent = '---';
   }

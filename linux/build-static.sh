@@ -4,7 +4,7 @@
 # Warum statisch: Ein normal gebautes Binary braucht auf dem Zielrechner die
 # passende Swift-Laufzeit. Mit `--static-swift-stdlib` steckt sie im Programm —
 # das Ergebnis laeuft auf jedem Linux mit den paar Systembibliotheken, gegen die
-# ohnehin dynamisch gelinkt wird (libasound, libz, libc). Dafuer ist es gross,
+# ohnehin dynamisch gelinkt wird (libasound, libdbus-1, libz, libc). Dafuer ist es gross,
 # rund 70 MB.
 #
 # Der Bau laeuft im offiziellen `swift`-Container, damit auf dem Host keine
@@ -13,10 +13,7 @@
 # Aufruf (auf einem Linux-Rechner mit Docker, im Projektverzeichnis):
 #   bash linux/build-static.sh [--image swift:6.0]
 #
-# Kein AppImage: Dafuer braeuchte es `appimagetool`, das nicht in den
-# Paketquellen liegt, sondern als Binary aus dem Netz geholt wird. Solange
-# niemand es ausdruecklich will, bleibt es beim statischen Programm plus
-# `linux/install.sh` — das deckt denselben Zweck ohne Download ab.
+# Ein zusätzliches AppImage entsteht anschließend mit linux/build-appimage.sh.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -38,7 +35,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 echo "=== Statisches savage-cli bauen ($IMAGE) ==="
-# libasound2-dev fuer die ALSA-Ausgabe, zlib1g-dev fuer den eigenen ZIP-Leser.
+# libasound2-dev fuer ALSA, libdbus-1-dev fuer MPRIS, zlib1g-dev fuer ZIP.
 # `bsdtar` (libarchive-tools) wird NICHT gebraucht — es ist seit 1.6.10 nur noch
 # fuer `.7z` zustaendig und keine Bauabhaengigkeit.
 # Der Container laeuft als root (apt-get braucht das), das Arbeitsverzeichnis
@@ -75,7 +72,7 @@ docker run "${DOCKER_ARGS[@]}" -v "$PWD":/src -w /src \
     "$IMAGE" bash -c '
     set -e
     apt-get update -qq
-    apt-get install -y -qq libasound2-dev zlib1g-dev
+    apt-get install -y -qq libasound2-dev libdbus-1-dev zlib1g-dev
     set +e
     swift build -c release --static-swift-stdlib --product savage-cli
     rc=$?

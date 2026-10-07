@@ -17,7 +17,12 @@ final class InstrumentExportTests: XCTestCase {
         coordinator.setMod(mod)
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent("sample-\(UUID()).wav")
         defer { try? FileManager.default.removeItem(at: destination) }
-        try coordinator.exportInstrumentToWav(index: 1, destinationURL: destination)
+        // Das SavePanel hält das ausgewählte Modul fest, auch wenn inzwischen
+        // ein anderer Playlist-Titel aktiv ist.
+        coordinator.setMod(Mod(name: "next", length: 1, patternTable: [0],
+            instruments: [nil], patterns: mod.patterns, channelCount: 1, format: .it))
+        try coordinator.exportInstrumentToWav(mod: mod, index: 1, destinationURL: destination)
+        XCTAssertThrowsError(try coordinator.exportInstrumentToWav(index: 1, destinationURL: destination))
         let file = try AVAudioFile(forReading: destination)
         XCTAssertEqual(file.processingFormat.channelCount, 2)
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4))

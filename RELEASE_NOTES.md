@@ -1,3 +1,34 @@
+Savage Mod Player 1.6.28 fixes issues found in a full source review:
+concurrent audio sink start/stop, delayed notes, IT combined portamento and
+modern tempo changes, short explicit sample loops, corrupt S3M PCM headers,
+and oversized numeric IT extensions. macOS media commands safely reach the
+main actor, and sample export keeps the selected song across playlist changes.
+Nested playlist archives share extraction limits; hidden archive music is
+included. Library deletion reports failures and preserves the remaining index.
+Browser VU meters clear on Stop. Release and smoke-test scripts now
+protect their destination, tags, processes and saved preferences.
+
+Savage Mod Player 1.6.27 adds a Linux x86_64 AppImage built with pinned
+appimagetool 1.9.1 and a verified runtime. It packages the terminal player
+with its Swift runtime, icon, documentation and licenses.
+Explicit CLI help now succeeds with exit code 0.
+
+Savage Mod Player 1.6.26 adds MPRIS2 media controls to Linux CLI playback,
+using libdbus-1. Desktop controls can pause/resume, stop/restart, change tracks
+and volume, and read the title and position. No Linux GUI is added.
+
+Savage Mod Player 1.6.25 follows the original Impulse Tracker 2.14 ping-pong
+loop endpoints, including fractional sample steps. Two synthetic reference
+renders exposed a longer loop period in the previous renderer.
+
+Savage Mod Player 1.6.24 prepares the ProTracker vibrato/tremolo table when
+creating playback channels, keeping its first initialization off the audio thread
+in debug builds. Table values and audio output are unchanged.
+
+Savage Mod Player 1.6.23 lets macOS CLI playback drain its final audio buffer
+before reporting the natural end. An explicit Stop still interrupts playback.
+The renderer and audio samples are unchanged.
+
 Savage Mod Player 1.6.22 narrows the falling-note window when **Tonumfang** is
 selected, keeping keys and note bars exactly as wide as in the full keyboard.
 **Klaviatur** restores the previous window width, including a custom size.

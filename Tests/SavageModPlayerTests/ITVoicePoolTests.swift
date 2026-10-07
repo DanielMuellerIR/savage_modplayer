@@ -429,6 +429,54 @@ final class ITVoicePoolTests: XCTestCase {
         }
     }
 
+    func testCombinedPortamentoPreservesForegroundVoiceAndPosition() throws {
+        let setup = try makeSetup(newNoteAction: .continuePlaying)
+        setup.pool.process(note: note(key: 48, instrument: 1), logicalChannel: 0,
+                           voices: setup.voices, instruments: setup.mod.instruments)
+        let voice = setup.voices[0]
+        _ = setup.pool.patternChannels[0].rememberedPitchSlide(
+            parameter: 4, tonePortamento: true, compatibleGxx: false)
+        voice.sampleIndex = 2.5
+        let generation = voice.itVoiceGeneration
+        let originalPeriod = voice.currentPeriod
+        setup.pool.process(note: Note(instrument: 1, period: 0,
+            effectId: ModuleEffect.impulseTrackerCommand(12), effectData: 0,
+            key: 55, effectPresent: true), logicalChannel: 0,
+            voices: setup.voices, instruments: setup.mod.instruments)
+        XCTAssertEqual(setup.pool.activeVoiceCount, 1)
+        XCTAssertEqual(voice.itVoiceGeneration, generation)
+        XCTAssertEqual(voice.sampleIndex, 2.5)
+        XCTAssertEqual(voice.currentPeriod, originalPeriod)
+        XCTAssertTrue(voice.portamento)
+    }
+
+    func testDelayedInstrumentNoteAppliesNNAOnlyAtTrigger() throws {
+        for action in [NewNoteAction.cut, .continuePlaying] {
+            let setup = try makeSetup(newNoteAction: action)
+            setup.pool.process(note: note(key: 48, instrument: 1), logicalChannel: 0,
+                               voices: setup.voices, instruments: setup.mod.instruments)
+            let first = setup.voices[0]
+            first.sampleIndex = 2.5
+            let generation = first.itVoiceGeneration
+            setup.pool.process(note: Note(instrument: 1, period: 0,
+                effectId: ModuleEffect.impulseTrackerCommand(19), effectData: 0xD2,
+                key: 52, effectPresent: true), logicalChannel: 0,
+                voices: setup.voices, instruments: setup.mod.instruments)
+            XCTAssertTrue(first.playing)
+            XCTAssertEqual(first.itTriggerNote, 48)
+            XCTAssertEqual(first.itVoiceGeneration, generation)
+            XCTAssertEqual(first.sampleIndex, 2.5)
+            setup.pool.triggerDelayedNotes(tick: 1, voices: setup.voices, instruments: setup.mod.instruments)
+            XCTAssertEqual(first.itTriggerNote, 48)
+            setup.pool.triggerDelayedNotes(tick: 2, voices: setup.voices, instruments: setup.mod.instruments)
+            let current = setup.voices[setup.pool.patternChannels[0].foregroundVoiceIndex]
+            XCTAssertTrue(current.playing)
+            XCTAssertEqual(current.itTriggerNote, 52)
+            XCTAssertGreaterThan(current.itVoiceGeneration, generation)
+            XCTAssertEqual(setup.pool.activeVoiceCount, action == .cut ? 1 : 2)
+        }
+    }
+
     private typealias Setup = (mod: Mod, pool: ITPlaybackVoicePool, voices: [DSPChannel])
 
     private func makeSetup(

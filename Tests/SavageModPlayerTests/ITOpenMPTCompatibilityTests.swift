@@ -88,6 +88,26 @@ final class ITOpenMPTCompatibilityTests: XCTestCase {
         XCTAssertEqual(modernState.outputsPerTick, 960, accuracy: 0.0001)
     }
 
+    func testModernSpeedChangeRecalculatesTickDuration() throws {
+        let mod = try ITParser.parse(data: makeIT(
+            patternRows: [[0x81, 0x08, 1, 3]],
+            endExtensions: songExtensions([("..MT", le(2, size: 1)), (".BPR", le(4, size: 4))])))
+        let state = RenderEngine.makeRenderState(for: mod, sampleRate: 48000)
+        let voices = RenderEngine.makeRenderChannels(for: mod)
+        state.outputsUntilNextTick = 0
+        SequencerCore.advanceIfNeeded(state: state, channels: voices, mod: mod, sampleRate: 48000)
+        XCTAssertEqual(state.ticksPerRow, 3)
+        XCTAssertEqual(state.outputsPerTick, 1920, accuracy: 0.0001)
+        XCTAssertEqual(state.outputsPerTick * Double(state.ticksPerRow), 5760, accuracy: 0.0001)
+    }
+
+    func testOversizedNumericSongExtensionIsRejected() {
+        for id in ["..TD", ".BPR", ".MPR", ".APS"] {
+            let data = makeIT(endExtensions: songExtensions([(id, [UInt8](repeating: 255, count: 8))]))
+            XCTAssertThrowsError(try ITParser.parse(data: data), id)
+        }
+    }
+
     func testFirstExtendedPatternStartsAtRowZeroExactlyOnce() throws {
         let module = try ITParser.parse(data: makeIT(patternRows: [], patternRowCount: 128))
         XCTAssertEqual(module.patterns[0].rows.count, 128)

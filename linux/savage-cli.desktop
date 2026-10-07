@@ -11,7 +11,7 @@ Comment[de]=MOD-, S3M-, XM- und IT-Module abspielen
 Exec=savage-cli %f --play
 # Terminal=true ist hier kein Notbehelf, sondern der Punkt: savage-cli ist ein
 # Kommandozeilenspieler, und seine Tastensteuerung (Leertaste, n, b, q) braucht
-# ein Terminal. Ohne eines laeuft der Titel stumpf durch.
+# ein Terminal. MPRIS-Mediensteuerung steht zusätzlich über den Sitzungsbus bereit.
 Terminal=true
 # Icon aus dem Symbolthema statt eines mitgelieferten Bildes: So passt es zu
 # jedem Thema, und das Repo bleibt frei von Bildbeigaben.

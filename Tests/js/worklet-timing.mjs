@@ -196,6 +196,22 @@ function check(name, actual, expected, eps = 1e-4) {
     }
 }
 
+// Instrumentlose ED2-Folgenote behält Sample und Lautstärke wie Swift.
+{
+    const ch = makeChannel();
+    const instrument = {bytes: Int8Array.of(64, 64, 64, 64), length: 4,
+        volume: 64, finetune: 0, isLooped: true, repeatOffset: 0, repeatLength: 4};
+    worklet.mod = {instruments: [null, instrument]};
+    ch.play({instrument: 1, period: 428, hasEffect: false});
+    ch.play({instrument: 0, period: 320, hasEffect: true,
+        effectId: 0xED, effectData: 2, effectHigh: 0, effectLow: 2});
+    worklet.tick = 2;
+    ch.performTick();
+    check('ED2 ohne Instrument: Sample bleibt hörbar', ch.nextOutput(), 0.25);
+    check('ED2 ohne Instrument: Lautstärke bleibt erhalten', ch.currentVolume, 64);
+    check('ED2 ohne Instrument: Zielperiode', ch.currentPeriod, 320);
+}
+
 if (failures > 0) {
     console.error(`\n${failures} Fehler — Worklet-Timing weicht ab.`);
     process.exit(1);

@@ -42,23 +42,59 @@ fi
 
 WORK="$(mktemp -d)"
 
-restore_defaults() {
-    if [ -s "$WORK/defaults-backup.plist" ]; then
-        defaults import "$DOMAIN" "$WORK/defaults-backup.plist" 2>/dev/null
-    else
-        defaults delete "$DOMAIN" 2>/dev/null
-    fi
+BACKUP="$WORK/defaults-backup.plist"
+DEFAULTS_STATE=unknown
+DEFAULTS_TOUCHED=0
+RUN_ID="SavageSmoke-$(uuidgen)"
+TEST_PIDS=()
+stop_test_processes() {
+    local pid command
+    for pid in ${TEST_PIDS[@]+"${TEST_PIDS[@]}"}; do
+        command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+        if [[ "$command" == *"$RUN_ID"* ]]; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+        fi
+    done
+    TEST_PIDS=()
 }
 cleanup() {
-    pkill -f "$BIN" 2>/dev/null
-    restore_defaults
-    rm -rf "$WORK"
+    local status=$? restore_failed=0
+    trap - EXIT
+    stop_test_processes
+    if [ "$DEFAULTS_STATE" = present ]; then
+        if defaults import "$DOMAIN" "$BACKUP" >/dev/null 2>&1; then
+            rm -f "$BACKUP"
+        else
+            echo "FEHLER: Wiederherstellung fehlgeschlagen; Sicherung bleibt unter $BACKUP" >&2
+            restore_failed=1
+        fi
+    elif [ "$DEFAULTS_STATE" = absent ] && [ "$DEFAULTS_TOUCHED" -eq 1 ]; then
+        defaults delete "$DOMAIN" >/dev/null 2>&1 || restore_failed=1
+    fi
+    if [ "$restore_failed" -eq 0 ]; then rm -rf "$WORK"; fi
+    if [ "$restore_failed" -ne 0 ] && [ "$status" -eq 0 ]; then status=1; fi
+    exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-# --- Voreinstellungen sichern und den Lauf stumm stellen --------------------
-defaults export "$DOMAIN" "$WORK/defaults-backup.plist" 2>/dev/null || true
-defaults write "$DOMAIN" savage.volume -float 0
+# Vor dem ersten Schreibzugriff muss eine vorhandene Domain gesichert sein.
+if ! DEFAULT_DOMAINS="$(defaults domains 2>/dev/null)"; then exit 1; fi
+NORMALIZED_DOMAINS="$(printf '%s\n' "$DEFAULT_DOMAINS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+if grep -Fxq "$DOMAIN" <<< "$NORMALIZED_DOMAINS"; then
+    DEFAULTS_STATE=present-unbacked
+    if ! defaults export "$DOMAIN" "$BACKUP" >/dev/null 2>&1 || [ ! -s "$BACKUP" ]; then
+        echo "FEHLER: Voreinstellungen konnten nicht gesichert werden." >&2
+        exit 1
+    fi
+    DEFAULTS_STATE=present
+else
+    DEFAULTS_STATE=absent
+fi
+DEFAULTS_TOUCHED=1
+defaults write "$DOMAIN" savage.volume -float 0 || exit 1
 
 # --- Fensterzaehler ---------------------------------------------------------
 cat > "$WORK/winprobe.swift" <<'SWIFT'
@@ -113,7 +149,7 @@ defaults write "$DOMAIN" savage.autoplayFolder -string "$WORK/autoplay"
 run_case() {
     local label="$1" expected="$2" mode="$3"
     shift 3
-    pkill -f "$BIN" 2>/dev/null
+    stop_test_processes
     defaults delete "$DOMAIN" savage.lastPlayed 2>/dev/null
     sleep 1
     local pid=""
@@ -121,10 +157,13 @@ run_case() {
         # Der Weg von Finder und Dock: LaunchServices schickt ein Apple-Event,
         # kein argv. `-g` laesst die App im Hintergrund, `-n` erzwingt eine
         # frische Instanz.
-        open -g -n -a "$APP" "$@"
+        open -g -n -a "$APP" "$@" --args -SavageSmokeRun "$RUN_ID"
+        sleep 1
+        while IFS= read -r test_pid; do TEST_PIDS+=("$test_pid"); done < <(pgrep -f "$RUN_ID" || true)
     else
-        "$BIN" -ApplePersistenceIgnoreState YES "$@" >"$WORK/app.log" 2>&1 &
+        "$BIN" -ApplePersistenceIgnoreState YES -SavageSmokeRun "$RUN_ID" "$@" >"$WORK/app.log" 2>&1 &
         pid=$!
+        TEST_PIDS+=("$pid")
         disown "$pid" 2>/dev/null
     fi
 
@@ -144,7 +183,7 @@ run_case() {
             sleep 1
         done
     fi
-    pkill -f "$BIN" 2>/dev/null
+    stop_test_processes
 
     if [ "$windows" = "0" ]; then
         echo "FAIL  $label — nach ${WAIT_SECONDS}s kein Fenster"

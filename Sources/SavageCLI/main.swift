@@ -108,7 +108,7 @@ func parseArgs(_ argv: [String]) throws -> Options {
         case "--stdout":         o.toStdout = true
         case "--play":           o.play = true
         case "--list":           o.listDir = try value(after: a); i += 1
-        case "--help", "-h":     printUsageAndExit()
+        case "--help", "-h":     printUsageAndExit(0)
         default:
             if a.hasPrefix("-") { throw CLIError.unknownOption(a) }
             guard o.input == nil else { throw CLIError.duplicateInput(a) }
@@ -150,8 +150,9 @@ func parseArgs(_ argv: [String]) throws -> Options {
     return o
 }
 
-func printUsageAndExit() -> Never {
-    FileHandle.standardError.write(Data("""
+func printUsageAndExit(_ status: Int32 = 2) -> Never {
+    let output = status == 0 ? FileHandle.standardOutput : FileHandle.standardError
+    output.write(Data("""
     savage-cli — headless Tracker-Modul-Renderer (MOD/S3M/XM/IT)
 
     savage-cli <datei> [optionen]
@@ -180,7 +181,7 @@ func printUsageAndExit() -> Never {
       savage-cli --list ~/mods --play
 
     """.utf8))
-    exit(2)
+    exit(status)
 }
 
 func log(_ s: String, quiet: Bool) {

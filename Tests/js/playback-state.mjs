@@ -215,3 +215,11 @@ for (let tick = 0; tick < 10; tick++) await Promise.resolve();
 assert.equal(ui.state().currentFile, third, 'Aktuelles Songende muss Auto-Next weiterhin starten');
 assert.equal(ui.player.playing, true);
 console.log('UI-Songende: Auto-Next bleibt nach erfolgreichem Start aktiv.');
+
+// Den echten UI-Zustandswechsel mit zuvor gemeldeten Pegeln ausführen.
+const setUI = appSource.slice(appSource.indexOf('function setPlayingUI('),
+  appSource.indexOf('// Verbindet die Worklet-Events', appSource.indexOf('function setPlayingUI(')));
+const levels = [0.8, 0.4, 0.2, 1];
+new Function('vuTargets', 'playBtn', 'statusState', 'footerState', 'statusBpm', 'statusSpeed',
+  setUI + '\nsetPlayingUI(false);')(levels, {}, {style:{}}, {style:{}}, {}, {});
+assert.deepEqual(levels, [0, 0, 0, 0], 'Stop muss VU-Zielpegel zurücksetzen');

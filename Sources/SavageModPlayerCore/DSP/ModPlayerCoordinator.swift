@@ -1207,8 +1207,19 @@ public final class ModPlayerCoordinator: ObservableObject {
 
     
     public func exportInstrumentToWav(index: Int, destinationURL: URL) throws {
-        guard let mod = activeMod, index >= 1 && index < mod.instruments.count,
-              let selection = mod.previewSelection(instrumentIndex: index) else { return }
+        guard let mod = activeMod else {
+            throw NSError(domain: "ModPlayer", code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Kein Modul geladen"])
+        }
+        try exportInstrumentToWav(mod: mod, index: index, destinationURL: destinationURL)
+    }
+
+    public func exportInstrumentToWav(mod: Mod, index: Int, destinationURL: URL) throws {
+        guard index >= 1 && index < mod.instruments.count,
+              let selection = mod.previewSelection(instrumentIndex: index) else {
+            throw NSError(domain: "ModPlayer", code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Kein exportierbares Sample ausgewählt"])
+        }
         let smp = selection.sample
         let pcm = smp.pcm
 

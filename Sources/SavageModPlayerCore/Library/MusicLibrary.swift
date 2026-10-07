@@ -467,11 +467,14 @@ public final class MusicLibrary: @unchecked Sendable {
     // Die Wurzel selbst bleibt bestehen, damit sofort wieder importiert werden
     // kann. Der ausfuehrlichere Weg mit Bericht ist `LibraryReset.reset`.
     public func removeAll() throws {
-        if let children = try? fileManager.contentsOfDirectory(
-            at: rootURL, includingPropertiesForKeys: nil, options: []) {
-            for child in children {
-                try? fileManager.removeItem(at: child)
-            }
+        do {
+            let children = try fileManager.contentsOfDirectory(
+                at: rootURL, includingPropertiesForKeys: nil, options: [])
+            for child in children { try fileManager.removeItem(at: child) }
+        } catch {
+            // Nach einem Teilfehler bleibt die Dateisammlung die Wahrheit.
+            _ = try? rescan()
+            throw error
         }
         try clearIndex(removeFile: false)
     }

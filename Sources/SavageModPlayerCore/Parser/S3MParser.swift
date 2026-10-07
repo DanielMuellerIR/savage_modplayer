@@ -230,7 +230,10 @@ public class S3MParser {
             let instName = (String(bytes: instNameBytes, encoding: .isoLatin1) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
 
-            guard type == 1, hasSCRS, off > 0 else {
+            if type == 1, !hasSCRS {
+                throw ParserError.corruptInstrument("Instrument \(i + 1): SCRS-Signatur fehlt")
+            }
+            guard type == 1 else {
                 // Leer-/AdLib-Instrument: Platzhalter, damit die Indizes stimmen.
                 instruments.append(Instrument(
                     index: i + 1, name: instName, length: 0, finetune: 0,
@@ -295,7 +298,7 @@ public class S3MParser {
             loopEnd = min(loopEnd, length)
             loopStart = min(loopStart, length)
             let repeatLength = max(0, loopEnd - loopStart)
-            let isLooped = (flags & 1) != 0 && repeatLength > 2
+            let isLooped = (flags & 1) != 0 && repeatLength > 0
 
             instruments.append(Instrument(
                 index: i + 1,

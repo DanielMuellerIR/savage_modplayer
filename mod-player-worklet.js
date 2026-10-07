@@ -172,12 +172,17 @@ class Channel {
             this.sampleIndex = 0;
         }
         else if (this.delayNote === this.worklet.tick) {
-            this.instrument = this.setInstrument;
-            this.volume = this.setVolume;
-            this.currentVolume = this.volume;
-            this.period = this.setPeriod;
-            this.currentPeriod = this.period;
+            if (this.setInstrument !== false) this.instrument = this.setInstrument;
+            if (this.setVolume !== false) {
+                this.volume = this.setVolume;
+                this.currentVolume = this.volume;
+            }
+            if (this.setPeriod !== false) {
+                this.period = this.setPeriod;
+                this.currentPeriod = this.period;
+            }
             this.sampleIndex = 0;
+            this.delayNote = false;
         }
 
         if (this.currentPeriod < 113) this.currentPeriod = 113;

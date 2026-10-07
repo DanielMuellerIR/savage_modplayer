@@ -1,6 +1,6 @@
 # Aktiver Projekt-Backlog
 
-Stand: 2026-10-07 · Version 1.6.22.
+Stand: 2026-10-07 · Version 1.6.28.
 
 Diese Datei ist die einzige aktive Projektliste. Erledigte Chronik liegt in
 Release Notes, abgeschlossenen Tasks und `archive/`.
@@ -17,12 +17,17 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
    Der File-Provider-Wächter braucht weiterhin einen realen reproduzierbaren
    Hänger; seine Unit-Tests ersetzen diese Abnahme nicht.
 
-1. **Gezielte Audio-Gegenproben nach dem Review vom 2026-10-02.** Die korrigierte
-   Ping-Pong-Grenzbehandlung ist synthetisch geprüft; die exakte originale
-   IT-Endpunktkonvention braucht noch eine passende Referenzaufnahme. Zwei
-   weitere Prüfkandidaten ohne bestätigten Produktfehler bleiben: möglicher
-   AVAudioEngine-Ausgabetail beim CLI-Ende und erste Initialisierung der
-   Vibratotabelle im Echtzeitpfad. Siehe [Reviewbericht](../docs/reviews/2026-10-02.md).
+1. **Gezielte Audio-Gegenproben nach dem Review vom 2026-10-02.** Die originale
+   IT-Pingpong-Endpunktkonvention wurde mit IT 2.14 Patch 3 / ITWAV.DRV
+   numerisch verglichen und in 1.6.25 übernommen (ganze und halbe
+   Sampleschritte). Der
+   AVAudioEngine-Ausgabetail beim CLI-Ende wurde mit einem endlichen
+   Nullsample-Fixture bestätigt und in 1.6.23 korrigiert: Das natürliche Ende
+   wartet auf den letzten Framezeitpunkt einschließlich Ausgabelatenz. Zu prüfen
+   war die erste Initialisierung der Vibratotabelle im Echtzeitpfad: im Debug-
+   Build bestätigt, seit 1.6.24 beim Kanalaufbau vorbereitet. Der Release-
+   Compiler las bereits direkt aus konstanten Daten. Belege stehen in der
+   [Audio-Gegenprobe](../docs/reviews/2026-10-07-audio-checks.md).
    Für den iPhone-Gerätetest zusätzlich Unterbrechung → Kopfhörer entfernen →
    Ende der Unterbrechung prüfen; der Simulator belegt den Zustandswechsel,
    nicht das reale Audio-Routing.
@@ -78,19 +83,22 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
   Aktualisierungen selbst senken, nicht einzelne Views verbilligen — und sollte
   die gescheiterte Trennung von Uhr und Visualizer als Warnung lesen.
 
-- **Audioqualität:** optionale Anti-Click-Hüllkurve und JavaScript-
-  Sampleinterpolation nur mit hörbarem A/B-, Timing- und Swift-Paritätsnachweis.
+- **Audioqualität untersucht (2026-10-07):** Ein isolierter JS-Interpolator
+  stimmt in 1.536 Fällen mit Swift überein und verbessert ein synthetisches
+  Sinussignal; Browser-Timing und hörbares A/B bleiben vor einer Umsetzung
+  erforderlich. Anti-Click glättet Sprünge, kann aber kurze Anschläge stark
+  schwächen; kein konkreter störender Titelübergang bestätigt. Deshalb kein
+  Klangdefault geändert. [Versuch und Grenzen](../docs/reviews/2026-10-07-audio-ideas.md).
 - **PCMSink-Extraktion:** Die Ausgabeschicht liegt als bewusste Kopie in
   savage_modplayer und vicious_sidplayer. Erst wenn sie sich in beiden bewährt
   hat, lohnt ein gemeinsames Paket — bis dahin Änderungen beidseitig abgleichen.
-- **MPRIS2 für Linux.** Der Desktop-Teil von Phase 3 ist mit 1.6.10 erledigt
-  (`.desktop`-Eintrag, Installer, statisches Binary — siehe
-  [Linux-Plan](2026-07-05-linux-port/plan.md)). Offen bleibt die Steuerung über
-  den Desktop-Mediaplayer. Sie braucht eine D-Bus-Anbindung und damit ein
-  weiteres `systemLibrary`-Ziel (libdbus oder sd-bus) — eine bewusste
-  Entscheidung, und ohne laufende Desktop-Sitzung auf dem Testhost nicht
-  ehrlich belegbar. Ein AppImage bleibt ebenfalls offen: `appimagetool` kommt
-  nicht aus den Paketquellen. Ein natives Linux-GUI ist ausdrücklich kein Ziel.
+  Der Vergleich vom 2026-10-07 zeigt einen gemeinsamen Vertrag, aber noch
+  Unterschiede bei Apple-Drain und Lebenszyklus. Extraktion erst nach deren
+  Stabilisierung; Paket- und beide Migrationseigentümer vorher festlegen.
+- **Linux-Lieferung abgeschlossen.** Seit 1.6.27 erzeugt das Bauskript ein
+  x86_64-AppImage mit festem appimagetool und Runtime. MPRIS2 über libdbus-1
+  ist seit 1.6.26 umgesetzt und auf einem echten Desktop-Sitzungsbus geprüft.
+  Ein natives Linux-GUI bleibt ausgeschlossen.
 - **`.7z` auf iOS.** Aktuell nicht unterstützt und als solches gemeldet — seit
   1.6.10 ist `.7z` auch auf Mac und Linux der einzige Grund, `bsdtar` überhaupt
   zu installieren. Nur
@@ -104,6 +112,9 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
   echten Geräteabnahme oben.
 
 ## Nicht offen
+
+Das [vollständige Quellcode-Review vom 2026-10-07](../docs/reviews/2026-10-07-full-code-review.md)
+ist mit Version 1.6.28 umgesetzt; bestätigte Funde und Prüfgrenzen sind dort dokumentiert.
 
 Das Finder-Layout des DMG ist seit 1.6.16 korrigiert: gespeicherte
 Fenstergröße 600 × 600 Punkte und Icons in den vorgesehenen Plätzen.

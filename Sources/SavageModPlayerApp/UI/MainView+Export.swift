@@ -51,7 +51,7 @@ extension MainView {
     }
     
     func runInstrumentSampleExport(index: Int) {
-        guard let mod = coordinator.activeMod, index < mod.instruments.count, let inst = mod.instruments[index] else { return }
+        guard let mod = coordinator.activeMod, index >= 1, index < mod.instruments.count, let inst = mod.instruments[index] else { return }
         
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [UTType.wav]
@@ -62,7 +62,7 @@ extension MainView {
         savePanel.begin { response in
             if response == .OK, let destURL = savePanel.url {
                 do {
-                    try coordinator.exportInstrumentToWav(index: index, destinationURL: destURL)
+                    try coordinator.exportInstrumentToWav(mod: mod, index: index, destinationURL: destURL)
                     self.errorMessage = "Sample \(index) exportiert!"
                 } catch {
                     self.errorMessage = "Fehler: \(error.localizedDescription)"

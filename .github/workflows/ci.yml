@@ -27,9 +27,11 @@ jobs:
 
       # Schutzregeln im Quelltext und kontrollierte Skriptläufe mit temporären
       # Dateien prüfen; die Systeminstallation und Notarisierung bleiben unberührt.
-      - name: Build-, Installations- und Referenztests
+      - name: Build-, Release-, Start- und Referenztests
         run: |
           python3 Tests/build_script_tests.py
+          python3 Tests/publish_contract_tests.py
+          python3 Tests/launch_smoke_contract_tests.py
           python3 Tests/desktop_entry_tests.py
           python3 Tests/reference_compare_tests.py
 
@@ -114,7 +116,7 @@ jobs:
       - name: Linux dependencies
         run: |
           apt-get update -qq
-          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libasound2-dev zlib1g-dev libarchive-tools
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libasound2-dev libdbus-1-dev zlib1g-dev libarchive-tools
 
       - name: Swift Version
         run: swift --version

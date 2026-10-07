@@ -48,7 +48,7 @@ import CALSA
 /// ist per `NSCondition` serialisiert; das kann der Compiler nicht selbst
 /// nachweisen, deshalb "unchecked" — gleiches Muster wie `SongLengthCache`.
 ///
-/// **Thread-Regel dieser Klasse:** ALLE ALSA-Aufrufe passieren ausschliesslich
+/// Nach dem Geräteaufbau in `start()` passieren ALSA-Aufrufe ausschließlich
 /// auf dem Wiedergabe-Thread. `pause()`, `resume()` und `stop()` setzen nur ein
 /// Flag und wecken den Thread. Das erspart uns jede Frage danach, ob libasound
 /// gerade nebenlaeufig auf demselben Handle aufgerufen werden darf — und
@@ -92,6 +92,7 @@ public final class ALSAPCMSink: PCMSink, @unchecked Sendable {
 
     private enum State {
         case idle       // noch nie gestartet
+        case starting   // Geräteaufbau reserviert
         case running    // spielt
         case paused     // angehalten, Geraet bleibt offen
         case stopping   // Thread soll sich beenden
@@ -101,6 +102,9 @@ public final class ALSAPCMSink: PCMSink, @unchecked Sendable {
     /// Schuetzt `state` und `finishReason` UND weckt den Wiedergabe-Thread aus
     /// der Pause.
     private let cond = NSCondition()
+    // Serialisiert Geräteaufbau und Kontrollaufrufe; der Wiedergabe-Thread
+    // benötigt diesen Lock weder zum Rendern noch zum Beenden.
+    private let lifecycleLock = NSLock()
     private var state: State = .idle
 
     /// Warum die Wiedergabe endet(e). Der Wiedergabe-Thread kann nicht werfen —
@@ -173,6 +177,23 @@ public final class ALSAPCMSink: PCMSink, @unchecked Sendable {
     }
 
     public func start(render: @escaping PCMRenderBlock) throws {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        do {
+            try startPlayback(render: render)
+        } catch {
+            cond.lock()
+            if state == .starting {
+                settleReasonLocked(.failed(error.localizedDescription))
+                state = .finished
+                cond.broadcast()
+            }
+            cond.unlock()
+            throw error
+        }
+    }
+
+    private func startPlayback(render: @escaping PCMRenderBlock) throws {
         cond.lock()
         guard state == .idle else {
             cond.unlock()
@@ -182,6 +203,7 @@ public final class ALSAPCMSink: PCMSink, @unchecked Sendable {
             // Geraeteproblem — deshalb `.invalidState` und nicht `.ioFailure`.
             throw PCMSinkError.invalidState("ALSAPCMSink wurde bereits gestartet.")
         }
+        state = .starting
         cond.unlock()
 
         // Format vorab pruefen: ALSA wuerde 0 Kanaele oder 0 Hz zwar auch
@@ -255,10 +277,6 @@ public final class ALSAPCMSink: PCMSink, @unchecked Sendable {
         renderBlock = render
         canPause = ALSAPCMSink.queryCanPause(pcm)
 
-        cond.lock()
-        state = .running
-        cond.unlock()
-
         // `[weak self]`: siehe `playbackThread`. Waehrend `playbackLoop()`
         // laeuft, haelt die Optional-Verkettung `self` ohnehin stark — die
         // Klasse kann uns also nicht unter den Fuessen weggeraeumt werden.
@@ -266,7 +284,10 @@ public final class ALSAPCMSink: PCMSink, @unchecked Sendable {
             self?.playbackLoop()
         }
         thread.name = "ALSAPCMSink"
+        cond.lock()
         playbackThread = thread
+        state = .running
+        cond.unlock()
         thread.start()
     }
 
@@ -276,6 +297,8 @@ public final class ALSAPCMSink: PCMSink, @unchecked Sendable {
     /// hat (spaetestens nach ~23 ms) — hier wird nur der Wunsch hinterlegt.
     /// Aufruf im falschen Zustand (nie gestartet, schon gestoppt) ist ein No-op.
     public func pause() throws {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         cond.lock()
         if state == .running {
             state = .paused
@@ -285,6 +308,8 @@ public final class ALSAPCMSink: PCMSink, @unchecked Sendable {
     }
 
     public func resume() throws {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         cond.lock()
         if state == .paused {
             state = .running
@@ -301,6 +326,21 @@ public final class ALSAPCMSink: PCMSink, @unchecked Sendable {
     /// unter ihm weggeschlossen werden. Das dauert hoechstens einen Blockschreib-
     /// vorgang lang (der Thread haengt ggf. noch in `snd_pcm_writei`).
     public func stop() {
+        // Ein Selbst-Stop darf nicht hinter einem fremden Stop warten, der
+        // seinerseits auf genau diesen Wiedergabe-Thread wartet.
+        cond.lock()
+        if let thread = playbackThread, Thread.current === thread {
+            if state != .finished {
+                settleReasonLocked(.stopped)
+                state = .stopping
+                cond.broadcast()
+            }
+            cond.unlock()
+            return
+        }
+        cond.unlock()
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         cond.lock()
 
         // Nie gestartet: Es gibt keinen Thread, der den Grund setzen koennte —

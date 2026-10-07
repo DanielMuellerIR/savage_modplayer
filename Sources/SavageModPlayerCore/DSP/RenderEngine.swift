@@ -1497,7 +1497,7 @@ public enum RenderEngine {
             rightSample = leftSample
         }
 
-        // sampleDirection ist bei MOD/S3M immer +1 (unverändert); nur XM-Ping-Pong
+        // sampleDirection ist bei MOD/S3M immer +1; XM-/IT-Pingpong
         // dreht sie auf -1. xmVolumeScale ist bei MOD/S3M 1.0 (Envelope/Fadeout aus).
         ch.sampleIndex += ch.sampleSpeed * ch.sampleDirection
         if let loop {
@@ -1573,9 +1573,8 @@ public enum RenderEngine {
            sustain.length > 0 {
             return sustain
         }
-        // IT kennt auch absichtlich sehr kurze Loops. Die historische >2-
-        // Schwelle des neutralen Modells bleibt für MOD/S3M-Sentinel-Loops
-        // erhalten, wird für echte IT-Loopflags aber nicht übernommen.
+        // Explizite IT-Loopflags umfassen auch ein oder zwei Frames.
+        // Die MOD-Sentinelregel entscheidet bereits der MOD-Parser.
         if ch.itMode, smp.loopType != .none, smp.loopLength > 0 {
             return SampleLoop(
                 start: smp.loopStart,
@@ -1603,6 +1602,34 @@ public enum RenderEngine {
         let length = end - start
 
         if loop.type == .pingpong {
+            if ch.itMode {
+                // IT 2.14 (MIXWAV.INC) spiegelt Ganzzahl und Bruchteil getrennt.
+                // Oben fällt ein Sample weg; unten kehrt schon die letzte
+                // Bruchteilspanne um. Eine kontinuierliche Dreiecksfaltung
+                // verändert deshalb die belegte Loop-Periode.
+                let position = floor(ch.sampleIndex)
+                let fraction = ch.sampleIndex - position
+                let reverseFraction = fraction == 0 ? 0 : 1 - fraction
+                let cycle = 2 * length
+                if ch.sampleDirection > 0, position >= end {
+                    let phase = (position - end).truncatingRemainder(dividingBy: cycle)
+                    if phase < length {
+                        ch.sampleIndex = end - phase - 1 + reverseFraction
+                        ch.sampleDirection = -1
+                    } else {
+                        ch.sampleIndex = start + phase - length + fraction
+                    }
+                } else if ch.sampleDirection < 0, position <= start {
+                    let phase = (start - position).truncatingRemainder(dividingBy: cycle)
+                    if phase < length {
+                        ch.sampleIndex = start + phase + reverseFraction
+                        ch.sampleDirection = 1
+                    } else {
+                        ch.sampleIndex = end + length - phase - 1 + fraction
+                    }
+                }
+                return
+            }
             let crossedEnd = ch.sampleDirection > 0 && ch.sampleIndex >= end
             let crossedStart = ch.sampleDirection < 0 && ch.sampleIndex < start
             guard crossedEnd || crossedStart else { return }

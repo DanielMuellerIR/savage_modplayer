@@ -13,9 +13,8 @@ import Glibc
 // Playlist ist hier nur eine Liste mit mehr als einem Eintrag. Damit gibt es
 // keinen zweiten Wiedergabepfad, der auseinanderlaufen koennte.
 //
-// Die Steuerung ist optional. Ohne Terminal an stdin (Pipe, CI, Cron) gibt es
-// nichts zu bedienen; dann wartet der Ablauf schlicht auf das Songende, genau
-// wie vor der Tastatursteuerung.
+// Tastatursteuerung braucht ein Terminal. Unter Linux kann zusätzlich MPRIS
+// über den Sitzungsbus steuern; ohne beides läuft der Titel bis zum Ende.
 // ============================================================================
 
 /// Wie ein einzelner Titel geendet hat.
@@ -24,6 +23,7 @@ private enum TrackOutcome {
     case finished
     case nextRequested
     case previousRequested
+    case restartRequested
     case quitRequested
     case failed(String)
 }
@@ -146,6 +146,8 @@ func runRealtimePlayback(
 
     var index = 0
     var playedAnything = false
+    var mode = PlaybackMode.playing
+    let media = DesktopMediaControls.make(format: format)
 
     while index >= 0 && index < modules.count {
         let url = modules[index]
@@ -155,6 +157,7 @@ func runRealtimePlayback(
         }
         let position = modules.count > 1 ? "[\(index + 1)/\(modules.count)] " : ""
         let title = mod.name.isEmpty ? url.lastPathComponent : mod.name
+        media?.setTrack(title: title, url: url.absoluteString, index: index, count: modules.count)
         report(
             "\(position)Spiele '\(title)' (\(mod.format), \(mod.channelCount) ch) "
             + "@ \(Int(format.sampleRate)) Hz …",
@@ -163,7 +166,8 @@ func runRealtimePlayback(
 
         switch playSingleTrack(
             mod: mod, format: format, frameLimit: frameLimit,
-            useInterpolation: useInterpolation, quiet: quiet, keyboard: keyboard
+            useInterpolation: useInterpolation, quiet: quiet, keyboard: keyboard,
+            media: media, mode: &mode
         ) {
         case .finished:
             playedAnything = true
@@ -176,6 +180,8 @@ func runRealtimePlayback(
             // Am Anfang der Liste bleibt "zurueck" beim aktuellen Titel und
             // startet ihn neu — das ist das Verhalten jedes Players.
             index = max(0, index - 1)
+        case .restartRequested:
+            playedAnything = true
         case .quitRequested:
             report("Wiedergabe beendet.", quiet: quiet)
             // Ein per Taste beendeter Lauf ist ein Erfolg; ein abgebrochener
@@ -206,29 +212,38 @@ private func playSingleTrack(
     frameLimit: UInt64?,
     useInterpolation: Bool,
     quiet: Bool,
-    keyboard: TerminalKeyboard?
+    keyboard: TerminalKeyboard?,
+    media: DesktopMediaControls?,
+    mode: inout PlaybackMode
 ) -> TrackOutcome {
     let source = ModulePCMSource(
         mod: mod, format: format, maxFrames: frameLimit, useInterpolation: useInterpolation
     )
     let sink = PCMSinkFactory.makeDefault(format: format)
-    do {
-        try sink.start(render: source.renderBlock())
-    } catch {
-        return .failed(error.localizedDescription)
-    }
-
     // Das Warten auf das Songende laeuft auf einem eigenen Thread, damit der
     // Haupt-Thread regelmaessig nach Tasten und nach Ctrl-C sehen kann. Der
     // Grund wird nicht weitergereicht: `waitUntilFinished()` liefert ihn laut
     // Vertrag bei jedem weiteren Aufruf erneut und blockiert dann nicht mehr.
     let finished = DispatchSemaphore(value: 0)
-    Thread.detachNewThread {
-        _ = sink.waitUntilFinished()
-        finished.signal()
+    var hasStarted = false
+    func startPlayback() throws {
+        let render = source.renderBlock()
+        try sink.start(render: media?.meter(render, channels: format.channels) ?? render)
+        Thread.detachNewThread {
+            _ = sink.waitUntilFinished()
+            finished.signal()
+        }
     }
+    if mode == .playing {
+        do {
+            try startPlayback()
+            hasStarted = true
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+    media?.setStatus(mode)
 
-    var isPaused = false
     while true {
         // Ohne Tastatur wartet die Schleife hier kurz; mit Tastatur uebernimmt
         // das die Tastenabfrage weiter unten.
@@ -239,23 +254,45 @@ private func playSingleTrack(
         if InterruptWatch.wasRequested {
             return stopAndReport(sink, as: .quitRequested)
         }
-        guard let keyboard else { continue }
-        switch keyboard.waitForCommand(timeoutMilliseconds: 100) {
-        case .togglePause:
-            isPaused.toggle()
-            do {
-                try isPaused ? sink.pause() : sink.resume()
-            } catch {
-                return .failed(error.localizedDescription)
+        var command = media?.poll()
+        if command == nil, let key = keyboard?.waitForCommand(timeoutMilliseconds: 100) {
+            switch key {
+            case .togglePause: command = .togglePause
+            case .nextTrack: command = .nextTrack
+            case .previousTrack: command = .previousTrack
+            case .quit: command = .quit
             }
-            report(isPaused ? "Pause." : "Weiter.", quiet: quiet)
+        }
+        if case .togglePause = command { command = mode == .playing ? .pause : .play }
+        switch command {
+        case .play:
+            guard mode != .playing else { continue }
+            do {
+                if hasStarted { try sink.resume() }
+                else { try startPlayback(); hasStarted = true }
+                mode = .playing
+            } catch { return stopAndReport(sink, as: .failed(error.localizedDescription)) }
+            media?.setStatus(mode)
+            report("Weiter.", quiet: quiet)
+        case .pause:
+            guard mode == .playing else { continue }
+            do { try sink.pause() }
+            catch { return stopAndReport(sink, as: .failed(error.localizedDescription)) }
+            mode = .paused
+            media?.setStatus(mode)
+            report("Pause.", quiet: quiet)
+        case .stop:
+            guard mode != .stopped else { continue }
+            mode = .stopped
+            media?.setStatus(mode)
+            return stopAndReport(sink, as: .restartRequested)
         case .nextTrack:
             return stopAndReport(sink, as: .nextRequested)
         case .previousTrack:
             return stopAndReport(sink, as: .previousRequested)
         case .quit:
             return stopAndReport(sink, as: .quitRequested)
-        case nil:
+        case .togglePause, nil:
             continue
         }
     }

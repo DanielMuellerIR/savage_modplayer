@@ -371,6 +371,20 @@ final class MusicLibraryTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: rootURL.path))
     }
 
+    func testRemoveAllReportsUnreadableRootAndPreservesKnownItems() throws {
+        try writeFile("keep.mod", marker: 0x70)
+        let library = makeLibrary()
+        try library.load()
+        _ = try library.rescan()
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: rootURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rootURL.path) }
+        if (try? FileManager.default.contentsOfDirectory(atPath: rootURL.path)) != nil {
+            throw XCTSkip("Dateirechte greifen in dieser Umgebung nicht")
+        }
+        XCTAssertThrowsError(try library.removeAll())
+        XCTAssertNotNil(library.item(withRelativePath: "keep.mod"))
+    }
+
     func testRemoveAllEmptiesRootAndIndex() throws {
         try writeFile("Ordner/a.mod", marker: 0x70)
         try writeFile("b.mod", marker: 0x71)

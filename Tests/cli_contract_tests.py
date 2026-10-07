@@ -85,6 +85,16 @@ class CLIContractTests(unittest.TestCase):
             [str(self.binary), str(self.module), *args],
             capture_output=True, text=True, timeout=120)
 
+    def test_explicit_help_succeeds_without_input(self):
+        for option in ["--help", "-h"]:
+            result = subprocess.run([str(self.binary), option],
+                                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, EXIT_OK)
+            self.assertIn("savage-cli", result.stdout)
+            self.assertEqual(result.stderr, "")
+        missing = subprocess.run([str(self.binary)], capture_output=True, timeout=5)
+        self.assertEqual(missing.returncode, EXIT_ARGUMENT)
+
     def test_module_renders_at_all(self):
         """Ohne diesen Nachweis saehe jeder Fehlerfall unten gleich aus."""
         self.assertEqual(self._run("--seconds", "1").returncode, EXIT_OK)

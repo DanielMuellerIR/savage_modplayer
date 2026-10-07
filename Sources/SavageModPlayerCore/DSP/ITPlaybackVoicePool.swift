@@ -147,6 +147,8 @@ public final class ITPlaybackVoicePool: Sendable {
     @inline(__always)
     public func resetPatternChannelRowEffects() {
         for state in patternChannels {
+            state.pendingNote = nil
+            state.pendingNoteTick = -1
             state.channelVolumeSlide = 0
             state.panningSlide = 0
             state.globalVolumeSlide = 0
@@ -210,6 +212,20 @@ public final class ITPlaybackVoicePool: Sendable {
         let state = patternChannels[logicalChannel]
         let foregroundIndex = max(0, min(voices.count - 1, state.foregroundVoiceIndex))
         let foreground = voices[foregroundIndex]
+
+        if instrumentMode, note.key >= 0, note.key < 120,
+           note.hasEffect, note.effectId == ModuleEffect.impulseTrackerCommand(19) {
+            let parameter = state.remembered(command: 19, parameter: note.effectData)
+            if parameter >> 4 == 13, parameter & 15 > 0 {
+                state.pendingNoteTick = parameter & 15
+                state.pendingNote = Note(instrument: note.instrument, period: note.period,
+                    effectId: 0, effectData: 0, key: note.key, volume: note.volume,
+                    volCmd: note.volCmd, effectPresent: false)
+                foreground.playNote(Note(instrument: 0, period: 0, effectId: 0,
+                    effectData: 0, effectPresent: false), instruments: instruments)
+                return
+            }
+        }
 
         applyS7OverrideIfNeeded(
             note: note,
@@ -300,11 +316,25 @@ public final class ITPlaybackVoicePool: Sendable {
         nextGeneration &+= 1
     }
 
+    // SDx gehört zum logischen Kanal: DCT/NNA dürfen die alte Stimme erst
+    // beim Anschlag verändern. Die gespeicherte Note enthält keine Heap-Puffer.
+    @inline(__always)
+    public func triggerDelayedNotes(tick: Int, voices: [DSPChannel], instruments: [Instrument?]) {
+        for state in patternChannels {
+            guard tick == state.pendingNoteTick, let note = state.pendingNote else { continue }
+            state.pendingNote = nil
+            state.pendingNoteTick = -1
+            process(note: note, logicalChannel: state.channelIndex,
+                    voices: voices, instruments: instruments)
+        }
+    }
+
     @inline(__always)
     private func isTonePortamento(_ note: Note) -> Bool {
         if note.volume >= 193 && note.volume <= 202 { return true }
         return note.hasEffect
-            && note.effectId == ModuleEffect.impulseTrackerCommand(7)
+            && (note.effectId == ModuleEffect.impulseTrackerCommand(7)
+                || note.effectId == ModuleEffect.impulseTrackerCommand(12))
     }
 
     @inline(__always)

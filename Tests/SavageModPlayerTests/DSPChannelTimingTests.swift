@@ -9,6 +9,21 @@ import XCTest
 /// Varianten müssen sample-genau gleich laufen.
 final class DSPChannelTimingTests: XCTestCase {
 
+    func testDelayedMODNoteWithoutInstrumentKeepsSample() {
+        let channel = DSPChannel(index: 0)
+        let instrument = Instrument(index: 1, name: "delay", length: 4, finetune: 0,
+            volume: 64, repeatOffset: 0, repeatLength: 4,
+            bytes: [64, 64, 64, 64], isLooped: true)
+        channel.playNote(Note(instrument: 1, period: 428, effectId: 0, effectData: 0),
+                         instruments: [nil, instrument])
+        channel.playNote(Note(instrument: 0, period: 320, effectId: 0xED, effectData: 2),
+                         instruments: [nil, instrument])
+        channel.performTick(tick: 2, sampleRate: 44100, clockRate: 3546894.6)
+        XCTAssertEqual(channel.instrument?.index, instrument.index)
+        XCTAssertNotNil(channel.sample)
+        XCTAssertGreaterThan(RenderEngine.renderChannelSample(channel: channel, useInterpolation: true), 0)
+    }
+
     // Werte sind für das Timing irrelevant, müssen aber > 0 sein.
     private let sampleRate = 44100.0
     private let clockRate = 3546894.6 // PAULA_FREQUENCY (wie im Worklet)

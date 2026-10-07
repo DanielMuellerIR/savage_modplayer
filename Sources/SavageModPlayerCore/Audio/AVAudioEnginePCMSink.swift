@@ -73,13 +73,15 @@ private struct RenderPointers: @unchecked Sendable {
     let scratch: UnsafeMutablePointer<Float>
     /// Merker „Quelle ist erschoepft" — geschrieben nur vom Realtime-Thread.
     let didFinish: UnsafeMutablePointer<Bool>
+    /// Ende des letzten gueltigen Frames; zusammen mit didFinish veroeffentlicht.
+    let lastFrameEnd: UnsafeMutablePointer<UInt64>
 }
 
 // `@unchecked Sendable` wie bei den Schwester-Sinks und aus demselben Grund ehrlich:
 // Der veraenderliche Zustand (`state`) liegt vollstaendig hinter `lock`, `didFinish`
 // wird nur vom Realtime-Thread geschrieben und erst nach dem Semaphor gelesen (siehe
-// RenderPointers oben), und alles Uebrige ist `let`. Der Compiler kann das nicht
-// nachweisen, der Code drumherum haelt es ein.
+// RenderPointers oben). Graph und Puffer schützt `lifecycleLock`. Der Compiler
+// kann das nicht nachweisen, der Code drumherum hält es ein.
 public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
 
     /// Zustand der Wiedergabe. Bewusst identisch zum Vertrag in `PCMSink` und zu
@@ -95,6 +97,9 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
     public let format: PCMFormat
 
     private let engine = AVAudioEngine()
+    // Graph und Puffer müssen auch zwischen zwei gleichzeitigen Kontrollaufrufen
+    // zusammenbleiben. Der Audiocallback verwendet diesen Lock nie.
+    private let lifecycleLock = NSLock()
     private var sourceNode: AVAudioSourceNode?
 
     /// Vorab allozierter Zwischenpuffer fuer die interleavten Float-Samples aus
@@ -110,6 +115,7 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
     /// waitUntilFinished() liest ihn und darf dabei nicht auf freigegebenen
     /// Speicher zeigen.
     private let didFinish: UnsafeMutablePointer<Bool>
+    private let lastFrameEnd: UnsafeMutablePointer<UInt64>
 
     /// Signal fuer waitUntilFinished(). Ein Semaphor statt einer NSCondition,
     /// weil `signal()` vom Realtime-Thread aus deutlich harmloser ist als ein
@@ -117,6 +123,8 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
     /// Moment, in dem die Quelle versiegt. Selbst wenn dieser eine Aufruf einen
     /// Weck-Syscall ausloest, ist das Stueck an dieser Stelle ohnehin vorbei.
     private let finishSignal = DispatchSemaphore(value: 0)
+    // Ein ausdruecklicher Stop unterbricht auch das Auslaufen des letzten Puffers.
+    private let stopSignal = DispatchSemaphore(value: 0)
 
     /// Schuetzt `state`, `finished` und `finishReason`. Bewusst ein schlichtes
     /// Lock: Der Realtime-Thread fasst es NIE an (sein Block faengt kein `self`
@@ -127,6 +135,7 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
     /// Warum die Wiedergabe endete — wird genau einmal gesetzt (der erste Grund
     /// gewinnt) und von waitUntilFinished() zurueckgegeben.
     private var finishReason: PCMSinkFinishReason = .notStarted
+    private var outputLatency: TimeInterval = 0
 
     /// Obergrenze des Zwischenpuffers. AVAudioEngine fragt normalerweise deutlich
     /// weniger Frames pro Aufruf ab (Groessenordnung 512). Fragt sie doch einmal
@@ -143,6 +152,8 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
         // Ende-Merker gleich hier anlegen — siehe Kommentar an `didFinish`.
         self.didFinish = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
         self.didFinish.initialize(to: false)
+        self.lastFrameEnd = UnsafeMutablePointer<UInt64>.allocate(capacity: 1)
+        self.lastFrameEnd.initialize(to: 0)
     }
 
     deinit {
@@ -151,6 +162,8 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
         // niemand mehr mit.
         didFinish.deinitialize(count: 1)
         didFinish.deallocate()
+        lastFrameEnd.deinitialize(count: 1)
+        lastFrameEnd.deallocate()
     }
 
     /// Liefert das Format, in dem die Audio-Hardware gerade laeuft — typisch
@@ -180,6 +193,8 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
     // MARK: - Lebenszyklus
 
     public func start(render: @escaping PCMRenderBlock) throws {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         lock.lock()
         guard state == .idle else {
             lock.unlock()
@@ -220,8 +235,10 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
             cleanupBuffers()
             throw failStart(.deviceUnavailable("Zwischenpuffer konnte nicht angelegt werden."))
         }
-        let pointers = RenderPointers(scratch: scratchBase, didFinish: didFinish)
+        let pointers = RenderPointers(
+            scratch: scratchBase, didFinish: didFinish, lastFrameEnd: lastFrameEnd)
         let maxFrames = Self.maxScratchFrames
+        let hostTicksPerFrame = Double(AVAudioTime.hostTime(forSeconds: 1)) / renderRate
         // Das Semaphor als lokale Konstante greifen, damit der Block unten `self`
         // nicht einfangen muss.
         let signalSemaphore = finishSignal
@@ -230,7 +247,7 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
         // Thread gefahrlos anfassen darf: rohe Zeiger, Zahlen, den Sendable-
         // Renderblock und das Semaphor. Kein `self` — sonst haenge der komplette
         // Sink (samt AVAudioEngine) am Realtime-Thread.
-        let renderBlock: @Sendable (UnsafeMutablePointer<ObjCBool>, UnsafePointer<AudioTimeStamp>, UInt32, UnsafeMutablePointer<AudioBufferList>) -> OSStatus = { isSilence, _, frameCount, outputData in
+        let renderBlock: @Sendable (UnsafeMutablePointer<ObjCBool>, UnsafePointer<AudioTimeStamp>, UInt32, UnsafeMutablePointer<AudioBufferList>) -> OSStatus = { isSilence, timestamp, frameCount, outputData in
             let buffers = UnsafeMutableAudioBufferListPointer(outputData)
             guard buffers.count >= channels,
                   let leftRaw = buffers[0].mData else {
@@ -286,6 +303,12 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
                     left[frame] = 0.0
                     right?[frame] = 0.0
                 }
+                // Der Callback liefert voraus: Quellenende ist noch kein Ausgabeende.
+                // HAL-Zeit plus gueltige Frames bestimmen das Ende des Teilpuffers.
+                let hostTime = timestamp.pointee.mFlags.contains(.hostTimeValid)
+                    ? timestamp.pointee.mHostTime : mach_absolute_time()
+                pointers.lastFrameEnd.pointee = hostTime
+                    + UInt64((Double(written) * hostTicksPerFrame).rounded(.up))
                 // Merken und genau EINMAL Bescheid geben (siehe finishSignal).
                 // Mehr geht hier nicht: `.sourceFinished` selbst zu hinterlegen
                 // hiesse Lock nehmen — auf dem Realtime-Thread verboten. Den Bool
@@ -308,6 +331,11 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
             if !engine.isRunning {
                 try engine.start()
             }
+            // Erst die gestartete Engine kennt die aktuelle Geraete-/Pipeline-Latenz.
+            let latency = node.outputPresentationLatency
+            lock.lock()
+            outputLatency = latency.isFinite ? max(0, latency) : 0
+            lock.unlock()
         } catch {
             // Symmetrisch abbauen: Der Knoten haengt schon im Graph und wuerde
             // sonst leaken; ein zweiter start()-Versuch haenge dann einen weiteren
@@ -321,6 +349,8 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
     }
 
     public func pause() throws {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         lock.lock()
         defer { lock.unlock() }
         // Auf einem nicht laufenden Sink wirkungslos — kein Fehler (Vertrag).
@@ -333,6 +363,8 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
     }
 
     public func resume() throws {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         lock.lock()
         // Auf einem nicht pausierten Sink wirkungslos — kein Fehler (Vertrag).
         guard state == .paused else {
@@ -356,9 +388,12 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
     }
 
     public func stop() {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         lock.lock()
         // Nie gestartet: Es gab nichts zu spielen — der Grund steht damit fest.
         let wasIdle = (state == .idle)
+        let latency = outputLatency
         lock.unlock()
 
         // Reihenfolge ist wichtig: erst die Engine anhalten (danach laeuft
@@ -371,13 +406,14 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
         }
         sourceNode = nil
 
-        // Jetzt, wo die Engine steht, darf der Ende-Merker gefahrlos gelesen
-        // werden. Ist die Quelle gerade noch ausgelaufen, gewinnt ihr Grund vor
-        // `.stopped` — genau das meint „der erste Grund gewinnt".
+        // Nach engine.stop() sind beide vom Callback gesetzten Werte stabil.
+        // Vor dem Ausgabeende ist ein ausdruecklicher Stop ein Abbruch des Tails.
         let reason: PCMSinkFinishReason
         if wasIdle {
             reason = .notStarted
-        } else if didFinish.pointee {
+        } else if didFinish.pointee,
+                  AVAudioTime.seconds(forHostTime: mach_absolute_time())
+                    >= AVAudioTime.seconds(forHostTime: lastFrameEnd.pointee) + latency {
             reason = .sourceFinished
         } else {
             reason = .stopped
@@ -390,14 +426,19 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
 
     @discardableResult
     public func waitUntilFinished() -> PCMSinkFinishReason {
+        // Vor dem Warten muss auch die beim Start ermittelte Ausgabelatenz
+        // veröffentlicht sein. Während des Wartens bleibt Stop frei.
+        lifecycleLock.lock()
         lock.lock()
         // Nie gestartet: nichts zu warten.
         if state == .idle {
             lock.unlock()
+            lifecycleLock.unlock()
             return .notStarted
         }
         let alreadyFinished = finished
         lock.unlock()
+        lifecycleLock.unlock()
 
         if !alreadyFinished {
             finishSignal.wait()
@@ -409,6 +450,14 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
             // uebersetzen wir seinen Bool hier nach. Das Semaphor sorgt dafuer,
             // dass sein Schreiben vor diesem Lesen liegt.
             if didFinish.pointee {
+                lock.lock()
+                let remaining = AVAudioTime.seconds(forHostTime: lastFrameEnd.pointee)
+                    + outputLatency - AVAudioTime.seconds(forHostTime: mach_absolute_time())
+                let needsDrain = !finished && remaining > 0
+                lock.unlock()
+                if needsDrain, stopSignal.wait(timeout: .now() + remaining) == .success {
+                    stopSignal.signal()
+                }
                 finish(reason: .sourceFinished)
             }
         }
@@ -432,6 +481,7 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
         state = .stopped
         lock.unlock()
         finishSignal.signal()
+        stopSignal.signal()
     }
 
     /// Startfehler festhalten und den passenden Fehler zum Werfen zurueckgeben.

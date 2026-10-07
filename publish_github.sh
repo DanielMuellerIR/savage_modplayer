@@ -13,7 +13,7 @@
 #   bash publish_github.sh --dry-run --release   # Checks anzeigen, nichts pushen
 #
 # Umgebung:
-#   REMOTE_URL      GitHub-URL, Default siehe unten.
+#   REMOTE_URL      GitHub-URL, muss dem effektiven Push-Ziel des Remotes github entsprechen.
 #   BRANCH          Zielbranch, Default: main.
 #   REQUIRE_CLEAN   1 = sauberer Arbeitsbaum Pflicht, Default: 1.
 
@@ -88,7 +88,7 @@ fi
 
 # Nur getrackte Dateien koennen auf GitHub landen. Deshalb reicht git ls-files
 # als harter Schutz gegen Testmusik und lokale Release-Artefakte.
-FORBIDDEN="$(git ls-files | grep -E -i '(^audio/|\.mod$|\.sid$|\.wav$|\.aiff?$|\.mp3$|\.flac$|\.dmg$|\.app/|\.zip$|\.tar(\.gz)?$)' || true)"
+FORBIDDEN="$(git ls-files | grep -E -i '(^audio/|\.mod$|\.s3m$|\.xm$|\.it$|\.sid$|\.AppImage$|\.wav$|\.aiff?$|\.mp3$|\.flac$|\.dmg$|\.app/|\.zip$|\.tar(\.gz)?$)' || true)"
 if [[ -n "$FORBIDDEN" ]]; then
     echo "ABBRUCH: Nicht veroeffentlichbare Artefakte sind getrackt:" >&2
     echo "$FORBIDDEN" >&2
@@ -107,38 +107,73 @@ if [[ "$DO_RELEASE" == "1" ]]; then
     fi
 fi
 
-if git remote get-url origin >/dev/null 2>&1; then
-    run git remote set-url origin "$REMOTE_URL"
+# Das Ziel wird aus genau dieser URL bestimmt; Repo-Konfiguration und GH_REPO
+# dürfen den freigegebenen Push oder Asset-Upload nicht umleiten.
+if [[ "$REMOTE_URL" =~ ^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(\.git)?$ ]]; then
+    GH_TARGET="${BASH_REMATCH[1]}/${BASH_REMATCH[2]%.git}"
+elif [[ "$REMOTE_URL" =~ ^git@github\.com:([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(\.git)?$ ]]; then
+    GH_TARGET="${BASH_REMATCH[1]}/${BASH_REMATCH[2]%.git}"
 else
-    run git remote add origin "$REMOTE_URL"
+    echo "ABBRUCH: Erwartet wird eine GitHub-Repository-URL ohne Credentials." >&2
+    exit 1
 fi
-
-echo "Remote: $REMOTE_URL"
-echo "Branch: $BRANCH"
-run git push -u origin "$BRANCH"
+EFFECTIVE_URLS="$(git remote get-url --push --all github)" || {
+    echo "ABBRUCH: Git-Remote github muss für das gewünschte Ziel konfiguriert sein." >&2; exit 1;
+}
+[[ "$EFFECTIVE_URLS" == "$REMOTE_URL" ]] || {
+    echo "ABBRUCH: Git-URL-Umschreibung verändert das Veröffentlichungsziel." >&2; exit 1;
+}
+git check-ref-format "refs/heads/$BRANCH" >/dev/null
+git check-ref-format "refs/tags/$TAG" >/dev/null
+RELEASE_COMMIT="$(git rev-parse HEAD)"
+LOCAL_BRANCH="$(git symbolic-ref --quiet HEAD)" || {
+    echo "ABBRUCH: Release benötigt einen lokalen Branch." >&2; exit 1;
+}
 
 if [[ "$DO_RELEASE" == "1" ]]; then
-    if ! git rev-parse "$TAG" >/dev/null 2>&1; then
-        run git tag -a "$TAG" -m "Savage Mod Player ${VERSION}"
+    if git show-ref --verify --quiet "refs/tags/$TAG"; then
+        [[ "$(git rev-parse "refs/tags/$TAG^{commit}")" == "$RELEASE_COMMIT" ]] || {
+            echo "ABBRUCH: Lokaler Versionstag zeigt auf einen anderen Commit." >&2; exit 1;
+        }
     fi
-    run git push origin "$TAG"
+    REMOTE_TAGS="$(git ls-remote "$REMOTE_URL" "refs/tags/$TAG" "refs/tags/$TAG^{}")"
+    if [[ -n "$REMOTE_TAGS" ]]; then
+        REMOTE_COMMIT="$(printf '%s\n' "$REMOTE_TAGS" | awk '$2 ~ /\^\{\}$/ {peeled=$1} $2 !~ /\^\{\}$/ {direct=$1} END {print peeled ? peeled : direct}')"
+        [[ "$REMOTE_COMMIT" == "$RELEASE_COMMIT" ]] || {
+            echo "ABBRUCH: Entfernter Versionstag zeigt auf einen anderen Commit." >&2; exit 1;
+        }
+    fi
+fi
 
-    if gh release view "$TAG" >/dev/null 2>&1; then
-        echo "Release ${TAG} existiert. Lade DMG neu hoch."
-        run gh release upload "$TAG" "$DMG_PATH" --clobber
+if [[ "$DO_RELEASE" == "1" ]]; then
+    ASSETS=("$DMG_PATH" "savage-mod-player.html")
+    APPIMAGE="build/linux/Savage-Mod-Player-${VERSION}-x86_64.AppImage"
+    if [[ -f "$APPIMAGE" ]]; then
+        [[ -f "$APPIMAGE.sha256" ]] || { echo "AppImage-Prüfsumme fehlt." >&2; exit 1; }
+        (cd "$(dirname "$APPIMAGE")" && shasum -a 256 -c "$(basename "$APPIMAGE").sha256")
+        ASSETS+=("$APPIMAGE" "$APPIMAGE.sha256")
+    fi
+fi
+
+echo "GitHub: $GH_TARGET; Branch: $BRANCH"
+run git push --no-follow-tags "$REMOTE_URL" "$LOCAL_BRANCH:refs/heads/$BRANCH"
+
+if [[ "$DO_RELEASE" == "1" ]]; then
+    if ! git show-ref --verify --quiet "refs/tags/$TAG"; then
+        run git tag -a "$TAG" "$RELEASE_COMMIT" -m "Savage Mod Player ${VERSION}"
+    fi
+    run git push --no-follow-tags "$REMOTE_URL" "refs/tags/$TAG:refs/tags/$TAG"
+    if [[ "$DRY_RUN" != "1" ]]; then
+        REMOTE_TAGS="$(git ls-remote "$REMOTE_URL" "refs/tags/$TAG" "refs/tags/$TAG^{}")"
+        [[ "$(printf '%s\n' "$REMOTE_TAGS" | awk '$2 ~ /\^\{\}$/ {peeled=$1} $2 !~ /\^\{\}$/ {direct=$1} END {print peeled ? peeled : direct}')" == "$RELEASE_COMMIT" ]] || {
+            echo "ABBRUCH: Entfernten Release-Commit nicht bestätigt." >&2; exit 1;
+        }
+    fi
+    if gh release view "$TAG" -R "$GH_TARGET" >/dev/null 2>&1; then
+        run gh release upload "$TAG" -R "$GH_TARGET" "${ASSETS[@]}" --clobber
     else
-        echo "Lege Release ${TAG} an."
-        # Liegt eine RELEASE_NOTES.md im Repo, wird sie als Release-Text
-        # verwendet; sonst der generische Standardtext.
-        if [[ -f RELEASE_NOTES.md ]]; then
-            run gh release create "$TAG" "$DMG_PATH" \
-                --title "Savage Mod Player ${VERSION}" \
-                --notes-file RELEASE_NOTES.md
-        else
-            run gh release create "$TAG" "$DMG_PATH" \
-                --title "Savage Mod Player ${VERSION}" \
-                --notes "macOS-App als DMG. MOD-Dateien sind nicht enthalten; Musik wird lokal per Drag & Drop oder aus einem lokalen audio-Ordner geladen."
-        fi
+        run gh release create "$TAG" -R "$GH_TARGET" --verify-tag "${ASSETS[@]}" \
+            --title "Savage Mod Player ${VERSION}" --notes-file RELEASE_NOTES.md
     fi
 fi
 

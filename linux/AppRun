@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+if [ -z "${APPDIR:-}" ]; then
+    APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+fi
+exec "$APPDIR/usr/bin/savage-cli" "$@"

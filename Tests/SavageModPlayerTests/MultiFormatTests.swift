@@ -136,6 +136,22 @@ final class MultiFormatTests: XCTestCase {
 
     // Baut ein minimales, gueltiges S3M: 2 aktive Kanaele (L/R), 1 Instrument
     // (4 Samples, unsigned), 1 Pattern mit Note+Volume+Effekt, Orders [0, --].
+    func testCorruptPCMSignatureIsRejected() {
+        var data = makeS3M()
+        data[0xBC] = 0
+        XCTAssertThrowsError(try S3MParser.parse(data: data))
+    }
+
+    func testExplicitShortS3MLoopsRemainActive() throws {
+        for length in [1, 2] {
+            var data = makeS3M()
+            data[0x8F] = 1
+            data[0x88] = UInt8(length)
+            let mod = try S3MParser.parse(data: data)
+            XCTAssertTrue(try XCTUnwrap(mod.instruments[1]?.samples.first).isLooped)
+        }
+    }
+
     private func makeS3M() -> Data {
         var data = Data(repeating: 0, count: 0x124)
         data.replaceSubrange(0..<8, with: Data("S3M TEST".utf8))

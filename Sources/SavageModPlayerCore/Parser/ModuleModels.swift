@@ -356,10 +356,9 @@ public struct Sample: Sendable, Codable {
     public let sustainLoop: SampleLoop?
     public let itProperties: ITSampleProperties?
 
-    // Loopt genau dann, wenn ein echter (Vorwärts-/Ping-Pong-)Loop mit > 2 Frames
-    // gesetzt ist — dieselbe Schwelle wie zuvor (repeatLength > 2), die Ein-Frame-
-    // Sentinel-Loops als One-Shot behandelt.
-    public var isLooped: Bool { loopType != .none && loopLength > 2 }
+    // Die MOD-Sentinelregel gehört in den MOD-Parser. Explizite Loops der
+    // anderen Formate dürfen auch ein oder zwei Frames umfassen.
+    public var isLooped: Bool { loopType != .none && loopLength > 0 }
 
     public init(pcm: [Float], loopStart: Int, loopLength: Int, loopType: LoopType,
                 volume: Int, finetune: Int, relativeNote: Int = 0, panning: Float = 0.5,
