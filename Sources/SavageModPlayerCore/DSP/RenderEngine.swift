@@ -21,6 +21,7 @@ public final class PreviewVoice: Sendable {
 }
 
 public final class RealtimePlaybackState: Sendable {
+    nonisolated(unsafe) var notePreviewExchange: NotePreviewExchange?
     struct EndTransitionSnapshot: Sendable {
         let frame: UInt64
         let position: Int
@@ -973,6 +974,10 @@ public enum RenderEngine {
             // Blockgrenze ist fuer Seek/Uhr genau genug und spart im Normalfall
             // zwei C11-Atomikaufrufe pro Audioframe.
             if safeFrameCount > 0, let request = state.takePendingSeek() {
+                state.notePreviewExchange?.append(.init(
+                    kind: .seek, position: request.position, row: request.row,
+                    speed: request.ticksPerRow, bpm: request.bpm,
+                    globalVolume: request.globalVolume))
                 Self.applySeek(
                     request,
                     state: state,
@@ -982,6 +987,8 @@ public enum RenderEngine {
             }
             var appliedTempo: RealtimePlaybackState.TempoSnapshot?
             if safeFrameCount > 0, let tempo = state.takePendingTempo() {
+                state.notePreviewExchange?.append(.init(
+                    kind: .tempo, speed: tempo.ticksPerRow, bpm: tempo.bpm))
                 if let ticksPerRow = tempo.ticksPerRow {
                     state.ticksPerRow = ticksPerRow
                 }
@@ -995,6 +1002,7 @@ public enum RenderEngine {
             }
             if safeFrameCount > 0,
                let options = state.takePendingRenderOptions() {
+                state.notePreviewExchange?.append(.init(kind: .options, palClock: options.palClock))
                 state.stereoSeparation = options.stereoSeparation
                 state.useInterpolation = options.useInterpolation
                 state.palClock = options.palClock
@@ -1140,6 +1148,7 @@ public enum RenderEngine {
                     channelCount: logicalChannelCount)
             }
             state.publishElapsedFrames()
+            state.notePreviewExchange?.finishBlock(frames: safeFrameCount)
             state.publishTransportSnapshot()
             if let appliedTempo {
                 // Erst der veroeffentlichte Transport-Snapshot bestaetigt dem
@@ -1161,7 +1170,7 @@ public enum RenderEngine {
     // Allokation und kein Zugriff des Oberflaechen-Threads auf halb geaenderten
     // Sequencer- oder Kanalzustand.
     @inline(__always)
-    private nonisolated static func applySeek(
+    nonisolated static func applySeek(
         _ request: RealtimePlaybackState.SeekSnapshot,
         state: RealtimePlaybackState,
         channels: [DSPChannel],

@@ -1,3 +1,35 @@
+Savage Mod Player 1.6.22 narrows the falling-note window when **Tonumfang** is
+selected, keeping keys and note bars exactly as wide as in the full keyboard.
+**Klaviatur** restores the previous window width, including a custom size.
+The controls move below the title in narrow windows.
+
+Savage Mod Player 1.6.21 defaults the falling-note window to an 88-key keyboard
+from A0 to C8, extending it automatically for tracker notes outside that range.
+Choose **Tonumfang** to zoom to the song or **Klaviatur** to return to the full
+keyboard; the selection is remembered. Keys retain slender proportions when
+zoomed, bars are narrower and key highlights are softer. Note names appear
+horizontally or rotated inside bars when space permits; hovering still shows
+the note, channel and duration.
+
+Savage Mod Player 1.6.20 adds a separate macOS piano-roll window. Open **View
+(Darstellung) → Notenregen öffnen** or press **Shift–Command–N**: upcoming tracker
+notes fall towards a keyboard, labelled with their note names and coloured by
+channel. Choose a two-, four-, or eight-second lookahead. Keys light up while
+voices sound; mute and solo are respected. Pause, seek, tempo changes, pattern
+loops and overlapping IT voices follow the same sequencer as audio playback.
+The preview runs in the background only while its window is open.
+
+Bars show triggered tracker notes and sounding voice durations. Sample contents
+are not transcribed into notes, and pitch slides/vibrato do not move the bars.
+After a manual seek or tempo change, the preview briefly recalculates.
+The app packager now asks Swift for its binary directory, so builds with the
+new Swift build system also package the freshly compiled executable.
+
+Savage Mod Player 1.6.19 keeps forward Bxx/Dxx jumps within the current MOD order
+playing until the actual song end. Delayed desktop and browser drops respect Stop
+and newer selections. Browser Worklet messages carry their playback identity, so
+late end events cannot restart playback or skip the newly selected track.
+
 Savage Mod Player 1.6.18 fixes malformed IT resource exhaustion, unsafe library
 symlink destinations, ping-pong playback, IT order jumps and stereo sample export.
 Pending loads respect pause and newer selections; favorite queues update immediately.

@@ -253,6 +253,7 @@ class Channel {
         if (this.worklet.publishNote && publishNote) {
             this.worklet.port.postMessage({
                 type: 'note',
+                playRevision: this.worklet.playRevision,
                 channel: this.channelIndex,
                 sample: this.instrument?.index,
                 volume: this.currentVolume,
@@ -440,7 +441,7 @@ class ModPlayerWorklet extends AudioWorkletProcessor {
     onmessage(e) {
         switch (e.data.type) {
             case 'play':
-                this.play(e.data.mod, e.data.sampleRate);
+                this.play(e.data.mod, e.data.sampleRate, e.data.playRevision);
                 break;
             case 'stop':
                 this.stop();
@@ -473,7 +474,8 @@ class ModPlayerWorklet extends AudioWorkletProcessor {
         }
     }
 
-    play(mod, sampleRate) {
+    play(mod, sampleRate, playRevision = 0) {
+        this.playRevision = playRevision;
         this.channels = [1, 2, 3, 4].map(index => new Channel(this, index));
         this.patternBreak = false;
         this.positionJump = false;
@@ -529,7 +531,7 @@ class ModPlayerWorklet extends AudioWorkletProcessor {
         this.bpm = bpm;
         this.outputsPerTick = this.sampleRate * 60 / this.bpm / 4 / 6;
         if ((bpm === 0) && this.publishStop) {
-            this.port.postMessage({ type: 'stop' });
+            this.port.postMessage({ type: 'stop', playRevision: this.playRevision });
         }
     }
 
@@ -602,6 +604,7 @@ class ModPlayerWorklet extends AudioWorkletProcessor {
         if (this.publishRow) {
             this.port.postMessage({
                 type: 'row',
+                playRevision: this.playRevision,
                 position: this.position,
                 rowIndex: this.rowIndex,
                 bpm: this.bpm,
@@ -697,6 +700,7 @@ class ModPlayerWorklet extends AudioWorkletProcessor {
                 if (this.blocksUntilLevelPost >= this.levelBlockInterval) {
                     this.port.postMessage({
                         type: 'levels',
+                        playRevision: this.playRevision,
                         peaks: [
                             this.channelPeaks[0],
                             this.channelPeaks[1],

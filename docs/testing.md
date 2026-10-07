@@ -1,6 +1,6 @@
 # Test-, Build- und Quick-Look-Runbook
 
-Stand: 2026-07-22. Diese Datei enthält die Details, die nur vor einer betroffenen
+Stand: 2026-10-07. Diese Datei enthält die Details, die nur vor einer betroffenen
 Änderung geladen werden müssen. Die kompakte Pflichtmatrix steht in `AGENTS.md`.
 
 ## Allgemeines Gate
@@ -67,7 +67,9 @@ vorbei, bevor eine Taste ankommt. Der Probelauf in `setUpClass` misst das und
 überspringt sie dann. Für den vollen Linux-Beleg eine temporäre
 PipeWire-Null-Senke nehmen (Rezept im [Linux-Plan](../tasks/2026-07-05-linux-port/plan.md)).
 
-**Beide Suiten nehmen `.build/release` vor `.build/debug`.** Nach einer
+**Beide Suiten nehmen Release vor Debug und pruefen jeweils das zuletzt gebaute
+Binary.** Sie beruecksichtigen den klassischen `.build/release`-Pfad sowie
+`.build/out/Products/Release` des neueren Swift-Buildsystems. Nach einer
 CLI-Änderung deshalb `swift build -c release --product savage-cli` laufen
 lassen, sonst prüfen sie stillschweigend das alte Binary.
 
@@ -91,6 +93,42 @@ lassen, sonst prüfen sie stillschweigend das alte Binary.
 `swift build` deckt Extension, Signatur und Bundle-Integration nicht ab.
 `python3 Tests/ui_source_tests.py` schützt zusätzlich die Pflichtbedienelemente
 des kompakten Footers; der sichtbare Fenster-Smoke bleibt trotzdem erforderlich.
+
+### Notenregen-Fenster
+
+Fensterabnahme am 2026-10-07 mit Version 1.6.20 (`f08d4de`) und einem
+synthetischen, lautlosen Vierkanal-MOD im normalen App-Lauf bestanden:
+
+- **Darstellung → Notenregen öffnen** öffnet das separate Fenster.
+- Wiederholtes Öffnen erzeugt kein zweites Notenfenster.
+- Der Pause-Button schaltet den angezeigten Zustand von **Spielt** auf **Pausiert**.
+- Nach dem Schließen öffnet **Umschalt–Cmd–N** das Fenster erneut.
+- Erneutes Schließen und Wiederöffnen über das Menü erhält die Fensterzahl.
+- Die Test-App wurde anschließend ausgeblendet und beendet.
+
+Die native Ansicht wurde außerdem in hell, dunkel und mit der Mindestgröße
+720 × 440 Punkten visuell geprüft. Timing, Stimmenlaufzeit, Steuerungsbefehle
+und IT-NNA-Überlagerungen deckt `swift test --filter NotePreviewTests` ab.
+
+Ergänzende Abnahme am 2026-10-07 mit Version 1.6.21 bestanden: Standardbereich
+**A0–C8 · 88 Tasten**, Umschaltung auf **Tonumfang** mit **C2–B4 · 36 Tasten**
+beim synthetischen Teststück, Rückkehr zur Klaviatur und Erhalt beider Auswahlen
+beim Schließen/Wiederöffnen. Singleton, Pause und Tastenkürzel bleiben bestätigt.
+Die native Darstellung wurde in hell, dunkel und 720 × 440 Punkten geprüft;
+synthetische S3M-Noten an beiden Grenzen zeigen **C0–B9 · 120 Tasten**.
+Schwarze Noten außerhalb des 88-Tasten-Bereichs erweitern die Klaviatur bis zu
+äußeren weißen Tasten, sodass Tasten und Balken vollständig sichtbar bleiben.
+
+Ergänzende Abnahme am 2026-10-07 mit Version 1.6.22 bestanden: **Tonumfang**
+verkleinert die Fensterbreite beim Teststück von **1100 auf 480 Punkte**;
+die weißen Tasten bleiben in beiden Ansichten **20 Punkte** breit. Die native
+Darstellung wurde in hell/dunkel und bis **420 × 440 Punkten** geprüft.
+Im normalen App-Lauf sind außerdem **900 → 420** und **720 → 420 Punkte**,
+die Rückkehr zu allen drei Ausgangsbreiten und das Schließen/Wiederöffnen
+bestätigt. Singleton, Pause und Tastenkürzel bestehen weiterhin. Bei einem
+Songwechsel passt sich die fokussierte Breite an; alle 120 Tracker-Noten und
+schwarze Randnoten bleiben abgedeckt. Die Voreinstellungen wurden anschließend
+vollständig wiederhergestellt, die Test-App ausgeblendet und beendet.
 
 ### CPU der Visualisierungen messen
 
@@ -298,3 +336,14 @@ Prüfliste am Gerät:
 
 Web-Ladezustand und Songende: `node Tests/js/playback-state.mjs` prüft Titelwechsel,
 Stop während Audio-Vorbereitung, endliche Pattern-Loops und kombinierte Sprungbefehle.
+
+Native Drop-Aufträge: `python3 Tests/drop_request_tests.py` führt die tatsächlichen
+Drop-/Revisionsfunktionen mit steuerbaren Provider-Callbacks aus. Das prüft Stop,
+neuere Auswahl und die Identität bis zum Hintergrundscan; ein echter Finder-Provider
+ist dabei nicht beteiligt.
+
+Ein fokusfreier Browser-Smoke auf macOS ist mit WebKit möglich:
+`swift Tests/webkit_smoke.swift 'http://127.0.0.1:8765/savage-mod-player.html?testDropAutoplay=1' /tmp/savage-webkit.png`.
+Der Test setzt die Lautstärke auf null, lädt den echten AudioWorklet, prüft Drop-Autoplay
+und Stop und sichert einen Screenshot. Die WebKit-Testkonfiguration erlaubt Autoplay;
+die Freigabe nach einer echten Browser-Nutzergeste bleibt eine separate Prüfung.

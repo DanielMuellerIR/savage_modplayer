@@ -32,7 +32,7 @@ enum LoopMode: String, CaseIterable, Identifiable {
 }
 
 struct MainView: View {
-    @StateObject var coordinator = ModPlayerCoordinator()
+    @ObservedObject var coordinator: ModPlayerCoordinator
     // Theme, Lautstaerke und loopMode ueber Neustarts hinweg merken (@AppStorage).
     @AppStorage("savage.theme") var theme: PlayerTheme = .cyber
     @AppStorage("savage.volume") var volume: Double = 0.6
@@ -374,6 +374,8 @@ struct MainView: View {
                 // die Datei nie gefunden wurde (Drop tat scheinbar nichts). macOS
                 // liefert `public.file-url` heute als URL-String-Data, nicht mehr
                 // als Plist mit rohem Pfad wie früher.
+                let requestID = UUID()
+                playlistRequestID = requestID
                 let container = DropURLsContainer()
                 let dispatchGroup = DispatchGroup()
 
@@ -387,11 +389,12 @@ struct MainView: View {
                 }
 
                 dispatchGroup.notify(queue: .main) {
+                    guard playlistRequestID == requestID else { return }
                     let urls = container.urls
                     if !urls.isEmpty {
                         // Ein Drop aufs Fenster startet die Wiedergabe sofort — der
                         // Nutzer hat die Datei/den Ordner bewusst reingezogen.
-                        handleDroppedURLs(urls, autoPlay: true)
+                        handleDroppedURLs(urls, autoPlay: true, requestID: requestID)
                     }
                 }
                 return true

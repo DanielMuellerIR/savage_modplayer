@@ -14,6 +14,7 @@ cd "$(dirname "$0")"
 
 echo "=== Building Savage Mod Player App in Release Mode ==="
 swift build -c release
+SWIFT_RELEASE_DIR="$(swift build -c release --show-bin-path)"
 APP_VERSION="$(cat VERSION)"
 # Build-/Release-Datum (ISO 8601) — wird in die Info.plist geschrieben und im
 # Fenstertitel angezeigt ("Datum dieser Version").
@@ -34,7 +35,7 @@ mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR"
 
 # Copy release binary
-cp ".build/release/SavageModPlayerApp" "$MACOS_DIR/"
+cp "$SWIFT_RELEASE_DIR/SavageModPlayerApp" "$MACOS_DIR/"
 
 # --- Quick-Look-Extension (Appex) bauen -------------------------------------
 # SwiftPM kann keine .appex-Bundles erzeugen, deshalb kompiliert swiftc die

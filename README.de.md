@@ -65,6 +65,7 @@ Falls keine Vorschau erscheint:
 - **Echtzeit-Oszilloskope**:
   - Ein echtes Stereo-Master-Mischungs-Oszilloskop direkt aus dem Audio-Renderpfad.
   - Separate Spur-Oszilloskope für jeden Kanal (dynamische Kanalzahl), die die tatsächlichen Schwingungsformen direkt aus dem Synthesizer-Render-Block visualisieren.
+- **Fallende Noten mit Klaviatur (macOS-App)**: **Darstellung → Notenregen öffnen** oder **Umschalt–⌘–N** öffnet ein eigenes, skalierbares Fenster mit Notennamen und Kanalfarben. Standardmäßig zeigt es 88 Tasten von A0 bis C8 und erweitert sich für Tracker-Noten außerhalb dieses Bereichs; **Tonumfang** verkleinert das Fenster auf den Bereich des Stücks und erhält dabei die Breite von Tasten und Balken; **Klaviatur** stellt die Gesamtansicht und die vorherige Fensterbreite wieder her. Zwei, vier oder acht Sekunden Vorlauf folgen dem Audio-Sequencer, einschließlich Loops, Notenverzögerungen und überlappender IT-Stimmen. Die Balken zeigen ausgelöste Tracker-Noten und die Laufzeit klingender Stimmen; Sample-Inhalte und kontinuierliche Pitch-Effekte werden nicht in Einzelnoten zerlegt. Nach manuellen Sprüngen und Tempoänderungen wird die Vorschau kurz neu berechnet.
 - **Multi-Theme**:
   - **Dark**: Graphit-/Schwarzpalette mit gutem Kontrast und gedämpften Akzentfarben.
   - **Light**: klassischer, heller macOS-naher Stil mit nüchternem Kontrast.

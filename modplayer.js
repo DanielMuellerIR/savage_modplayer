@@ -297,6 +297,7 @@ export class ModPlayer {
   // Empfängt Events vom Worklet (row, stop, note).
   onMessage(event) {
     const { data } = event;
+    if (!this.playing || data.playRevision !== this.playRevision) return;
     if (data.type === 'row') {
       for (const cb of this.rowCallbacks) cb(data.position, data.rowIndex, data.bpm, data.speed, data.songEnded);
       const key = data.position + ':' + data.rowIndex;
@@ -304,6 +305,7 @@ export class ModPlayer {
         for (const cb of this.singleCallbacks[key]) cb();
       }
     } else if (data.type === 'stop') {
+      this.stop();
       for (const cb of this.stopCallbacks) cb();
     } else if (data.type === 'note') {
       for (const cb of this.noteCallbacks) {
@@ -399,6 +401,7 @@ export class ModPlayer {
     if (revision !== this.playRevision) return false;
     this.worklet.port.postMessage({
       type: 'play',
+      playRevision: revision,
       mod: this.mod,
       sampleRate: this.audio.sampleRate
     });

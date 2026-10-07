@@ -36,9 +36,11 @@ MESSAGE_TIMEOUT = 10.0
 
 def _binary():
     for build in ("release", "debug"):
-        candidate = ROOT / ".build" / build / "savage-cli"
-        if candidate.exists():
-            return candidate
+        candidates = [ROOT / ".build" / build / "savage-cli",
+                      ROOT / ".build" / "out" / "Products" / build.capitalize() / "savage-cli"]
+        existing = [candidate for candidate in candidates if candidate.is_file()]
+        if existing:
+            return max(existing, key=lambda candidate: candidate.stat().st_mtime_ns)
     return None
 
 
@@ -114,7 +116,7 @@ class CLIPlaybackTests(unittest.TestCase):
         cls.binary = _binary()
         if cls.binary is None:
             raise unittest.SkipTest(
-                "kein savage-cli in .build/release oder .build/debug — "
+                "kein savage-cli in den Swift-Build-Ausgabepfaden — "
                 "zuerst 'swift build -c release --product savage-cli'")
         cls._tempdir = tempfile.TemporaryDirectory()
         cls.folder = Path(cls._tempdir.name) / "playlist"

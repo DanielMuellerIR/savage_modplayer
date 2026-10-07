@@ -1,4 +1,5 @@
 import SwiftUI
+import SavageModPlayerCore
 #if os(macOS)
 import AppKit
 #endif
@@ -26,6 +27,10 @@ enum AppInfo {
 
 @main
 struct SavageModPlayerApp: App {
+    @StateObject private var coordinator = ModPlayerCoordinator()
+    @StateObject private var noteRain = NoteRainModel()
+    @StateObject private var noteRainWindow = NoteRainWindowState()
+    @Environment(\.openWindow) private var openWindow
     // Globale UI-Zoom-Stufe (CMD +/-/0), persistiert. Wird als Faktor
     // (savageFontScale) ins Environment gelegt; siehe FontScaling.swift.
     @AppStorage("savage.uiZoom") private var uiZoom = 0
@@ -62,12 +67,12 @@ struct SavageModPlayerApp: App {
 
     var body: some Scene {
         // Bewusst `Window` (Singleton) statt `WindowGroup`: Es gibt nur EIN
-        // Fenster. Man kann ohnehin nicht zwei Module gleichzeitig sinnvoll
+        // Player-Fenster. Man kann ohnehin nicht zwei Module gleichzeitig sinnvoll
         // hören; ein „Öffnen mit"/Dock-Drop soll das bestehende Fenster nutzen
         // (via .onOpenURL) statt ein zweites zu erzeugen. WindowGroup hatte pro
         // geöffneter Datei ein neues, leeres Fenster gespawnt.
         Window(AppInfo.windowTitle, id: "main") {
-            MainView()
+            MainView(coordinator: coordinator)
                 // UI-Schriftfaktor an den Szenen-Root haengen — alle
                 // `.scaledFont(...)`-Aufrufe im Baum lesen ihn von hier.
                 .environment(\.uiFontScale, savageFontScale(uiZoom))
@@ -120,6 +125,9 @@ struct SavageModPlayerApp: App {
             // (Zusaetzlich CMD+= als zweiter Zoom-in-Weg — versteckt in MainView
             // verdrahtet, weil ⌘+ auf manchen Layouts erst mit Shift kommt.)
             CommandMenu("Darstellung") {
+                Button("Notenregen öffnen") { openWindow(id: "note-rain") }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                Divider()
                 Button("Schrift größer") { uiZoom = min(uiZoom + 1, 5) }
                     .keyboardShortcut("+", modifiers: .command)
                 Button("Schrift kleiner") { uiZoom = max(uiZoom - 1, -3) }
@@ -131,6 +139,12 @@ struct SavageModPlayerApp: App {
         }
 
         #if os(macOS)
+        Window("Notenregen", id: "note-rain") {
+            NoteRainView(coordinator: coordinator, model: noteRain, windowState: noteRainWindow)
+                .environment(\.uiFontScale, savageFontScale(uiZoom))
+        }
+        .defaultSize(width: NoteRainWindowState.defaultWidth, height: 760)
+
         // Natives Einstellungs-Fenster (App-Menue > Einstellungen, Cmd+,) —
         // aktuell nur der Autoplay-Ordner fuer die Start-Playlist.
         Settings {

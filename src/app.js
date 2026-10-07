@@ -100,7 +100,6 @@ let currentFile = null;
 let loadRevision = 0;
 let playRequested = false;
 let currentPosition = 0;
-let lastPosition = 0;
 let previousVolume = 1.0;
 let currentRow = 0;
 let activeRowEl = null;
@@ -174,7 +173,6 @@ playBtn.addEventListener('click', async () => {
     try {
       player.resumeContext();
       const startPos = currentPosition;
-      lastPosition = startPos; // Letzte Position vor Wiedergabe zurücksetzen
       const started = await player.play();
       if (revision !== loadRevision) return;
       playRequested = false;
@@ -198,7 +196,6 @@ positionScrubber.addEventListener('input', (e) => {
   const pos = Number(e.target.value);
   player.setPosition(pos, 0);
   currentPosition = pos;
-  lastPosition = pos; // Springen aktualisiert letzte bekannte Position
   currentRow = 0; // Springen setzt Zeile auf 0 zurück
   renderPattern();
   posDisplay.textContent = `POS: ${String(pos + 1).padStart(2, '0')}/${String(currentMod.length).padStart(2, '0')}`;
@@ -304,7 +301,6 @@ window.addEventListener('keydown', (e) => {
     if (newPos !== currentPosition) {
       player.setPosition(newPos, 0);
       currentPosition = newPos;
-      lastPosition = newPos;
       currentRow = 0;
       positionScrubber.value = String(newPos);
       renderPattern();
@@ -353,6 +349,10 @@ window.addEventListener('dragleave', (e) => {
 });
 window.addEventListener('drop', async (e) => {
   e.preventDefault();
+  const revision = ++loadRevision;
+  playRequested = true;
+  player.stop();
+  setPlayingUI(true);
   // AudioContext + Worklet direkt während der Drop-User-Geste vorbereiten.
   // Ordner-Traversal ist async; danach kann Browser-Autoplay sonst blockieren.
   const audioReady = player.prepareAudioForGesture(WORKLET_BLOB_URL);
@@ -360,21 +360,28 @@ window.addEventListener('drop', async (e) => {
   playerEl.classList.remove('drag-over');
   try {
     const files = await collectDroppedFiles(e.dataTransfer);
+    if (revision !== loadRevision) return;
     const mods = files.filter(f => isModName(f.name));
     if (!mods.length) {
+      playRequested = false;
+      setPlayingUI(false);
       if (files.length) showError('Keine .mod-Dateien im Drop gefunden.');
       return;
     }
     addMods(mods);
-    await loadFile(mods[0], { autoplay: true, audioReady });
+    await loadFile(mods[0], { autoplay: true, audioReady, revision });
   } catch (err) {
+    if (revision !== loadRevision) return;
     console.error('Drop-Verarbeitung fehlgeschlagen:', err);
     // Fallback: nur direkt gedroppte Files nehmen (z. B. wenn
     // webkitGetAsEntry fehlt). Ordner werden dabei ignoriert.
     const file = e.dataTransfer.files && e.dataTransfer.files[0];
     if (file) {
       addMods([file]);
-      await loadFile(file, { autoplay: true, audioReady });
+      await loadFile(file, { autoplay: true, audioReady, revision });
+    } else {
+      playRequested = false;
+      setPlayingUI(false);
     }
   }
 });
@@ -419,7 +426,8 @@ async function walkEntry(entry, out) {
 // ─── 6. File-Laden + Rendering ───────────────────────────────────────────────
 
 async function loadFile(file, options = {}) {
-  const revision = ++loadRevision;
+  const revision = options.revision ?? ++loadRevision;
+  if (revision !== loadRevision) return;
   const autoplay = options.autoplay !== false;
   playRequested = autoplay;
   player.stop();
@@ -436,7 +444,6 @@ async function loadFile(file, options = {}) {
     currentFile = modList.find(m => m.file === file)?.file
       || modList.find(m => m.name === file.name && m.file.size === file.size)?.file || file;
     currentPosition = 0;
-    lastPosition = 0;
     currentRow = 0;
     // Titelleiste zeigt jetzt den Dateinamen.
     titleEl.textContent = file.name;
@@ -513,7 +520,7 @@ function setUpPlayerCallbacks() {
   if (playerCallbacksConfigured) return;
   playerCallbacksConfigured = true;
   player.watchRows((pos, row, bpm, speed, songEnded) => {
-    if (songEnded) {
+    if (songEnded && player.playing) {
       player.stop();
       setPlayingUI(false);
       
@@ -533,13 +540,11 @@ function setUpPlayerCallbacks() {
 
       // Am Songende auf Anfang zurücksetzen
       currentPosition = 0;
-      lastPosition = 0;
       currentRow = 0;
       positionScrubber.value = "0";
       renderPattern();
       return;
     }
-    lastPosition = pos;
     currentRow = row;
     if (currentPosition !== pos) {
       currentPosition = pos;

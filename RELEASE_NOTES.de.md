@@ -1,3 +1,40 @@
+Savage Mod Player 1.6.22 verkleinert das Notenregen-Fenster bei **Tonumfang**
+und erhält dabei exakt die Breite von Tasten und Notenbalken der Gesamtansicht.
+**Klaviatur** stellt die vorherige Fensterbreite wieder her, auch nach einer
+manuellen Größenänderung. In schmalen Fenstern stehen die Bedienelemente unter
+dem Titel.
+
+Savage Mod Player 1.6.21 zeigt im Notenregen standardmäßig eine Klaviatur mit
+88 Tasten von A0 bis C8. Tracker-Noten außerhalb dieses Bereichs erweitern sie
+automatisch. Über **Tonumfang** lässt sich bewusst auf das Stück zoomen;
+**Klaviatur** kehrt zur Gesamtansicht zurück. Die Auswahl bleibt gespeichert.
+Die Tasten behalten auch beim Zoom schlanke Proportionen, die Balken sind
+schmaler und die Tastenbeleuchtung ist dezenter. Notennamen stehen waagerecht
+oder gedreht im Balken, wenn genügend Platz vorhanden ist; beim Überfahren
+bleiben Note, Kanal und Dauer ablesbar.
+
+Savage Mod Player 1.6.20 ergänzt ein eigenes macOS-Fenster mit Klaviatur und
+fallenden Notenbalken. **Darstellung → Notenregen öffnen** oder **Umschalt–⌘–N**
+öffnet die Vorschau. Die Balken tragen Notennamen und sind nach Kanal gefärbt;
+der Vorlauf lässt sich auf zwei, vier oder acht Sekunden einstellen. Klingende
+Stimmen heben die zugehörigen Tasten hervor; Mute und Solo werden berücksichtigt.
+Pause, Sprünge, Tempoänderungen, Pattern-Loops und überlappende IT-Stimmen folgen
+demselben Sequencer wie die Audioausgabe. Die Vorschau rechnet nur bei geöffnetem
+Fenster im Hintergrund.
+
+Die Balken zeigen ausgelöste Tracker-Noten und die Laufzeit klingender Stimmen.
+Sample-Inhalte werden nicht in Einzelnoten zerlegt; Pitch-Slides und Vibrato
+verschieben die Balken nicht. Nach einem manuellen Sprung oder einer Tempoänderung
+wird die Vorschau kurz neu berechnet.
+Das App-Bauskript fragt Swift nach dem Binary-Verzeichnis und verpackt damit
+auch beim neuen Swift-Buildsystem das frisch kompilierte Programm.
+
+Savage Mod Player 1.6.19 spielt vorwärts gerichtete Bxx/Dxx-Sprünge innerhalb der
+aktuellen MOD-Order bis zum tatsächlichen Songende weiter. Verzögerte Drops auf
+Desktop und im Browser beachten Stop und neuere Auswahlen. Browser-Worklet-Meldungen
+tragen die Identität ihrer Wiedergabe; verspätete Endereignisse starten keine
+Wiedergabe neu und überspringen keinen neu gewählten Titel.
+
 Savage Mod Player 1.6.18 begrenzt den Ressourcenbedarf beschädigter IT-Dateien
 und schützt die Bibliothek vor bestehenden Symlinks im Zielpfad. Ping-Pong-Wiedergabe,
 IT-Ordersprünge und Stereo-Sampleexport sind korrigiert. Pause und neuere Auswahlen

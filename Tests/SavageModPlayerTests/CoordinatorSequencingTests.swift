@@ -962,28 +962,25 @@ final class CoordinatorSequencingTests: XCTestCase {
         XCTAssertFalse(state.endReached)
     }
 
-    /// Ein rueckwaerts gerichteter Bxx-Sprung gilt als Songende, landet aber auf
-    /// seinem eigenen Ziel — nicht auf `restartPosition`. Ein zusaetzliches Dxx
-    /// setzt dort noch die Zielzeile. Genau dieses Ziel muss der Renderzustand
-    /// festhalten, sonst setzt der Track-Loop die Anzeige-Uhr auf einen anderen
-    /// Punkt als den, an dem wirklich weitergespielt wird.
-    func testPositionJumpToCurrentOrderKeepsTheCombinedBreakRow() {
+    /// B00+D02 aus Zeile 0 ist vorwärts innerhalb derselben Order, kein Songende.
+    func testPositionJumpToCurrentOrderKeepsTheCombinedBreakRow() throws {
         let empty = Note(instrument: 0, period: 0, effectId: 0, effectData: 0)
-        let pattern = Pattern(rows: [
-            Row(notes: [Note(instrument: 0, period: 0, effectId: 0x0B, effectData: 0),
-                        Note(instrument: 0, period: 0, effectId: 0x0D, effectData: 2), empty, empty]),
-            Row(notes: [Note](repeating: empty, count: 4)),
-            Row(notes: [Note](repeating: empty, count: 4))
-        ])
+        let emptyRow = Row(notes: [Note](repeating: empty, count: 4))
+        var rows = [Row](repeating: emptyRow, count: 64)
+        rows[0] = Row(notes: [Note(instrument: 0, period: 0, effectId: 0x0B, effectData: 0),
+                             Note(instrument: 0, period: 0, effectId: 0x0D, effectData: 2), empty, empty])
         let mod = Mod(name: "same-order", length: 2, patternTable: [0, 1],
-                      instruments: [nil], patterns: [pattern, pattern], channelCount: 4)
+                      instruments: [nil], patterns: [Pattern(rows: rows),
+                          Pattern(rows: [Row](repeating: emptyRow, count: 64))], channelCount: 4)
         let (block, state, hold) = makeBlockAndState(mod: mod, sampleRate: 8_000)
         let buffer = StereoRenderBuffer(capacity: 961)
         block(961, buffer.left, buffer.right)
         XCTAssertEqual(state.position, 0)
         XCTAssertEqual(state.rowIndex, 2)
-        XCTAssertEqual(state.endReachedPosition, 0)
-        XCTAssertEqual(state.endReachedRow, 2)
+        XCTAssertFalse(state.endReached)
+        let wav = try ModuleRenderer.renderWavData(mod: mod, sampleRate: 8_000,
+            maxDurationSeconds: 20, normalize: false)
+        XCTAssertEqual((wav.count - 44) / 4, 121_920, "127 Zeilen bis zum natürlichen Songende")
         withExtendedLifetime(hold) {}
     }
 

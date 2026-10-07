@@ -7,7 +7,7 @@ dem Parsen oder Rendern mit Exit-Code 2 beenden. Geprueft wurde das bisher nur
 von Hand; damit konnte die Zusage still verrotten.
 
 Der Test baut nichts. Er benutzt ein vorhandenes `savage-cli` aus
-`.build/release` oder `.build/debug` und ueberspringt sich sauber, wenn keines
+einem klassischen SwiftPM- oder Swift-Build-Ausgabepfad und ueberspringt sich sauber, wenn keines
 da ist — ein Skip ist ausdruecklich kein Beleg fuer eine erfuellte Zusage.
 
 Das Modul dafuer entsteht synthetisch im Temp-Verzeichnis: ein minimales
@@ -32,9 +32,11 @@ EXIT_ARGUMENT = 2    # Argument- und Wertefehler, vor Parse und Render
 
 def _binary():
     for build in ("release", "debug"):
-        candidate = ROOT / ".build" / build / "savage-cli"
-        if candidate.exists():
-            return candidate
+        candidates = [ROOT / ".build" / build / "savage-cli",
+                      ROOT / ".build" / "out" / "Products" / build.capitalize() / "savage-cli"]
+        existing = [candidate for candidate in candidates if candidate.is_file()]
+        if existing:
+            return max(existing, key=lambda candidate: candidate.stat().st_mtime_ns)
     return None
 
 
@@ -63,7 +65,7 @@ class CLIContractTests(unittest.TestCase):
         cls.binary = _binary()
         if cls.binary is None:
             raise unittest.SkipTest(
-                "kein savage-cli in .build/release oder .build/debug — "
+                "kein savage-cli in den Swift-Build-Ausgabepfaden — "
                 "zuerst 'swift build -c release --product savage-cli'")
         cls._tempdir = tempfile.TemporaryDirectory()
         cls.module = Path(cls._tempdir.name) / "test.mod"

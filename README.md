@@ -65,6 +65,7 @@ If no preview appears:
 - **Real-time oscilloscopes**:
   - A true stereo master-mix oscilloscope fed straight from the audio render path.
   - Separate per-channel scopes (dynamic channel count) visualizing the actual waveforms from the synthesizer render block.
+- **Falling-note piano roll (macOS app)**: **Darstellung → Notenregen öffnen** or **Shift–Command–N** opens a separate, resizable window with a keyboard, note labels and channel colours. It defaults to 88 keys from A0 to C8 and extends for tracker notes outside that range; **Tonumfang** narrows the window to the song’s range while keeping keys and bars at the same width; **Klaviatur** restores the full keyboard and the previous window width. A two-, four-, or eight-second lookahead follows the audio sequencer, including loops, note delays and overlapping IT voices. Bars show triggered tracker notes and sounding voice durations; sample contents and continuous pitch effects are not transcribed. Manual seeks and tempo changes briefly recalculate the preview.
 - **Multiple themes**:
   - **Dark**: graphite/black palette with good contrast and muted accent colors.
   - **Light**: a classic, bright macOS-like style with sober contrast.

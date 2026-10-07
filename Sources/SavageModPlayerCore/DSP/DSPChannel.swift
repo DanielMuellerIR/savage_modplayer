@@ -239,6 +239,11 @@ public final class DSPChannel: Sendable {
     nonisolated(unsafe) public var itTriggerSampleID: Int = 0
     nonisolated(unsafe) public var itTriggerInstrumentID: Int = 0
     nonisolated(unsafe) public var itVoiceGeneration: UInt64 = 0
+    // Notenidentitaet fuer die stumme Vorschau. Portamento aendert die Tonhoehe,
+    // erzeugt aber keinen neuen Anschlag; Delay und Retrigger dagegen schon.
+    nonisolated(unsafe) var visualNoteKey = -1
+    nonisolated(unsafe) var visualNoteGeneration: UInt64 = 0
+    nonisolated(unsafe) private var pendingVisualNoteKey = -1
     nonisolated(unsafe) public var itNNAOverride: NewNoteAction?
     // IT-Instrumente referenzieren Samples global per 1-basierter ID. Alle
     // Kanäle teilen den vorab aufgebauten Array-Puffer per Swift-COW.
@@ -460,6 +465,9 @@ public final class DSPChannel: Sendable {
         itTriggerSampleID = 0
         itTriggerInstrumentID = 0
         itVoiceGeneration = 0
+        visualNoteKey = -1
+        visualNoteGeneration = 0
+        pendingVisualNoteKey = -1
         itNNAOverride = nil
         itSamplePool = []
         keyReleased = false
@@ -760,6 +768,9 @@ public final class DSPChannel: Sendable {
         if xmMode { self.applyXMVolumeColumn(note.volCmd) }
         if itMode { self.applyITVolumeColumn(note.volume) }
 
+        pendingVisualNoteKey = note.period > 0
+            ? Int((36 + 12 * log2(428.0 / Double(note.period))).rounded())
+            : playbackKey
         if self.delayNote > 0 {
             return
         }
@@ -799,6 +810,7 @@ public final class DSPChannel: Sendable {
         if let idx = self.setSampleIndex {
             self.sampleIndex = idx
             self.playing = !(itMode && itInstrumentMode) || self.sample != nil
+            markVisualNoteTrigger(key: pendingVisualNoteKey)
         }
 
         // Bei echtem Retrigger die Instrument-Voice initialisieren. IT-Carry
@@ -843,6 +855,13 @@ public final class DSPChannel: Sendable {
             if (itPatternState?.tremoloWaveform ?? 0) < 4 { tremoloIndex = 0 }
             if (itPatternState?.panbrelloWaveform ?? 0) < 4 { panbrelloIndex = 0 }
         }
+    }
+
+    @inline(__always)
+    private func markVisualNoteTrigger(key: Int) {
+        guard key >= 0, key < 120 else { return }
+        visualNoteKey = key
+        visualNoteGeneration &+= 1
     }
 
     // Eine NNA-Hintergrundstimme behält Sample, Envelope, Fade und Filter,
@@ -1873,12 +1892,14 @@ public final class DSPChannel: Sendable {
                     itRetriggerCounter -= 1
                     if itRetriggerCounter <= 0 {
                         self.sampleIndex = 0.0
+                        markVisualNoteTrigger(key: visualNoteKey)
                         applyITRetriggerVolume()
                         itRetriggerCounter = self.retrigger
                     }
                 }
             } else if tick > 0 && (tick % self.retrigger) == 0 {
                 self.sampleIndex = 0.0
+                markVisualNoteTrigger(key: visualNoteKey)
                 // XM Rxy verändert beim Retrigger zusätzlich die Lautstärke
                 // (gleiche Modus-Tabelle wie IT Qxy); MOD E9x bleibt neutral.
                 if xmMultiRetrigActive { applyITRetriggerVolume() }
@@ -1912,6 +1933,7 @@ public final class DSPChannel: Sendable {
             }
             self.sampleIndex = 0.0
             self.playing = true
+            markVisualNoteTrigger(key: pendingVisualNoteKey)
             self.delayNote = -1
         }
         

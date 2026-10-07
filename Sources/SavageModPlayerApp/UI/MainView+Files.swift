@@ -10,11 +10,16 @@ extension MainView {
     // MARK: - Playlists & File Handling
     
     // autoPlay=true startet die Wiedergabe direkt nach dem Laden — genutzt beim
-    // App-Start (audio-Ordner), damit sofort etwas klingt. Echte Drag&Drops
-    // rufen mit dem Default false auf und laden nur, ohne loszuspielen.
-    func handleDroppedURLs(_ urls: [URL], autoPlay: Bool = false) {
-        let requestID = UUID()
-        playlistRequestID = requestID
+    // App-Start und Fenster-Drops. Der Datei-Dialog lädt mit Default false nur.
+    func handleDroppedURLs(_ urls: [URL], autoPlay: Bool = false, requestID pendingRequestID: UUID? = nil) {
+        let requestID: UUID
+        if let pendingRequestID {
+            guard playlistRequestID == pendingRequestID else { return }
+            requestID = pendingRequestID
+        } else {
+            requestID = UUID()
+            playlistRequestID = requestID
+        }
         self.errorMessage = nil
         self.compatibilityMessage = nil
         // Dateisystem-Traversal + Kopieren laufen im Hintergrund — ein grosser

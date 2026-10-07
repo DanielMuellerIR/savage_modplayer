@@ -173,7 +173,8 @@ enum SequencerCore {
         var targetPosition = state.position
         var targetRow = state.rowIndex + 1
         let sourcePosition = state.position
-        var followedBackwardJump = false
+        let sourceRow = state.rowIndex
+        var followedPositionJump = false
 
         if state.patternLoopRow >= 0 {
             targetRow = state.patternLoopRow
@@ -182,7 +183,7 @@ enum SequencerCore {
             let hasPositionJump = state.positionJump >= 0
             if hasPositionJump {
                 targetPosition = state.positionJump
-                followedBackwardJump = targetPosition <= sourcePosition
+                followedPositionJump = true
                 targetRow = 0
                 state.positionJump = -1
             }
@@ -203,10 +204,13 @@ enum SequencerCore {
             targetRow = max(0, min(rowCount - 1, targetRow))
         }
 
+        let followedBackwardJump = followedPositionJump
+            && (targetPosition < sourcePosition
+                || (targetPosition == sourcePosition && targetRow <= sourceRow))
         state.position = targetPosition
         state.rowIndex = targetRow
 
-        // Ein Bxx-Sprung auf eine bereits erreichte Position markiert denselben
+        // Ein Bxx/Dxx-Ziel vor oder auf der Ausgangszeile markiert denselben
         // Subsong-Loop, an dem openmpt123 bei --repeat 0 endet. Der Zielzustand
         // wird wie beim natuerlichen Wrap noch geladen; Offline-Renderer und UI
         // erhalten danach das einheitliche Endsignal.

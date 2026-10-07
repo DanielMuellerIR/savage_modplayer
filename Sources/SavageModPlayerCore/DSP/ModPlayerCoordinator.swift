@@ -80,6 +80,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     // MainView.body neu evaluieren, sondern nur die beobachtenden Scope-/VU-/Zeit-
     // Subviews. War die Haupt-CPU-Last (2026-07-09). `let`: stabile Referenz.
     public let visualizerState = VisualizerState()
+    @Published public private(set) var notePreviewSource: NotePreviewSource?
 
     // Sind die schweren Visualisierungen (Kanal-Oszis + Master-Oszi) gerade
     // sichtbar? Setzt die View im responsiven Kompaktmodus: bei kleinem Fenster
@@ -370,6 +371,13 @@ public final class ModPlayerCoordinator: ObservableObject {
         pendingGlobalVolume = nil
 
         self.playbackState = state
+        #if os(macOS)
+        let noteExchange = NotePreviewExchange()
+        state.notePreviewExchange = noteExchange
+        notePreviewSource = NotePreviewSource(
+            configuration: .init(mod: mod, sampleRate: sampleRate, state: state),
+            exchange: noteExchange)
+        #endif
         
         let dspChannels = channels
         let vuBuffer = visualizationExchange.makeVUBuffer()
@@ -440,6 +448,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         stopVUUpdates()
 
         self.playbackState = nil
+        notePreviewSource = nil
         pendingSeekSequence = nil
         pendingSeekTransport = nil
         pendingBPMSequence = nil
@@ -744,6 +753,9 @@ public final class ModPlayerCoordinator: ObservableObject {
 
     @MainActor
     private func updateVULevelsTick() {
+        // Steuerungsbefehle auch bei geschlossenem Notenfenster behalten. Ein
+        // spaeter geoeffneter Visualizer kann die laufende Wiedergabe nachbilden.
+        notePreviewSource?.collectCommands()
         // Hochfrequente Puffer landen im getrennten visualizerState (nicht mehr auf
         // self), damit dieser 30-Hz-Tick nur die Scope-/VU-/Zeit-Subviews neu rendert.
         let vis = self.visualizerState
