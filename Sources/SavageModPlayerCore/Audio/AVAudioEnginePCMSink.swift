@@ -305,10 +305,11 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
                 }
                 // Der Callback liefert voraus: Quellenende ist noch kein Ausgabeende.
                 // HAL-Zeit plus gueltige Frames bestimmen das Ende des Teilpuffers.
-                let hostTime = timestamp.pointee.mFlags.contains(.hostTimeValid)
-                    ? timestamp.pointee.mHostTime : mach_absolute_time()
-                pointers.lastFrameEnd.pointee = hostTime
-                    + UInt64((Double(written) * hostTicksPerFrame).rounded(.up))
+                pointers.lastFrameEnd.pointee = Self.finalFrameHostTime(
+                    reportedHostTime: timestamp.pointee.mHostTime,
+                    hostTimeValid: timestamp.pointee.mFlags.contains(.hostTimeValid),
+                    renderedAt: mach_absolute_time(), validFrames: written,
+                    hostTicksPerFrame: hostTicksPerFrame)
                 // Merken und genau EINMAL Bescheid geben (siehe finishSignal).
                 // Mehr geht hier nicht: `.sourceFinished` selbst zu hinterlegen
                 // hiesse Lock nehmen — auf dem Realtime-Thread verboten. Den Bool
@@ -465,6 +466,15 @@ public final class AVAudioEnginePCMSink: PCMSink, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return finishReason
+    }
+
+    static func finalFrameHostTime(reportedHostTime: UInt64, hostTimeValid: Bool,
+                                   renderedAt: UInt64, validFrames: Int,
+                                   hostTicksPerFrame: Double) -> UInt64 {
+        // Auch gültige HAL-Zeitstempel können zurückliegen. Ein erst jetzt
+        // bereiter Teilpuffer darf dadurch nicht schon als ausgespielt gelten.
+        let bufferStart = hostTimeValid ? max(reportedHostTime, renderedAt) : renderedAt
+        return bufferStart + UInt64((Double(validFrames) * hostTicksPerFrame).rounded(.up))
     }
 
     // MARK: - Kleinkram

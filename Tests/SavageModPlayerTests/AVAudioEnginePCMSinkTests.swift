@@ -24,6 +24,22 @@ final class AVAudioEnginePCMSinkTests: XCTestCase {
         return AVAudioEnginePCMSink.hardwareFormat()
     }
 
+    func testStaleValidHostTimeCannotFinishBeforeRenderedBuffer() {
+        let end = AVAudioEnginePCMSink.finalFrameHostTime(
+            reportedHostTime: 10, hostTimeValid: true, renderedAt: 1_000,
+            validFrames: 511, hostTicksPerFrame: 2.5)
+        XCTAssertEqual(end, 2_278)
+    }
+
+    func testFutureHostTimeAndMissingTimestampKeepTheirDeadlines() {
+        XCTAssertEqual(AVAudioEnginePCMSink.finalFrameHostTime(
+            reportedHostTime: 2_000, hostTimeValid: true, renderedAt: 1_000,
+            validFrames: 511, hostTicksPerFrame: 2.5), 3_278)
+        XCTAssertEqual(AVAudioEnginePCMSink.finalFrameHostTime(
+            reportedHostTime: 9_000, hostTimeValid: false, renderedAt: 1_000,
+            validFrames: 511, hostTicksPerFrame: 2.5), 2_278)
+    }
+
     func testNaturalEndWaitsForLastPartialBuffer() throws {
         let rate = try hardwareFormat().sampleRate
         let ticksPerSecond = Double(AVAudioTime.hostTime(forSeconds: 1))

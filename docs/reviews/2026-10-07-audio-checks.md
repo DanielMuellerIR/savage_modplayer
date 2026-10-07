@@ -40,6 +40,9 @@ verwandte Ausgabeschicht im SID-Player wurde gelesen; beim späteren Vergleich u
 Die [getrennte Untersuchung](2026-10-07-audio-ideas.md) hält die Grenzen fest.
 
 
+Ein zusätzlicher [CI-Randfall bei zurückliegenden HAL-Zeitstempeln](2026-10-07-output-tail-ci.md)
+wurde anschließend in 1.6.29 korrigiert.
+
 ## Erste Initialisierung der ProTracker-Sinustabelle
 
 Ein synthetisches, lautloses MOD beginnt auf Zeile 0 mit Vibrato `447` und

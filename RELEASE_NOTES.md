@@ -1,3 +1,9 @@
+Savage Mod Player 1.6.29 also drains the final macOS audio buffer when a valid
+HAL timestamp is already in the past. The deadline starts no earlier than the
+finished rendering of the buffer, while future presentation times and explicit Stop
+keep their behavior. A deterministic regression covers stale, future and missing
+timestamps; GitHub CI exposed the stale-timestamp case.
+
 Savage Mod Player 1.6.28 fixes issues found in a full source review:
 concurrent audio sink start/stop, delayed notes, IT combined portamento and
 modern tempo changes, short explicit sample loops, corrupt S3M PCM headers,

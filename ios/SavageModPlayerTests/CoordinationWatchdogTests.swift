@@ -217,13 +217,13 @@ final class CoordinationWatchdogTests: XCTestCase {
     private func waitUntil(
         _ description: String,
         timeout: TimeInterval = 5,
-        condition: () -> Bool
+        condition: @escaping @Sendable () -> Bool
     ) {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if condition() { return }
-            Thread.sleep(forTimeInterval: 0.005)
-        }
-        XCTFail("Zeitueberschreitung: \(description)")
+        // XCTest hält seinen Runloop aktiv; Sleep-Polling auf dem Testthread
+        // kann Hintergrundarbeit im belasteten Simulator verzögern.
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in condition() }, object: nil)
+        expectation.expectationDescription = description
+        wait(for: [expectation], timeout: timeout)
     }
 }

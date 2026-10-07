@@ -1,3 +1,9 @@
+Savage Mod Player 1.6.29 lässt den letzten macOS-Audiopuffer auch dann auslaufen,
+wenn ein gültiger HAL-Zeitstempel bereits zurückliegt. Die Wartefrist beginnt
+frühestens nach dem Rendern; künftige Ausgabezeitpunkte und ausdrücklicher Stop
+behalten ihr Verhalten. Eine deterministische Regression prüft zurückliegende,
+künftige und fehlende Zeitstempel. Die GitHub-CI deckte den Randfall auf.
+
 Savage Mod Player 1.6.28 behebt Fehler aus einem vollständigen Quellcode-Review:
 paralleles Starten/Stoppen der Audioausgabe, verzögerte Noten, kombiniertes
 IT-Portamento, moderne Tempoänderungen, kurze explizite Sampleloops,

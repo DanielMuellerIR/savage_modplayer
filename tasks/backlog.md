@@ -1,6 +1,6 @@
 # Aktiver Projekt-Backlog
 
-Stand: 2026-10-07 · Version 1.6.28.
+Stand: 2026-10-07 · Version 1.6.29.
 
 Diese Datei ist die einzige aktive Projektliste. Erledigte Chronik liegt in
 Release Notes, abgeschlossenen Tasks und `archive/`.
@@ -23,7 +23,9 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
    Sampleschritte). Der
    AVAudioEngine-Ausgabetail beim CLI-Ende wurde mit einem endlichen
    Nullsample-Fixture bestätigt und in 1.6.23 korrigiert: Das natürliche Ende
-   wartet auf den letzten Framezeitpunkt einschließlich Ausgabelatenz. Zu prüfen
+   wartet auf den letzten Framezeitpunkt einschließlich Ausgabelatenz. Seit 1.6.29
+   begrenzt der Zeitpunkt des fertig gerenderten Puffers auch zurückliegende
+   HAL-Zeitstempel; die GitHub-CI deckte diesen zusätzlichen Randfall auf. Zu prüfen
    war die erste Initialisierung der Vibratotabelle im Echtzeitpfad: im Debug-
    Build bestätigt, seit 1.6.24 beim Kanalaufbau vorbereitet. Der Release-
    Compiler las bereits direkt aus konstanten Daten. Belege stehen in der
