@@ -38,12 +38,35 @@ einen Fehler des realen File Providers. 1.6.28 und dessen Tag bleiben unverände
 ## iOS-Testwarteweg
 
 Im selben CI-Lauf scheiterte der Stillstandstest des Koordinationswächters.
-Die Testhilfe blockierte ihren Thread mit Sleep-Polling. Sie wartet jetzt mit
-`XCTNSPredicateExpectation`, sodass XCTest seinen Runloop weiter betreibt.
-Das Limit von fünf Sekunden, die Bedingung und die Prüfung von `.stalled`
-bleiben erhalten; der Produktionswächter wurde dadurch nicht geändert.
+Sleep-Polling wurde zunächst durch `XCTNSPredicateExpectation` ersetzt. Lokal
+bestanden danach 73 Tests; im [folgenden öffentlichen Lauf](https://github.com/DanielMuellerIR/savage_modplayer/actions/runs/37640171082)
+bestanden macOS und Linux, während nun der Nutzerabbruch-Test vor seiner ersten
+beobachteten Prüfung ablief. Der erste Wechsel des Wartewegs reichte damit nicht.
 
-Simulator-Build und vollständige Suite mit 73 Tests bestanden lokal ohne Fehler,
-mit TEST SUCCEEDED und Exit 0. Die anschließende Simulator-Diagnostiksammlung
-wurde separat beendet. Die Entscheidung am synthetischen Test ersetzt weiterhin
-keinen echten, hängenden File Provider; diese Geräteabnahme bleibt offen.
+Die Tests hatten unbeobachtet vorausgesetzt, dass ein Utility-Worker innerhalb
+von fünf Sekunden seine Entscheidung erreicht. Das anschließende `finish()`
+darf einen noch nicht prüfenden Worker korrekt ohne Abbruch beenden; `.none`
+beweist in diesem Fall keine falsche Abbruchentscheidung.
+
+Die fachlichen Entscheidungen verwenden jetzt eine kleine interne `PollState`
+und feste Testzeiten: Nutzerabbruch hat Vorrang, die Frist gilt ab ihrer Grenze,
+nur steigender Fortschritt verlängert sie, und die Uhr wird nach der möglichen
+Metadatenabfrage gelesen. Der Worker verwendet dieselbe Zustandslogik;
+Priorität, Startort und Reihenfolge von Beendigung und Prüfung bleiben erhalten.
+
+Separate asynchrone Vertragstests beobachten den tatsächlichen Worker-Start
+über die erste Fortschrittsabfrage. Danach prüfen sie reguläres Beenden bzw.
+Nutzerabbruch über direkte XCTest-Expectations. Ein Starttimeout wird ausdrücklich
+als fehlende Einplanung gemeldet, ohne einen Folgefehler bei der Entscheidung
+vorzutäuschen. Das Wartebudget bleibt fünf Sekunden je beobachtetem Schritt.
+
+Die Entscheidung am synthetischen Test ersetzt weiterhin keinen echten,
+hängenden File Provider; diese Geräteabnahme bleibt offen.
+
+Der finale Simulator-Build bestand ohne Compilerwarnungen im eigenen Code.
+Die vollständige lokale Suite bestand mit 75 Tests und null Fehlern; zusätzlich
+wurden die ursprünglichen neun Worker-/Entscheidungstests gezielt ausgeführt.
+Xcodes nachgelagerte Diagnostiksammlung wurde getrennt beendet; beide Testläufe
+meldeten TEST SUCCEEDED und Exit 0. Der Thread Performance Checker weist beim
+bestehenden synchronen `finish()` weiterhin auf das Warten auf eine Utility-Queue
+hin; deren Priorität wurde für diese Testkorrektur nicht geändert.

@@ -4,6 +4,9 @@ frühestens nach dem Rendern; künftige Ausgabezeitpunkte und ausdrücklicher St
 behalten ihr Verhalten. Eine deterministische Regression prüft zurückliegende,
 künftige und fehlende Zeitstempel. Die GitHub-CI deckte den Randfall auf.
 
+Die iOS-Wächtertests trennen feste Zeit-/Abbruchentscheidungen von Start und Ende
+des echten Hintergrundworkers; seine Einplanung wird ausdrücklich beobachtet.
+
 Savage Mod Player 1.6.28 behebt Fehler aus einem vollständigen Quellcode-Review:
 paralleles Starten/Stoppen der Audioausgabe, verzögerte Noten, kombiniertes
 IT-Portamento, moderne Tempoänderungen, kurze explizite Sampleloops,

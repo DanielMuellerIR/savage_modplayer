@@ -262,6 +262,35 @@ final class CoordinationWatchdog: @unchecked Sendable {
         case stalled
     }
 
+    struct PollState {
+        private let stallTimeout: TimeInterval
+        private var deadline: Date
+        private var lastProgress: Int64
+
+        init(now: Date, stallTimeout: TimeInterval, progress: Int64) {
+            self.stallTimeout = stallTimeout
+            deadline = now.addingTimeInterval(stallTimeout)
+            lastProgress = progress
+        }
+
+        mutating func poll(
+            now: @autoclosure () -> Date,
+            isCancelled: Bool,
+            progress: () -> Int64
+        ) -> Outcome {
+            if isCancelled { return .cancelled }
+            let current = progress()
+            // Metadatenabfragen können dauern; ihre Zeit gehört vor den
+            // Fristvergleich und eine Verlängerung beginnt nach der Abfrage.
+            let observedAt = now()
+            if current > lastProgress {
+                lastProgress = current
+                deadline = observedAt.addingTimeInterval(stallTimeout)
+            }
+            return observedAt >= deadline ? .stalled : .none
+        }
+    }
+
     private let stallTimeout: TimeInterval
     private let pollInterval: TimeInterval
     private let isCancelled: @Sendable () -> Bool
@@ -303,26 +332,19 @@ final class CoordinationWatchdog: @unchecked Sendable {
 
         queue.async { [self] in
             defer { stopped.signal() }
-            var deadline = Date().addingTimeInterval(stallTimeout)
-            var lastProgress = progress()
+            let startedAt = Date()
+            var state = PollState(now: startedAt, stallTimeout: stallTimeout,
+                                  progress: progress())
 
             while true {
                 // Wartet hoechstens einen Poll-Abstand — oder kehrt sofort
                 // zurueck, sobald die Koordination durch ist.
                 if finished.wait(timeout: .now() + pollInterval) == .success { return }
 
-                if isCancelled() {
-                    record(.cancelled)
-                    abort()
-                    return
-                }
-                let current = progress()
-                if current > lastProgress {
-                    lastProgress = current
-                    deadline = Date().addingTimeInterval(stallTimeout)
-                }
-                if Date() >= deadline {
-                    record(.stalled)
+                let decision = state.poll(now: Date(), isCancelled: isCancelled(),
+                                          progress: progress)
+                if decision != .none {
+                    record(decision)
                     abort()
                     return
                 }

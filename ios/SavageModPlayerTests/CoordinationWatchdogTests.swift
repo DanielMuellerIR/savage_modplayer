@@ -11,8 +11,8 @@ import XCTest
 /// Wächters — abbrechen bei Nutzerabbruch, abbrechen bei Stillstand, laufen
 /// lassen bei Fortschritt. Dass ein realer, hängender File Provider daraufhin
 /// wirklich loslässt, lässt sich nur mit einem solchen Anbieter zeigen; das
-/// bleibt Sache eines Gerätetests. Die Zeitwerte sind hier absichtlich winzig,
-/// damit die Suite schnell bleibt.
+/// bleibt Sache eines Gerätetests. Entscheidungen verwenden eine feste Uhr;
+/// Start und Ende des echten Workers werden getrennt asynchron beobachtet.
 final class CoordinationWatchdogTests: XCTestCase {
 
     /// Zählt die Abbrüche threadsicher mit.
@@ -25,16 +25,6 @@ final class CoordinationWatchdogTests: XCTestCase {
         }
         func increment() {
             lock.lock(); value += 1; lock.unlock()
-        }
-    }
-
-    /// Ein von aussen setzbarer Fortschrittswert.
-    private final class ProgressBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var value: Int64 = 0
-        var current: Int64 {
-            get { lock.lock(); defer { lock.unlock() }; return value }
-            set { lock.lock(); value = newValue; lock.unlock() }
         }
     }
 
@@ -51,83 +41,104 @@ final class CoordinationWatchdogTests: XCTestCase {
     }
 
     /// Ein Lesevorgang, der von selbst durchläuft, wird nicht angefasst.
-    func testFinishingInTimeAbortsNothing() {
+    func testFinishingAStartedWorkerAbortsNothing() async {
         let aborts = AbortCounter()
+        let started = WorkerStartSignal()
         let watchdog = CoordinationWatchdog(
-            stallTimeout: 5,
+            stallTimeout: 60,
             pollInterval: 0.01,
             isCancelled: { false },
-            progress: { 0 },
+            progress: { started.signalOnce(); return 0 },
             abort: { aborts.increment() })
 
         watchdog.start()
-        Thread.sleep(forTimeInterval: 0.05)
+        defer { watchdog.finish() }
+        guard await XCTWaiter.fulfillment(of: [started.expectation], timeout: 5) == .completed else {
+            XCTFail("Watchdog-Worker wurde nicht eingeplant")
+            return
+        }
         XCTAssertEqual(watchdog.finish(), .none)
         XCTAssertEqual(aborts.count, 0)
     }
 
-    /// Bricht der Nutzer ab, greift der Wächter mitten im Lesevorgang ein —
-    /// vorher war das Abbruchflag ab dem Start der Koordination wirkungslos.
-    func testUserCancellationAbortsTheCoordination() {
-        let aborts = AbortCounter()
-        let watchdog = CoordinationWatchdog(
-            stallTimeout: 5,
-            pollInterval: 0.01,
-            isCancelled: { true },
-            progress: { 0 },
-            abort: { aborts.increment() })
+    func testUserCancellationTakesPrecedenceOverStallAndProgress() {
+        let now = Date(timeIntervalSinceReferenceDate: 100)
+        var state = CoordinationWatchdog.PollState(now: now, stallTimeout: 5, progress: 0)
+        XCTAssertEqual(state.poll(now: now.addingTimeInterval(10), isCancelled: true,
+                                  progress: { XCTFail("Abbruch darf keinen Fortschritt abfragen"); return 1024 }),
+                       .cancelled)
+    }
 
+    func testStandstillAbortsAtTheDeadline() {
+        let now = Date(timeIntervalSinceReferenceDate: 100)
+        var state = CoordinationWatchdog.PollState(now: now, stallTimeout: 5, progress: 0)
+        XCTAssertEqual(state.poll(now: now.addingTimeInterval(4.99), isCancelled: false,
+                                  progress: { 0 }), .none)
+        XCTAssertEqual(state.poll(now: now.addingTimeInterval(5), isCancelled: false,
+                                  progress: { 0 }), .stalled)
+    }
+
+    func testProgressExtendsTheDeadlineOnlyWhenItIncreases() {
+        let now = Date(timeIntervalSinceReferenceDate: 100)
+        var state = CoordinationWatchdog.PollState(now: now, stallTimeout: 5, progress: 0)
+        XCTAssertEqual(state.poll(now: now.addingTimeInterval(4), isCancelled: false,
+                                  progress: { 1024 }), .none)
+        XCTAssertEqual(state.poll(now: now.addingTimeInterval(8), isCancelled: false,
+                                  progress: { 512 }), .none)
+        XCTAssertEqual(state.poll(now: now.addingTimeInterval(9), isCancelled: false,
+                                  progress: { 1024 }), .stalled)
+    }
+
+    func testProgressDeadlineUsesTheTimeAfterReadingProgress() {
+        let start = Date(timeIntervalSinceReferenceDate: 100)
+        var observedAt = start.addingTimeInterval(4)
+        var state = CoordinationWatchdog.PollState(now: start, stallTimeout: 5, progress: 0)
+        XCTAssertEqual(state.poll(now: observedAt, isCancelled: false, progress: {
+            observedAt = start.addingTimeInterval(10)
+            return 1024
+        }), .none)
+        XCTAssertEqual(state.poll(now: start.addingTimeInterval(14), isCancelled: false,
+                                  progress: { 1024 }), .none)
+        XCTAssertEqual(state.poll(now: start.addingTimeInterval(15), isCancelled: false,
+                                  progress: { 1024 }), .stalled)
+    }
+
+    func testStartedWorkerAbortsOnUserCancellation() async {
+        let started = WorkerStartSignal()
+        let cancelled = CancellationBox()
+        let aborted = XCTestExpectation(description: "Gestarteter Worker bricht ab")
+        let watchdog = CoordinationWatchdog(
+            stallTimeout: 60,
+            pollInterval: 0.01,
+            isCancelled: { cancelled.isSet },
+            progress: { started.signalOnce(); return 0 },
+            abort: { aborted.fulfill() })
         watchdog.start()
-        waitUntil("Abbruch wird ausgelöst") { aborts.count > 0 }
+        defer { watchdog.finish() }
+        guard await XCTWaiter.fulfillment(of: [started.expectation], timeout: 5) == .completed else {
+            XCTFail("Watchdog-Worker wurde nicht eingeplant")
+            return
+        }
+        cancelled.cancel()
+        guard await XCTWaiter.fulfillment(of: [aborted], timeout: 5) == .completed else {
+            XCTFail("Gestarteter Watchdog hat den Nutzerabbruch nicht gemeldet")
+            return
+        }
         XCTAssertEqual(watchdog.finish(), .cancelled)
     }
 
-    /// Ohne Fortschritt läuft das Zeitlimit ab.
-    func testStandstillAbortsAfterTheStallTimeout() {
-        let aborts = AbortCounter()
-        let watchdog = CoordinationWatchdog(
-            stallTimeout: 0.05,
-            pollInterval: 0.01,
-            isCancelled: { false },
-            progress: { 0 },
-            abort: { aborts.increment() })
+    private final class WorkerStartSignal: @unchecked Sendable {
+        let expectation = XCTestExpectation(description: "Watchdog-Worker hat begonnen")
+        private let lock = NSLock()
+        private var signalled = false
 
-        watchdog.start()
-        waitUntil("Zeitlimit greift") { aborts.count > 0 }
-        XCTAssertEqual(watchdog.finish(), .stalled)
-    }
-
-    /// Fortschritt verlängert die Frist: Ein langsamer Anbieter darf
-    /// durchlaufen, nur ein steckengebliebener wird abgebrochen.
-    func testProgressKeepsTheCoordinationAlive() {
-        let aborts = AbortCounter()
-        let progress = ProgressBox()
-        let watchdog = CoordinationWatchdog(
-            stallTimeout: 0.1,
-            pollInterval: 0.01,
-            isCancelled: { false },
-            progress: { progress.current },
-            abort: { aborts.increment() })
-
-        watchdog.start()
-        // Deutlich länger als das Zeitlimit, aber es geht ständig voran.
-        for step in 1...15 {
-            Thread.sleep(forTimeInterval: 0.02)
-            progress.current = Int64(step) * 1024
+        func signalOnce() {
+            lock.lock()
+            let shouldSignal = !signalled
+            signalled = true
+            lock.unlock()
+            if shouldSignal { expectation.fulfill() }
         }
-        XCTAssertEqual(aborts.count, 0, "Fortschritt darf nicht abgebrochen werden")
-        XCTAssertEqual(watchdog.finish(), .none)
-
-        // Und jetzt bleibt der Fortschritt stehen — dann greift das Zeitlimit.
-        let stalling = CoordinationWatchdog(
-            stallTimeout: 0.05,
-            pollInterval: 0.01,
-            isCancelled: { false },
-            progress: { progress.current },
-            abort: { aborts.increment() })
-        stalling.start()
-        waitUntil("Zeitlimit greift nach dem Stillstand") { aborts.count > 0 }
-        XCTAssertEqual(stalling.finish(), .stalled)
     }
 
     /// Nach `finish()` läuft kein Wächter-Thread mehr.
@@ -214,16 +225,4 @@ final class CoordinationWatchdogTests: XCTestCase {
         }
     }
 
-    private func waitUntil(
-        _ description: String,
-        timeout: TimeInterval = 5,
-        condition: @escaping @Sendable () -> Bool
-    ) {
-        // XCTest hält seinen Runloop aktiv; Sleep-Polling auf dem Testthread
-        // kann Hintergrundarbeit im belasteten Simulator verzögern.
-        let expectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in condition() }, object: nil)
-        expectation.expectationDescription = description
-        wait(for: [expectation], timeout: timeout)
-    }
 }

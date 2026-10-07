@@ -4,6 +4,9 @@ finished rendering of the buffer, while future presentation times and explicit S
 keep their behavior. A deterministic regression covers stale, future and missing
 timestamps; GitHub CI exposed the stale-timestamp case.
 
+iOS watchdog tests now separate deterministic timeout/cancellation decisions
+from asynchronous worker start and stop, avoiding unobserved scheduling assumptions.
+
 Savage Mod Player 1.6.28 fixes issues found in a full source review:
 concurrent audio sink start/stop, delayed notes, IT combined portamento and
 modern tempo changes, short explicit sample loops, corrupt S3M PCM headers,
