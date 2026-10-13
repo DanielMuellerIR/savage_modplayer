@@ -1,3 +1,14 @@
+Savage Mod Player 1.6.31 verwirft wartende Dateiimporte bei System-Play und
+System-Pause. Im Browser lässt sich auch der erste Ordnerimport bereits
+vor dem Laden eines Moduls mit Stop abbrechen.
+
+Savage Mod Player 1.6.30 hält die Browser-Steuerung auch beim URL-Titelwechsel
+während der ersten Audiovorbereitung mit dem aktiven Audiographen verbunden.
+Abspielen/Pause und Stopp im Notenfenster nutzen die zentrale Transportsteuerung
+und entwerten laufende Dateiimporte. Stereo- und Interpolationsänderungen erhalten
+die Notenvorschau ohne Neuberechnung. Linux-Releases finden AppImage und Prüfsumme
+am Standardpfad des Builders. Ein unerreichbarer ALSA-Selbst-Stop-Zweig entfällt.
+
 Savage Mod Player 1.6.29 lässt den letzten macOS-Audiopuffer auch dann auslaufen,
 wenn ein gültiger HAL-Zeitstempel bereits zurückliegt. Die Wartefrist beginnt
 frühestens nach dem Rendern; künftige Ausgabezeitpunkte und ausdrücklicher Stop

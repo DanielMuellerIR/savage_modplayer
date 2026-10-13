@@ -195,6 +195,7 @@ export class ModPlayer {
     this.gain = null;
     this.worklet = null;
     this.setupPromise = null;
+    this.graphRevision = 0;
     this.volume = 0.3;
     this.workletUrl = 'mod-player-worklet.js';
     this.rowCallbacks = [];
@@ -229,11 +230,12 @@ export class ModPlayer {
   async setupAudio() {
     if (this.worklet) return;
     if (this.setupPromise) return this.setupPromise;
-    this.setupPromise = this.createAudioGraph();
+    const promise = this.createAudioGraph();
+    this.setupPromise = promise;
     try {
-      await this.setupPromise;
+      await promise;
     } finally {
-      this.setupPromise = null;
+      if (this.setupPromise === promise) this.setupPromise = null;
     }
   }
 
@@ -247,6 +249,7 @@ export class ModPlayer {
 
   async createAudioGraph() {
     if (this.worklet) return;
+    const revision = this.graphRevision;
 
     if (!this.audio) {
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -255,6 +258,7 @@ export class ModPlayer {
     const ctx = this.audio;
 
     await this.tryResumeContext(250);
+    if (revision !== this.graphRevision) return;
 
     // Stumme Dummy-Source für iOS-Audio-Unlock.
     try {
@@ -265,14 +269,15 @@ export class ModPlayer {
       source.start(0);
     } catch (_) {}
 
-    this.gain = ctx.createGain();
-    this.gain.gain.value = this.volume * this.volume;
-
     const absoluteWorkletUrl = new URL(this.workletUrl, window.location.href).href;
     if (!ctx.__workletAdded) {
       await ctx.audioWorklet.addModule(absoluteWorkletUrl);
       ctx.__workletAdded = true;
     }
+    // unload() kann waehrend addModule() einen neuen Aufbau gestartet haben.
+    if (revision !== this.graphRevision) return;
+    this.gain = ctx.createGain();
+    this.gain.gain.value = this.volume * this.volume;
     this.worklet = new AudioWorkletNode(ctx, 'mod-player-worklet', {
       outputChannelCount: [2]
     });
@@ -347,13 +352,18 @@ export class ModPlayer {
   }
 
   unload() {
+    ++this.graphRevision;
     ++this.loadRevision;
     this.stop();
     if (this.worklet) {
       try { this.worklet.disconnect(); } catch (_) {}
     }
+    if (this.gain) {
+      try { this.gain.disconnect(); } catch (_) {}
+    }
     this.mod = null;
     this.worklet = null;
+    this.gain = null;
     this.setupPromise = null;
     this.playing = false;
     this.rowCallbacks = [];

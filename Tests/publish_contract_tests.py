@@ -1,5 +1,6 @@
 """Prüft Veröffentlichungsziele ohne Netzwerk, Push oder Accountzugriff."""
 from pathlib import Path
+import hashlib
 import json
 import os
 import shutil
@@ -13,11 +14,17 @@ COMMIT = "1" * 40
 
 
 class PublishContractTests(unittest.TestCase):
-    def run_publish(self, **variables):
+    def run_publish(self, appimage=False, checksum=True, **variables):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "build").mkdir()
             (root / "build/Savage Mod Player.dmg").touch()
+            if appimage:
+                asset = root / "build/Savage-Mod-Player-1.2.3-x86_64.AppImage"
+                asset.write_bytes(b"synthetic AppImage")
+                if checksum:
+                    asset.with_suffix(asset.suffix + ".sha256").write_text(
+                        hashlib.sha256(asset.read_bytes()).hexdigest() + "  " + asset.name + "\n")
             (root / "VERSION").write_text("1.2.3\n")
             (root / "build.py").write_text("")
             (root / "RELEASE_NOTES.md").write_text("Test release")
@@ -90,6 +97,19 @@ elif args[0]=='ls-remote': print(os.environ.get('REMOTE_TAG','1'*40)+'\\trefs/ta
         for call in gh:
             self.assertEqual(call[call.index("-R") + 1], "DanielMuellerIR/savage_modplayer")
         self.assertIn("--verify-tag", next(call for call in gh if call[1:3] == ["release", "create"]))
+
+    def test_appimage_at_builder_default_is_uploaded_with_checksum(self):
+        result, calls = self.run_publish(appimage=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        release = next(call for call in calls if call[:3] == ["gh", "release", "create"])
+        asset = "build/Savage-Mod-Player-1.2.3-x86_64.AppImage"
+        self.assertIn(asset, release)
+        self.assertIn(asset + ".sha256", release)
+
+    def test_appimage_without_checksum_aborts_before_push(self):
+        result, calls = self.run_publish(appimage=True, checksum=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(call[:2] == ["git", "push"] for call in calls))
 
     def test_mismatched_local_or_remote_tag_aborts_before_push(self):
         for key in ["LOCAL_TAG", "REMOTE_TAG"]:

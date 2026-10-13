@@ -10,20 +10,11 @@ extension MainView {
     // Play/Pause-Toggle: pausiert statt zu stoppen — resume() setzt nahtlos
     // fort. Endgueltiges Stoppen macht der separate Stop-Button (stopPlayback).
     func togglePlayback() {
-        playlistRequestID = UUID()
-        guard coordinator.activeMod != nil else { return }
-        if coordinator.isPaused {
-            coordinator.resume()
-        } else if coordinator.isPlaying {
-            coordinator.pause()
-        } else {
-            coordinator.play()
-        }
+        playbackActions.togglePlayback(coordinator: coordinator)
     }
 
     func stopPlayback() {
-        playlistRequestID = UUID()
-        coordinator.stop()
+        playbackActions.stopPlayback(coordinator: coordinator)
     }
 
     // Zufaelligen Playlist-Index liefern, der (wenn moeglich) nicht der

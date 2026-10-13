@@ -1,3 +1,14 @@
+Savage Mod Player 1.6.31 cancels pending file imports when system Play or Pause
+is used. The browser player also offers Stop during its first folder import,
+before a module has finished loading.
+
+Savage Mod Player 1.6.30 keeps browser transport controls connected to the active
+audio graph when URL loads overlap initial audio setup. The note window routes
+Play/Pause and Stop through the main transport, cancelling pending file imports.
+Stereo and interpolation changes retain the note preview without recalculating
+it. Linux release uploads now find the AppImage and checksum at the builder's
+default path. An unreachable ALSA self-stop branch was removed.
+
 Savage Mod Player 1.6.29 also drains the final macOS audio buffer when a valid
 HAL timestamp is already in the past. The deadline starts no earlier than the
 finished rendering of the buffer, while future presentation times and explicit Stop

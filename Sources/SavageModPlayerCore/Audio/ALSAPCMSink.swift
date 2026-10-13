@@ -327,7 +327,8 @@ public final class ALSAPCMSink: PCMSink, @unchecked Sendable {
     /// vorgang lang (der Thread haengt ggf. noch in `snd_pcm_writei`).
     public func stop() {
         // Ein Selbst-Stop darf nicht hinter einem fremden Stop warten, der
-        // seinerseits auf genau diesen Wiedergabe-Thread wartet.
+        // seinerseits auf genau diesen Wiedergabe-Thread wartet. Das Flag
+        // genuegt: Der Thread beendet sich nach der Rueckkehr aus dem Renderblock.
         cond.lock()
         if let thread = playbackThread, Thread.current === thread {
             if state != .finished {
@@ -365,14 +366,6 @@ public final class ALSAPCMSink: PCMSink, @unchecked Sendable {
         settleReasonLocked(.stopped)
         state = .stopping
         cond.broadcast()
-
-        // Sonderfall: stop() kam aus dem Renderblock, laeuft also auf dem
-        // Wiedergabe-Thread selbst. Dann duerfen wir nicht auf uns selbst warten
-        // — das Flag genuegt, der Thread sieht es gleich nach der Rueckkehr.
-        if let thread = playbackThread, Thread.current === thread {
-            cond.unlock()
-            return
-        }
 
         while state != .finished {
             cond.wait()

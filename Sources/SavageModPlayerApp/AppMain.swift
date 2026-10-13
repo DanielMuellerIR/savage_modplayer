@@ -28,6 +28,7 @@ enum AppInfo {
 @main
 struct SavageModPlayerApp: App {
     @StateObject private var coordinator = ModPlayerCoordinator()
+    @StateObject private var playbackActions = PlaybackActions()
     @StateObject private var noteRain = NoteRainModel()
     @StateObject private var noteRainWindow = NoteRainWindowState()
     @Environment(\.openWindow) private var openWindow
@@ -72,7 +73,7 @@ struct SavageModPlayerApp: App {
         // (via .onOpenURL) statt ein zweites zu erzeugen. WindowGroup hatte pro
         // geöffneter Datei ein neues, leeres Fenster gespawnt.
         Window(AppInfo.windowTitle, id: "main") {
-            MainView(coordinator: coordinator)
+            MainView(coordinator: coordinator, playbackActions: playbackActions)
                 // UI-Schriftfaktor an den Szenen-Root haengen — alle
                 // `.scaledFont(...)`-Aufrufe im Baum lesen ihn von hier.
                 .environment(\.uiFontScale, savageFontScale(uiZoom))
@@ -140,7 +141,7 @@ struct SavageModPlayerApp: App {
 
         #if os(macOS)
         Window("Notenregen", id: "note-rain") {
-            NoteRainView(coordinator: coordinator, model: noteRain, windowState: noteRainWindow)
+            NoteRainView(coordinator: coordinator, playbackActions: playbackActions, model: noteRain, windowState: noteRainWindow)
                 .environment(\.uiFontScale, savageFontScale(uiZoom))
         }
         .defaultSize(width: NoteRainWindowState.defaultWidth, height: 760)

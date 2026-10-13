@@ -147,7 +147,7 @@ fi
 
 if [[ "$DO_RELEASE" == "1" ]]; then
     ASSETS=("$DMG_PATH" "savage-mod-player.html")
-    APPIMAGE="build/linux/Savage-Mod-Player-${VERSION}-x86_64.AppImage"
+    APPIMAGE="build/Savage-Mod-Player-${VERSION}-x86_64.AppImage"
     if [[ -f "$APPIMAGE" ]]; then
         [[ -f "$APPIMAGE.sha256" ]] || { echo "AppImage-Prüfsumme fehlt." >&2; exit 1; }
         (cd "$(dirname "$APPIMAGE")" && shasum -a 256 -c "$(basename "$APPIMAGE").sha256")

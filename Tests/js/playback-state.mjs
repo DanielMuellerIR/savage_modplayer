@@ -78,13 +78,14 @@ const appSource = readFileSync(new URL('../../src/app.js', import.meta.url), 'ut
 const loadSource = appSource.slice(appSource.indexOf('async function loadFile('), appSource.indexOf('// HTML-Escaping'));
 const clickSource = appSource.slice(appSource.indexOf("playBtn.addEventListener('click'"), appSource.indexOf('// Drag/Klick auf der Timeline'));
 const dropSource = appSource.slice(appSource.indexOf("window.addEventListener('drop'"), appSource.indexOf('// Sammelt alle Files'));
+const playingUISource = appSource.slice(appSource.indexOf('function setPlayingUI('), appSource.indexOf('// Verbindet die Worklet-Events'));
 const callbackSource = appSource.slice(appSource.indexOf('function setUpPlayerCallbacks()'), appSource.indexOf('function renderInstruments()'));
 const createUI = new Function('parseModBuffer', `
   let currentMod = null, currentFile = null, currentPosition = 0, currentRow = 0;
   let loadRevision = 0, playRequested = false;
   const modList = [], WORKLET_BLOB_URL = 'test';
   const titleEl = {}, statusName = {}, statusFile = {}, positionScrubber = {};
-  const playBtn = { addEventListener(_, fn) { this.click = fn; } };
+  const playBtn = { disabled: true, addEventListener(_, fn) { this.click = fn; } };
   let selectedFile = null, playingUI = false, error = null;
   const player = {
     playing: false, mod: null, stop() { this.playing = false; },
@@ -109,13 +110,26 @@ const createUI = new Function('parseModBuffer', `
   function renderInstruments() {}
   function renderPattern() {}
   function syncModSelectSelection(file) { selectedFile = file; }
-  function setPlayingUI(playing) { playingUI = playing; }
+  const statusState = {style: {}}, footerState = {style: {}};
+  ${playingUISource.replace('{', '{ playingUI = isPlaying;')}
   function showError(message) { error = message; }
   ${loadSource}
   ${clickSource}
   ${dropSource}
   return { drop: window.drop, loadFile, modList, playBtn, player, state: () => ({currentFile, selectedFile, playingUI, error}) };
 `);
+const fresh = createUI(parseModBuffer);
+let finishFirstDrop;
+const firstDrop = fresh.drop({ preventDefault() {}, dataTransfer: {
+  collect: () => new Promise(resolve => { finishFirstDrop = resolve; }), files: []
+} });
+assert.equal(fresh.playBtn.disabled, false, 'Erster wartender Drop bietet bedienbares Stop');
+await fresh.playBtn.click();
+assert.equal(fresh.playBtn.disabled, true, 'Abbruch ohne Modul stellt deaktiviertes Play wieder her');
+finishFirstDrop([{name: 'first.mod', arrayBuffer: async () => { throw new Error('Alter Drop gelesen'); }}]);
+await firstDrop;
+assert.equal(fresh.player.playing, false, 'Erster Drop darf nach Abbruch nicht starten');
+assert.equal(fresh.state().currentFile, null);
 const ui = createUI(parseModBuffer);
 const fileData = new Uint8Array(2108); fileData[950] = 1; fileData.set([77,46,75,46], 1080);
 let finishRead;
@@ -220,6 +234,67 @@ console.log('UI-Songende: Auto-Next bleibt nach erfolgreichem Start aktiv.');
 const setUI = appSource.slice(appSource.indexOf('function setPlayingUI('),
   appSource.indexOf('// Verbindet die Worklet-Events', appSource.indexOf('function setPlayingUI(')));
 const levels = [0.8, 0.4, 0.2, 1];
-new Function('vuTargets', 'playBtn', 'statusState', 'footerState', 'statusBpm', 'statusSpeed',
-  setUI + '\nsetPlayingUI(false);')(levels, {}, {style:{}}, {style:{}}, {}, {});
+new Function('currentMod', 'vuTargets', 'playBtn', 'statusState', 'footerState', 'statusBpm', 'statusSpeed',
+  setUI + '\nsetPlayingUI(false);')(null, levels, {}, {style:{}}, {style:{}}, {}, {});
 assert.deepEqual(levels, [0, 0, 0, 0], 'Stop muss VU-Zielpegel zurücksetzen');
+
+// URL-Wechsel entwertet auch den Aufbau des Graphen, nicht nur play().
+for (const oldFirst of [true, false]) {
+  const previousFetch = globalThis.fetch;
+  const previousWindow = globalThis.window;
+  const previousNode = globalThis.AudioWorkletNode;
+  try {
+    const completions = [], nodes = [];
+    globalThis.fetch = async () => ({ ok: true, arrayBuffer: async () => fileData.buffer });
+    globalThis.window = { location: { href: 'http://localhost/' } };
+    globalThis.AudioWorkletNode = class {
+      constructor() {
+        this.messages = [];
+        this.port = { postMessage: message => this.messages.push(message) };
+        nodes.push(this);
+      }
+      connect(gain) { this.connected = true; return gain; }
+      disconnect() { this.connected = false; }
+    };
+    const switching = new ModPlayer();
+    switching.audio = {
+      state: 'running', sampleRate: 8000, destination: {},
+      audioWorklet: { addModule: () => new Promise(resolve => completions.push(resolve)) },
+      createBuffer: () => ({}),
+      createBufferSource: () => ({ connect() {}, start() {} }),
+      createGain: () => ({ gain: {}, connect() {}, disconnect() {} })
+    };
+    switching.setMod(mod);
+    const oldStart = switching.play();
+    while (completions.length < 1) await Promise.resolve();
+    await switching.load('next.mod');
+    const newStart = switching.play();
+    while (completions.length < 2) await Promise.resolve();
+    const currentSetup = switching.setupPromise;
+    if (oldFirst) {
+      completions[0]();
+      assert.equal(await oldStart, false);
+      assert.equal(switching.setupPromise, currentSetup, 'Alter Aufbau darf das neue Setup-Promise nicht loeschen');
+      assert.equal(nodes.length, 0, 'Veralteter Aufbau darf keinen Node verbinden');
+      completions[1]();
+      assert.equal(await newStart, true);
+    } else {
+      completions[1]();
+      assert.equal(await newStart, true);
+      const activeNode = switching.worklet;
+      completions[0]();
+      assert.equal(await oldStart, false);
+      assert.equal(switching.worklet, activeNode, 'Alter Aufbau darf den aktiven Node nicht ersetzen');
+    }
+    assert.equal(nodes.length, 1);
+    switching.stop();
+    assert.equal(nodes[0].messages.at(-1).type, 'stop', 'Stop muss den gestarteten Node erreichen');
+    switching.unload();
+    assert.equal(nodes[0].connected, false);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.window = previousWindow;
+    globalThis.AudioWorkletNode = previousNode;
+  }
+}
+console.log('Audio-Graph: ueberlappender URL-Wechsel in beiden Abschlussreihenfolgen bestanden.');

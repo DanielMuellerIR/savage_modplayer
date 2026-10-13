@@ -33,6 +33,7 @@ enum LoopMode: String, CaseIterable, Identifiable {
 
 struct MainView: View {
     @ObservedObject var coordinator: ModPlayerCoordinator
+    @ObservedObject var playbackActions: PlaybackActions
     // Theme, Lautstaerke und loopMode ueber Neustarts hinweg merken (@AppStorage).
     @AppStorage("savage.theme") var theme: PlayerTheme = .cyber
     @AppStorage("savage.volume") var volume: Double = 0.6
@@ -76,7 +77,10 @@ struct MainView: View {
     // (Tiefensuche durch den Baum) — Weiter/Zurueck/Shuffle/Loop arbeiten
     // damit unveraendert ueber alle Ordner hinweg.
     @State var playlist: [URL] = []
-    @State var playlistRequestID = UUID()
+    var playlistRequestID: UUID {
+        get { playbackActions.fileRequestID }
+        nonmutating set { playbackActions.fileRequestID = newValue }
+    }
     @State var loadedModuleID = UUID()
     @State var currentPlaylistIndex: Int = -1
     // Hierarchische Anzeige: Ordner-/Archiv-Baum der aktuellen Playlist,
@@ -475,15 +479,10 @@ struct MainView: View {
             }
             // Media-Tasten: explizites Play/Pause (im Gegensatz zum Toggle).
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("mediaPlay")).receive(on: DispatchQueue.main)) { _ in
-                if coordinator.isPaused {
-                    coordinator.resume()
-                } else if !coordinator.isPlaying {
-                    togglePlayback()
-                }
+                playbackActions.playPlayback(coordinator: coordinator)
             }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("mediaPause")).receive(on: DispatchQueue.main)) { _ in
-                playlistRequestID = UUID()
-                coordinator.pause()
+                playbackActions.pausePlayback(coordinator: coordinator)
             }
             // "Now Playing"-Infos fuer die Media-Tasten-Zuordnung aktuell halten.
             .onChange(of: coordinator.isPaused) { _ in updateNowPlayingInfo() }

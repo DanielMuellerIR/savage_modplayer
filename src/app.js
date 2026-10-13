@@ -160,13 +160,13 @@ volumeSlider.addEventListener('input', (e) => {
 });
 
 playBtn.addEventListener('click', async () => {
-  if (!currentMod) return;
   if (player.playing || playRequested) {
     ++loadRevision;
     playRequested = false;
     player.stop();
     setPlayingUI(false);
   } else {
+    if (!currentMod) return;
     const revision = ++loadRevision;
     playRequested = true;
     setPlayingUI(true);
@@ -500,6 +500,7 @@ function showError(msg) {
 }
 
 function setPlayingUI(isPlaying) {
+  playBtn.disabled = !isPlaying && !currentMod;
   playBtn.textContent = isPlaying ? 'STOP' : 'PLAY AUDIO';
   statusState.textContent = isPlaying ? 'PLAYING' : 'STOPPED';
   statusState.style.color = isPlaying ? '#008800' : '#888';

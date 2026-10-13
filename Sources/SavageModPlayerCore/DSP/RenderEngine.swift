@@ -1002,7 +1002,9 @@ public enum RenderEngine {
             }
             if safeFrameCount > 0,
                let options = state.takePendingRenderOptions() {
-                state.notePreviewExchange?.append(.init(kind: .options, palClock: options.palClock))
+                if options.palClock != state.palClock {
+                    state.notePreviewExchange?.append(.init(kind: .options, palClock: options.palClock))
+                }
                 state.stereoSeparation = options.stereoSeparation
                 state.useInterpolation = options.useInterpolation
                 state.palClock = options.palClock

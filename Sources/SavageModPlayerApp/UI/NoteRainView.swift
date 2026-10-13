@@ -3,6 +3,7 @@ import SavageModPlayerCore
 
 struct NoteRainView: View {
     @ObservedObject var coordinator: ModPlayerCoordinator
+    @ObservedObject var playbackActions: PlaybackActions
     @ObservedObject var model: NoteRainModel
     @ObservedObject var windowState: NoteRainWindowState
     @AppStorage("savage.theme") private var theme: PlayerTheme = .cyber
@@ -155,7 +156,7 @@ struct NoteRainView: View {
             .help(coordinator.isPlaying && !coordinator.isPaused ? "Pause" : "Abspielen")
             .accessibilityLabel(coordinator.isPlaying && !coordinator.isPaused ? "Pause" : "Abspielen")
             .disabled(coordinator.activeMod == nil)
-            Button { coordinator.stop() } label: {
+            Button(action: stopPlayback) {
                 Image(systemName: "stop.fill").frame(width: 18, height: 18)
             }.help("Stopp").accessibilityLabel("Stopp").disabled(!coordinator.isPlaying)
         }.controlSize(.small).fixedSize(horizontal: true, vertical: false)
@@ -191,9 +192,11 @@ struct NoteRainView: View {
     }
 
     private func togglePlayback() {
-        if coordinator.isPaused { coordinator.resume() }
-        else if coordinator.isPlaying { coordinator.pause() }
-        else { coordinator.play() }
+        playbackActions.togglePlayback(coordinator: coordinator)
+    }
+
+    private func stopPlayback() {
+        playbackActions.stopPlayback(coordinator: coordinator)
     }
 
     private func updateMuteState() {

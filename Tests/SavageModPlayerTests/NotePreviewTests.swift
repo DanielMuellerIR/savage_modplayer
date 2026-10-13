@@ -115,6 +115,34 @@ final class NotePreviewTests: XCTestCase {
         XCTAssertEqual(notes[1].start, 0.08, accuracy: 1 / rate)
     }
 
+    func testOnlyClockChangesInvalidatePreviewWhenRenderOptionsChange() throws {
+        let module = mod([[note()], [note(381)], [empty]])
+        let state = RenderEngine.makeRenderState(for: module, sampleRate: rate)
+        let exchange = NotePreviewExchange(capacity: 2)
+        state.notePreviewExchange = exchange
+        let channels = RenderEngine.makeRenderChannels(for: module)
+        let visualization = RealtimeVisualizationExchange(channelCapacity: 1)
+        let render = RenderEngine.createRenderBlock(state: state, vuBuffer: visualization.makeVUBuffer(),
+            waveBuffer: visualization.makeWaveBuffer(), dspChannels: channels, mod: module, sampleRate: rate)
+        let buffer = StereoRenderBuffer(capacity: 16)
+        for index in 0..<100 {
+            state.requestRenderOptions(stereoSeparation: Float(index) / 100,
+                useInterpolation: index.isMultiple(of: 2), palClock: true)
+            render(16, buffer.left, buffer.right)
+        }
+        XCTAssertFalse(exchange.hasOverflowed)
+        XCTAssertTrue(exchange.takeCommands().isEmpty)
+        XCTAssertEqual(state.stereoSeparation, 0.99)
+        XCTAssertFalse(state.useInterpolation)
+        state.requestRenderOptions(stereoSeparation: 0.5, useInterpolation: true, palClock: false)
+        render(16, buffer.left, buffer.right)
+        let commands = exchange.takeCommands()
+        XCTAssertEqual(commands.count, 1)
+        XCTAssertEqual(commands.first?.kind, .options)
+        XCTAssertEqual(commands.first?.frame, 1_600)
+        XCTAssertEqual(commands.first?.palClock, false)
+    }
+
     func testControlRingReportsOverflowAndReusesConsumedSlots() {
         let exchange = NotePreviewExchange(capacity: 2)
         exchange.append(.init(bpm: 125))
