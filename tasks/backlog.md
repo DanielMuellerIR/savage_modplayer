@@ -1,11 +1,17 @@
 # Aktiver Projekt-Backlog
 
-Stand: 2026-10-07 · Version 1.6.29.
+Stand: 2026-10-16 · Version 1.6.32.
 
 Diese Datei ist die einzige aktive Projektliste. Erledigte Chronik liegt in
 Release Notes, abgeschlossenen Tasks und `archive/`.
 
 ## Priorisiert
+
+- **Sparkle-Erstveröffentlichung und Abnahme:** GitHub Pages samt Tag-Deployments
+  und Actions-Secret einrichten, 1.6.32 notarisiert veröffentlichen und einen
+  echten Update-Austausch von einer älteren Sparkle-fähigen Testfassung prüfen.
+  Integration und Feed-Workflow sind vorbereitet; Ablauf in
+  [Sparkle-Releases](../docs/sparkle-release.md).
 
 0. **Gerätetest der iPhone-App: verbleibende Abnahmen.** Auf einem echten iPhone stehen
    noch Dateiziehen aus der Dateien-App, Wiederanlauf der Visualisierungen nach

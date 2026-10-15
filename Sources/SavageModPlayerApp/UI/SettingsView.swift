@@ -3,10 +3,8 @@ import SwiftUI
 import AppKit
 
 // Einstellungs-Fenster (macOS-Standard: App-Menue > Einstellungen, Cmd+,).
-// Aktuell eine Einstellung: der Autoplay-Ordner, aus dem die Playlist beim
-// App-Start befuellt wird. Leer = nur die audio/-Fallback-Ordner neben
-// Arbeitsverzeichnis bzw. App werden probiert (Verhalten ohne Konfiguration).
 struct SettingsView: View {
+    @ObservedObject var updates: UpdateController
     // Gleicher Schluessel wie in MainView.loadLocalAudioFolder — @AppStorage
     // haelt beide Stellen automatisch synchron.
     @AppStorage("savage.autoplayFolder") private var autoplayFolderPath: String = ""
@@ -50,6 +48,19 @@ struct SettingsView: View {
                     }
                 }
                 Text("Wie oft Pegel, Oszilloskope und Spielzeit neu gezeichnet werden. Nicht der Klang hängt daran, sondern die Rechenlast der Oberfläche: Auf einem Mac mit M5-Chip kostete dieselbe Wiedergabe bei 30 Hz rund 22 % eines Kerns, bei 15 Hz rund 18 % und bei 10 Hz rund 14 %. Die Änderung wirkt sofort. Im kompakten Fenster bleibt es unabhängig davon bei 5 Hz, weil dort keine Oszilloskope zu sehen sind.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+
+            Section("Updates") {
+                Toggle("Automatisch nach Updates suchen", isOn: Binding(
+                    get: { updates.automaticallyChecksForUpdates },
+                    set: { updates.setAutomaticChecks($0) }
+                ))
+                .disabled(!updates.isAvailable)
+                Button("Nach Updates suchen…", action: updates.checkForUpdates)
+                    .disabled(!updates.canCheckForUpdates)
+                Text("Neue Versionen werden nur nach Bestätigung installiert. Es werden keine Systemprofildaten übertragen.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }

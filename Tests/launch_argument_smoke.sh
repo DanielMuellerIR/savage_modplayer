@@ -157,11 +157,11 @@ run_case() {
         # Der Weg von Finder und Dock: LaunchServices schickt ein Apple-Event,
         # kein argv. `-g` laesst die App im Hintergrund, `-n` erzwingt eine
         # frische Instanz.
-        open -g -n -a "$APP" "$@" --args -SavageSmokeRun "$RUN_ID"
+        open -g -n -a "$APP" "$@" --args -SavageSmokeRun "$RUN_ID" -SUEnableAutomaticChecks NO
         sleep 1
         while IFS= read -r test_pid; do TEST_PIDS+=("$test_pid"); done < <(pgrep -f "$RUN_ID" || true)
     else
-        "$BIN" -ApplePersistenceIgnoreState YES -SavageSmokeRun "$RUN_ID" "$@" >"$WORK/app.log" 2>&1 &
+        "$BIN" -ApplePersistenceIgnoreState YES -SavageSmokeRun "$RUN_ID" -SUEnableAutomaticChecks NO "$@" >"$WORK/app.log" 2>&1 &
         pid=$!
         TEST_PIDS+=("$pid")
         disown "$pid" 2>/dev/null

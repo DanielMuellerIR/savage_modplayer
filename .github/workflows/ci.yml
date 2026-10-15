@@ -31,6 +31,7 @@ jobs:
         run: |
           python3 Tests/build_script_tests.py
           python3 Tests/publish_contract_tests.py
+          python3 Tests/sparkle_contract_tests.py
           python3 Tests/launch_smoke_contract_tests.py
           python3 Tests/desktop_entry_tests.py
           python3 Tests/reference_compare_tests.py

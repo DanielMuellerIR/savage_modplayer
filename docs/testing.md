@@ -94,6 +94,19 @@ lassen, sonst prüfen sie stillschweigend das alte Binary.
 
 ## Native App und Quick Look
 
+### Sparkle-Updates
+
+`python3 Tests/sparkle_contract_tests.py` prüft signierte Feeds und Archive,
+Manipulationen, falsche Schlüssel und die Ablehnung alter Releases/Prereleases.
+Nach dem App-Build zusätzlich Framework-rpath, Lizenz und verschachtelte
+Signaturen prüfen. `scripts/verify-sparkle-release.sh` prüft ein notarisiertes
+Release-DMG vor der Feed-Signatur; `scripts/verify-sparkle-feed.swift` prüft Feed
+und Archiv gegen den öffentlichen Schlüssel aus dem ausgelieferten Bundle.
+Abschließend Menü, Update-Einstellungen und einen echten App-Austausch auf einem
+Test-Mac prüfen. Setup und Bootstrap-Grenze stehen in `docs/sparkle-release.md`.
+
+### App-Bundle
+
 `bash build_app.sh` baut die Release-App und die Quick-Look-Appex. Ein bloßes
 `swift build` deckt Extension, Signatur und Bundle-Integration nicht ab.
 `python3 Tests/ui_source_tests.py` schützt zusätzlich die Pflichtbedienelemente

@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import SavageModPlayerCore
 #if canImport(AppKit)
 import AppKit

@@ -27,6 +27,7 @@ enum AppInfo {
 
 @main
 struct SavageModPlayerApp: App {
+    @StateObject private var updates = UpdateController()
     @StateObject private var coordinator = ModPlayerCoordinator()
     @StateObject private var playbackActions = PlaybackActions()
     @StateObject private var noteRain = NoteRainModel()
@@ -100,6 +101,11 @@ struct SavageModPlayerApp: App {
                 }
             }
 
+            CommandGroup(after: .appInfo) {
+                Button("Nach Updates suchen…", action: updates.checkForUpdates)
+                    .disabled(!updates.canCheckForUpdates)
+            }
+
             CommandMenu("Wiedergabe") {
                 Button("Abspielen / Pause") {
                     NotificationCenter.default.post(name: NSNotification.Name("menuPlayStop"), object: nil)
@@ -146,10 +152,9 @@ struct SavageModPlayerApp: App {
         }
         .defaultSize(width: NoteRainWindowState.defaultWidth, height: 760)
 
-        // Natives Einstellungs-Fenster (App-Menue > Einstellungen, Cmd+,) —
-        // aktuell nur der Autoplay-Ordner fuer die Start-Playlist.
+        // Gemeinsame Einstellungen für Wiedergabe, Darstellung und Updates.
         Settings {
-            SettingsView()
+            SettingsView(updates: updates)
         }
         #endif
     }

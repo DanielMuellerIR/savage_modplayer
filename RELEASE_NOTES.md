@@ -1,3 +1,9 @@
+Savage Mod Player 1.6.32 adds Sparkle updates to the macOS app, with a manual
+check in the app menu and automatic checks controlled in Settings. Installation
+requires confirmation; update archives and the feed are signed. Existing versions
+need one manual DMG installation. The release workflow prepares the signed feed
+for GitHub Pages; its initial setup is documented in `docs/sparkle-release.md`.
+
 Savage Mod Player 1.6.31 cancels pending file imports when system Play or Pause
 is used. The browser player also offers Stop during its first folder import,
 before a module has finished loading.

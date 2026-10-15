@@ -6,17 +6,25 @@ import PackageDescription
 // dort bleiben Core, CLI und Tests übrig. Ohne diesen Schalter versuchte
 // `swift build` unter Linux SwiftUI zu importieren und scheiterte.
 #if os(macOS)
+// Updates ersetzen die installierte App; Versionswechsel werden bewusst geprüft.
+let appDependencies: [Package.Dependency] = [
+    .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0")
+]
 let appProducts: [Product] = [
     .executable(name: "SavageModPlayerApp", targets: ["SavageModPlayerApp"])
 ]
 let appTargets: [Target] = [
     .executableTarget(
         name: "SavageModPlayerApp",
-        dependencies: ["SavageModPlayerCore"],
-        path: "Sources/SavageModPlayerApp"
+        dependencies: ["SavageModPlayerCore", .product(name: "Sparkle", package: "Sparkle")],
+        path: "Sources/SavageModPlayerApp",
+        linkerSettings: [
+            .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Frameworks"])
+        ]
     )
 ]
 #else
+let appDependencies: [Package.Dependency] = []
 let appProducts: [Product] = []
 let appTargets: [Target] = []
 #endif
@@ -56,6 +64,7 @@ let package = Package(
         .executable(name: "savage-cli", targets: ["SavageCLI"]),
         .library(name: "SavageModPlayerCore", targets: ["SavageModPlayerCore"])
     ],
+    dependencies: appDependencies,
     targets: appTargets + mediaTargets + [
         // Kleine C11-Atomik-Bruecke fuer den Echtzeit-Renderzustand. Swifts
         // Synchronization.Atomic ist erst ab macOS 15 verfuegbar; die App

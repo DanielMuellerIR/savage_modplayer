@@ -30,6 +30,8 @@ No variant bundles any module files. Songs are loaded via drag & drop, the file 
 
 Ready-made builds of the macOS app are available as notarized DMGs on the [releases page](https://github.com/DanielMuellerIR/savage_modplayer/releases). Download the DMG, open it, and drag the app into your Applications folder.
 
+From 1.6.32, the macOS app includes Sparkle updates: **Savage Mod Player → Nach Updates suchen…** checks manually, and **Settings → Updates** controls automatic checks. Each installation requires confirmation. Downloads and the update feed are signed; system profiling is disabled. Older versions need one manual DMG installation to gain the updater. The release setup is described in [Sparkle releases](docs/sparkle-release.md).
+
 The HTML5 player needs no download beyond the repository itself: simply open `savage-mod-player.html` in a browser.
 
 The iPhone app is not distributed as a ready-made build. It is sideloaded with your own Apple developer team — see [iPhone app](#iphone-app-1) under Build.

@@ -37,6 +37,20 @@ mkdir -p "$RESOURCES_DIR"
 # Copy release binary
 cp "$SWIFT_RELEASE_DIR/SavageModPlayerApp" "$MACOS_DIR/"
 
+# SwiftPM linkt Sparkle, bettet es aber nicht in das manuelle App-Bundle ein.
+# ditto erhält die Versions-Symlinks und ausführbaren Dateien des Frameworks.
+SPARKLE_SOURCE="$(find .build/artifacts/sparkle -type d -name Sparkle.framework -print -quit)"
+SPARKLE_LICENSE="$(find .build/artifacts/sparkle -type f -name LICENSE -print -quit)"
+[[ -n "$SPARKLE_SOURCE" && -n "$SPARKLE_LICENSE" ]] || {
+    echo "ABBRUCH: Sparkle-Framework oder Lizenz fehlt nach dem Build." >&2; exit 1;
+}
+SPARKLE_FRAMEWORK="$CONTENTS_DIR/Frameworks/Sparkle.framework"
+mkdir -p "$CONTENTS_DIR/Frameworks"
+ditto "$SPARKLE_SOURCE" "$SPARKLE_FRAMEWORK"
+# Nur die Quick-Look-Extension ist sandboxed; die App braucht keine Sparkle-XPC-Dienste.
+rm -rf "$SPARKLE_FRAMEWORK/Versions/B/XPCServices" "$SPARKLE_FRAMEWORK/XPCServices"
+cp "$SPARKLE_LICENSE" "$RESOURCES_DIR/Sparkle-LICENSE.txt"
+
 # --- Quick-Look-Extension (Appex) bauen -------------------------------------
 # SwiftPM kann keine .appex-Bundles erzeugen, deshalb kompiliert swiftc die
 # Extension direkt: Core-Quellen + PreviewProvider werden zu EINEM Modul
@@ -174,6 +188,22 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
     <!-- Eigener Key: Datum dieses Builds; im Fenstertitel angezeigt. -->
     <key>BuildDate</key>
     <string>$BUILD_DATE</string>
+    <key>SUFeedURL</key>
+    <string>https://danielmuellerir.github.io/savage_modplayer/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>pYGH1qrZjUlXWcvLdYfyNgV9d8khfUUgh8JEpSbejO4=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUAutomaticallyUpdate</key>
+    <false/>
+    <key>SUAllowsAutomaticUpdates</key>
+    <false/>
+    <key>SUEnableSystemProfiling</key>
+    <false/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
+    <key>SURequireSignedFeed</key>
+    <true/>
     <!-- Erscheint unten im nativen "Über"-Panel -->
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 Daniel Müller</string>
@@ -292,12 +322,25 @@ while IFS= read -r macho; do
     case "$(file -b "$macho")" in
         Mach-O*) strip -S "$macho" ;;
     esac
-done < <(find "$APP_DIR" -type f \( -name '*.dylib' -o -name '*.so' -o -perm +111 \))
+done < <(find "$APP_DIR" -path "$CONTENTS_DIR/Frameworks" -prune -o -type f \( -name '*.dylib' -o -name '*.so' -o -perm +111 \) -print)
+
+sign_sparkle() {
+    local target
+    # Jede Signaturgrenze von innen nach außen; --deep würde Metadaten verlieren.
+    for target in \
+        "$SPARKLE_FRAMEWORK/Versions/B/Autoupdate" \
+        "$SPARKLE_FRAMEWORK/Versions/B/Updater.app" \
+        "$SPARKLE_FRAMEWORK"
+    do
+        codesign --force "$@" "$target"
+    done
+}
 
 if [[ "$SIGN_APP" != "0" ]]; then
     echo "=== Checking code signing identity ==="
     if security find-identity -v -p codesigning | grep -Fq "$CODESIGN_IDENTITY"; then
         echo "=== Signing App Bundle ==="
+        sign_sparkle --options runtime --timestamp --sign "$CODESIGN_IDENTITY"
         # Reihenfolge wichtig: erst die Extension MIT ihren Sandbox-
         # Entitlements, dann die App OHNE --deep. Ein --deep auf der App
         # wuerde den Appex neu signieren und dabei dessen Entitlements
@@ -317,6 +360,7 @@ if [[ "$SIGN_APP" != "0" ]]; then
         echo "Tipp: REQUIRE_CODESIGN=1 bash build_app.sh erzwingt Signatur fuer Releases."
         # Ad-hoc-Signatur reicht lokal, damit Quick Look den sandboxten Appex
         # laedt (ganz unsigniert wird die Extension ignoriert).
+        sign_sparkle --sign -
         codesign --force --entitlements "$QL_ENTITLEMENTS" --sign - \
             "$APP_DIR/Contents/PlugIns/SavageModPlayerQuickLook.appex"
         codesign --force --sign - "$APP_DIR"
