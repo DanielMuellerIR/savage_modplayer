@@ -73,3 +73,18 @@ swift scripts/verify-sparkle-feed.swift /tmp/savage-update/appcast.xml \
 Dabei muss `/tmp/savage-update` vorher genau das Test-DMG und optional Release
 Notes mit gleichem Basisnamen enthalten. Der Lauf veröffentlicht nichts und
 ersetzt weder Notarisierung noch den abschließenden Installationsversuch.
+
+## Verifizierter Update-Lauf
+
+Am 2026-10-16 fand eine separat installierte, Developer-ID-signierte und
+notarisierte Testkopie mit zurückgesetzter Versions- und Buildnummer 1.6.31
+über den öffentlichen Feed die Version 1.6.32. **Install Update** lud das
+Release-DMG; **Install and Relaunch** ersetzte die App und startete 1.6.32
+mit einer neuen Prozess-ID. Das gestartete Binary war bytegleich mit dem
+Release-Bundle. Verschachtelte Signaturen, angeheftetes Notary-Ticket und
+Gatekeeper wurden nach dem Austausch erneut erfolgreich geprüft.
+
+Vorhandene Installationen blieben erhalten. Die Test-App wurde anschließend
+beendet und entfernt, die vorher gesicherten Einstellungen wurden vollständig
+wiederhergestellt. Das DMG-Layout wurde visuell mit 600 × 600 Punkten und den
+vorgesehenen Icon-Positionen geprüft.

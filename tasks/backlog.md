@@ -7,12 +7,6 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
 
 ## Priorisiert
 
-- **Sparkle-Erstveröffentlichung und Abnahme:** GitHub Pages samt Tag-Deployments
-  und Actions-Secret einrichten, 1.6.32 notarisiert veröffentlichen und einen
-  echten Update-Austausch von einer älteren Sparkle-fähigen Testfassung prüfen.
-  Integration und Feed-Workflow sind vorbereitet; Ablauf in
-  [Sparkle-Releases](../docs/sparkle-release.md).
-
 0. **Gerätetest der iPhone-App: verbleibende Abnahmen.** Auf einem echten iPhone stehen
    noch Dateiziehen aus der Dateien-App, Wiederanlauf der Visualisierungen nach
    Scrollen/Tabwechsel, Großarchivimport und ein zehnminütiger Dauerlauf mit
