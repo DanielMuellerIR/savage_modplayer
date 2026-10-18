@@ -945,9 +945,10 @@ Das entspricht rund 39 Prozent weniger Renderzeit. WAV und Float-PCM bleiben
 bytegleich. Eine zuvor deutlich höhere Fremdlast verfälschte den ersten
 Vergleich; dessen Werte werden nicht als Geschwindigkeitsgewinn gewertet.
 Die Messung belegt keine Echtzeitfähigkeit unter beliebiger CPU-Last oder auf
-jedem Rechner. Der öffentliche CI-Lauf von 1.6.52 lag noch bei etwa 2,03 Sekunden;
-1.6.53 muss beim nächsten öffentlichen Push zusätzlich auf diesem Runner
-bestätigt werden.
+jedem Rechner. Der öffentliche CI-Lauf von 1.6.52 lag noch bei etwa 2,03 Sekunden.
+Der [Linux-CI-Job von 1.6.53](https://github.com/DanielMuellerIR/savage_modplayer/actions/runs/39153713116/job/117752443551)
+besteht mit 671 Tests, zehn Auslassungen und keinem Fehler. Sein vorbereiteter
+Callback benötigt 1,228 Sekunden bei unveränderter 1,960784-Sekunden-Grenze.
 
 Die Einrichtung mit 20.000 Titeln benötigt auf dem kontrollierten Mac etwa
 20–31 Sekunden; die längste Hauptthread-Pause bleibt unter 0,5 Sekunden.

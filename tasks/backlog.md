@@ -13,8 +13,8 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
    ebenso die gemessene Hauptthread-Reaktion. Der getrennte Linux-Renderpfad
    ist mit 1.6.53 optimiert: etwa 1,05 statt 1,70–1,74 Sekunden im direkten
    Vergleich, bei unveränderter 1,96-Sekunden-Grenze und bytegleichem PCM.
-   Den nächsten öffentlichen CI-Lauf zusätzlich bestätigen; Grenzwerte und
-   Prüfungen bleiben aktiv.
+   Der öffentliche Linux-CI-Job besteht mit 1,228 Sekunden Renderzeit und
+   671 Tests ohne Fehler. Grenzwerte und Prüfungen bleiben aktiv.
    [Prüfstand und Grenzen](../docs/testing.md#performance-abnahme-und-geteilte-ci-runner).
 
 0. **Gerätetest der iPhone-App: verbleibende Abnahmen.** Auf einem echten iPhone stehen
