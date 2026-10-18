@@ -409,6 +409,19 @@ Der Kern (`ZipArchiveReader`, `MusicLibrary`, `LibraryImporter`,
 SwiftPM-Suite mit `swift test` — plattformneutral und ohne Simulator. Im
 Simulator läuft nur, was ohne iOS nicht prüfbar ist.
 
+### Wartezeiten der Sammlungs-Dateitests
+
+`CollectionExchangeTests` wartet beim Startabgleich höchstens 30 Sekunden.
+Import und Nachlauf dürfen die 60-Sekunden-Frist des File-Provider-Lesers
+einschließlich zehn Sekunden für die Rückmeldung ausschöpfen. Andere
+Zustandswechsel behalten zehn Sekunden. Titelbestand, Speicherdaten und
+Wiedergabezustand werden weiterhin vollständig geprüft.
+
+Wartevorgänge ab einer Sekunde erscheinen mit tatsächlicher Dauer, Budget und
+Ergebnis im Testprotokoll. Bei einem Fehler nennt der Test die Aufrufstelle
+und den Bibliotheks-/Dialogzustand. `ios/scripts/run-tests.sh` gibt diese
+Messzeilen auch im CI-Protokoll aus.
+
 ### iPad-Layout ansehen
 
 Das zweispaltige Layout hängt an der horizontalen Größenklasse, nicht am Gerät.

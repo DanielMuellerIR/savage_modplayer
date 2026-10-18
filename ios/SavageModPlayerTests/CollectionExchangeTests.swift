@@ -25,7 +25,7 @@ final class CollectionExchangeTests: XCTestCase {
         for (key, value) in CollectionExchangeSoundPreferences.values(settings.playbackOptions, prefix: "savage.ios.") { defaults.set(value, forKey: key) }
         defaults.set(0.37, forKey: "savage.ios.volume")
         let library = LibraryStore(defaults: defaults, library: core); library.start()
-        try await wait { !library.isBusy && library.tracks.count == 3 }
+        try await wait(timeout: 30) { !library.isBusy && library.tracks.count == 3 }
         persistence = try .init(playlistsURL: root.appendingPathComponent("playlists.json"), markersURL: root.appendingPathComponent("markers.json"),
                                 trackSettingsURL: root.appendingPathComponent("settings.json"), journalURL: root.appendingPathComponent("journal"))
         let preferences = CollectionExchangePreferences(defaults: defaults, domain: domain,
@@ -38,16 +38,22 @@ final class CollectionExchangeTests: XCTestCase {
     }
     override func tearDown() async throws {
         model.collectionContext?.model.cancel(); model.collectionContext = nil; model.player.stop()
-        try await wait { !self.model.library.isBusy }
+        try await wait(timeout: FileProviderReader.stallTimeout + 10) { !self.model.library.isBusy }
         model = nil
         if let originalDefaults { UserDefaults.standard.setPersistentDomain(originalDefaults, forName: appDomain) }
         else { UserDefaults.standard.removePersistentDomain(forName: appDomain) }
         UserDefaults.standard.synchronize(); defaults.removePersistentDomain(forName: domain); defaults.synchronize()
         try FileManager.default.removeItem(at: root)
     }
-    private func wait(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
-        let end = Date().addingTimeInterval(10)
+    private func wait(timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line,
+                      _ condition: () -> Bool) async throws {
+        let started = ProcessInfo.processInfo.systemUptime
+        let end = Date().addingTimeInterval(timeout)
         while !condition(), Date() < end { try await Task.sleep(for: .milliseconds(10)) }
+        let elapsed = ProcessInfo.processInfo.systemUptime - started
+        if elapsed >= 1 {
+            print("Collection exchange wait: line \(line), elapsed \(elapsed) s, budget \(timeout) s, matched \(condition())")
+        }
         XCTAssertTrue(condition(),
             "Zeitlimit: Modell=\(model != nil), Bibliothek beschäftigt=\(model?.library.isBusy.description ?? "–"), " +
             "Titel=\(model?.library.tracks.count ?? -1), Fehler=\(model?.library.errorMessage ?? "–"), " +
@@ -146,7 +152,8 @@ final class CollectionExchangeTests: XCTestCase {
         model.showCollectionExchange(); XCTAssertNotNil(model.collectionContext)
         let file = root.appendingPathComponent("Incoming/extra.mod"); try writeModule(to: file)
         model.open(file); model.player.stop(); model.collectionContext = nil
-        try await wait { !self.model.library.isBusy && self.model.library.tracks.count == 4 }
+        // Der Import muss seine eigene File-Provider-Frist samt Rückmeldung beenden können.
+        try await wait(timeout: FileProviderReader.stallTimeout + 10) { !self.model.library.isBusy && self.model.library.tracks.count == 4 }
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertTrue(model.library.tracks.contains { $0.displayName == "extra.mod" })
         XCTAssertFalse(model.player.isPlaying); XCTAssertNil(model.player.currentTrack)

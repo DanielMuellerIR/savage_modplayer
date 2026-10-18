@@ -115,6 +115,7 @@ xcodebuild "${ARGS[@]}" >"$LOG" 2>&1
 STATUS=$?
 set -e
 
+grep 'Collection exchange wait:' "$LOG" || true
 grep -E "Test Suite .* (passed|failed)|Executed [0-9]+ test|error:|\*\* TEST" "$LOG" | tail -25 || true
 
 if [ "$STATUS" -ne 0 ]; then
