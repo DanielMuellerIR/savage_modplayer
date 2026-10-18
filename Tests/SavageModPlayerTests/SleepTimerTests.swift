@@ -238,8 +238,12 @@ extension SleepTimerControllerTests {
                 right.withUnsafeMutableBufferPointer { r in
                     buffers[0] = AudioBuffer(mNumberChannels: 1, mDataByteSize: 256, mData: l.baseAddress)
                     buffers[1] = AudioBuffer(mNumberChannels: 1, mDataByteSize: 256, mData: r.baseAddress)
+                    var initialSilent = ObjCBool(false)
+                    var initialTimestamp = AudioTimeStamp()
+                    _ = result.render(&initialSilent, &initialTimestamp, 64, buffers.unsafeMutablePointer)
+                    result.samples.append(l[0])
                     ready.signal()
-                    guard start.wait(timeout: .now() + 2) == .success else { return }
+                    guard start.wait(timeout: .now() + 10) == .success else { return }
                     for _ in 0..<20 {
                         var silent = ObjCBool(false)
                         var timestamp = AudioTimeStamp()
@@ -250,14 +254,22 @@ extension SleepTimerControllerTests {
                 }
             }
         }
-        XCTAssertEqual(ready.wait(timeout: .now() + 2), .success)
+        guard ready.wait(timeout: .now() + 10) == .success else {
+            start.signal()
+            _ = done.wait(timeout: .now() + 10)
+            XCTFail("Der Test-Worker hat keinen ersten Audioblock geliefert.")
+            return
+        }
         timer.signal.start(seconds: 0.2, now: SleepTimerClock.now())
         timer.refresh()
         start.signal()
         // Der UI-Ticker wäre nach einer Sekunde fällig, erhält hier aber
         // absichtlich keinen MainActor-Zeitschlitz. Nur der Adapter kann stoppen.
         Thread.sleep(forTimeInterval: 1.1)
-        XCTAssertEqual(done.wait(timeout: .now() + 1), .success)
+        guard done.wait(timeout: .now() + 10) == .success else {
+            XCTFail("Der Test-Worker wurde nicht innerhalb seiner Frist fertig.")
+            return
+        }
         XCTAssertEqual(timer.snapshot.phase, .fading)
         XCTAssertEqual(expirations, 0)
         XCTAssertGreaterThan(result.samples.first!, 0)

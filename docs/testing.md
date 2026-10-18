@@ -898,3 +898,35 @@ Die mobilen Bilder belegen die Darstellung, keine Bediengesten oder physische
 Hintergrund-/Sperrbildschirmwiedergabe. Ursprüngliche App samt Dateiidentität,
 vollständige Einstellungen und Prozessfreiheit wurden nach der temporären
 Mac-Abnahme unabhängig bestätigt.
+
+
+## Performance-Abnahme und geteilte CI-Runner
+
+Prüfstand 1.6.52, 2026-10-18: Die vollständige Release-Suite auf einem
+kontrollierten Mac besteht mit 754 Tests, zwei Auslassungen und keinem Fehler;
+Linux besteht mit 670 Tests, zehn umgebungsbedingten Auslassungen und keinem
+Fehler. Die Performance-Grenzen sind in diesen Läufen aktiv.
+
+Der Stresstest mit 64 Kanälen und 256 Stimmen misst den vorbereiteten
+`ModulePCMSource`-Callback. Engine-Aufbau und WAV-Verpackung liegen außerhalb
+der Messung; Framezahl und nicht stumme Ausgabe werden weiterhin gegen den
+Offline-Pfad geprüft. Die strenge Grenze bleibt die Audiodauer von
+1,960784 Sekunden bei 8 kHz. Gemessen wurden 0,63–0,69 Sekunden auf dem Mac
+und 1,59–1,71 Sekunden auf dem kontrollierten Linux-Rechner. Geteilte
+GitHub-Runner benötigen dagegen etwa 2,03 Sekunden und verfehlen dort die
+Zeitgrenze. Diese Messung belegt keine Echtzeitfähigkeit unter beliebiger
+CPU-Last oder auf jedem Rechner.
+
+Die Einrichtung mit 20.000 Titeln benötigt auf dem kontrollierten Mac etwa
+19 Sekunden; die längste Hauptthread-Pause bleibt unter 0,4 Sekunden.
+GitHub-Runner benötigen in den bisherigen Läufen etwa 54–77 Sekunden bei
+einer unveränderten Aufbaugrenze von 60 Sekunden. Ihre gemessenen
+Hauptthread-Pausen bleiben unter der Zwei-Sekunden-Grenze. Die Aufbauzeit
+wird direkt nach der Einrichtung erfasst und enthält keine spätere Prüfung
+der gespeicherten Dateien.
+
+Diese Abweichungen bleiben als offene CI-Einschränkung im Backlog. Weder
+Grenzwerte noch Prüfungen werden für einen grünen Lauf abgeschaltet. Für eine
+Release-Abnahme zählen die tatsächlich ausgeführten strengen Vollsuiten auf
+kontrollierter Hardware; ein fehlgeschlagener CI-Zeitcheck wird zusätzlich
+benannt. Neue funktionale Fehler bleiben Freigabeblocker.

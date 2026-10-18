@@ -7,6 +7,17 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
 
 ## Priorisiert
 
+0. **Zeitgrenzen auf geteilten CI-Runnern reproduzierbar prüfen.** In 1.6.52
+   bestehen die strengen Vollsuiten auf kontrollierten macOS- und Linux-Rechnern.
+   GitHub-Runner überschreiten jedoch teils die Zeitziele: der vorbereitete
+   Callback mit 64 Kanälen und 256 Stimmen benötigt etwa 2,03 Sekunden für
+   1,96 Sekunden Audio bei 8 kHz; die Einrichtung von 20.000 Titeln benötigt
+   dort etwa 54–77 Sekunden bei einer 60-Sekunden-Grenze. Funktions- und
+   Datenprüfungen bestehen dabei, ebenso die gemessene Hauptthread-Reaktion.
+   Die Grenzwerte bleiben unverändert. Hardware, verfügbare CPU-Zeit und
+   Messbedingungen vor einer Änderung der Freigaberegeln vergleichen.
+   [Prüfstand und Grenzen](../docs/testing.md#performance-abnahme-und-geteilte-ci-runner).
+
 0. **Gerätetest der iPhone-App: verbleibende Abnahmen.** Auf einem echten iPhone stehen
    noch Dateiziehen aus der Dateien-App, Wiederanlauf der Visualisierungen nach
    Scrollen/Tabwechsel, Großarchivimport und ein zehnminütiger Dauerlauf mit
