@@ -375,7 +375,18 @@ final class ITVoicePoolTests: XCTestCase {
             initialTempo: 255
         )
         let audioDuration = Double(rows.count) * 60.0 / (255.0 * 24.0)
+        let frameLimit = try ModuleRenderer.validatedFrameLimit(
+            sampleRate: sampleRate, maxDurationSeconds: audioDuration + 0.1
+        )
+        let source = ModulePCMSource(mod: stress, format: PCMFormat(sampleRate: sampleRate, channels: 2),
+                                     maxFrames: frameLimit, useInterpolation: false)
+        let render = source.renderBlock()
+        var samples = [Float](repeating: 0, count: Int(frameLimit) * 2)
+        // Die Echtzeitgrenze betrifft vorbereitete Audio-Callbacks. Engine-Aufbau
+        // und WAV-Verpackung gehören nicht zum Audiothread.
         let started = Date().timeIntervalSinceReferenceDate
+        let produced = samples.withUnsafeMutableBufferPointer { render($0, Int(frameLimit)) }
+        let elapsed = Date().timeIntervalSinceReferenceDate - started
         let wav = try ModuleRenderer.renderWavData(
             mod: stress,
             sampleRate: sampleRate,
@@ -383,8 +394,10 @@ final class ITVoicePoolTests: XCTestCase {
             normalize: false,
             useInterpolation: false
         )
-        let elapsed = Date().timeIntervalSinceReferenceDate - started
-
+        print("IT 64 channels / 256 voices: prepared callback \(elapsed) s for \(audioDuration) audio s")
+        XCTAssertEqual(produced, wav.dropFirst(44).count / 4)
+        XCTAssertGreaterThan(produced, 0)
+        XCTAssertTrue(samples.prefix(produced * 2).contains { $0 != 0 })
         XCTAssertTrue(wav.dropFirst(44).contains { $0 != 0 })
         #if DEBUG
         // Der Debug-Build trägt Bounds-/Exklusivitätsprüfungen in jeder Voice.
