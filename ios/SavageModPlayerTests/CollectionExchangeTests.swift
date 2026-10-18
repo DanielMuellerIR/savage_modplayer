@@ -45,10 +45,14 @@ final class CollectionExchangeTests: XCTestCase {
         UserDefaults.standard.synchronize(); defaults.removePersistentDomain(forName: domain); defaults.synchronize()
         try FileManager.default.removeItem(at: root)
     }
-    private func wait(_ condition: () -> Bool) async throws {
+    private func wait(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
         let end = Date().addingTimeInterval(10)
         while !condition(), Date() < end { try await Task.sleep(for: .milliseconds(10)) }
-        XCTAssertTrue(condition())
+        XCTAssertTrue(condition(),
+            "Zeitlimit: Modell=\(model != nil), Bibliothek beschäftigt=\(model?.library.isBusy.description ?? "–"), " +
+            "Titel=\(model?.library.tracks.count ?? -1), Fehler=\(model?.library.errorMessage ?? "–"), " +
+            "Panel=\(model?.isLibraryPanelOpen.description ?? "–"), Austausch=\(model?.collectionContext != nil)",
+            file: file, line: line)
     }
     private func writeModule(to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
