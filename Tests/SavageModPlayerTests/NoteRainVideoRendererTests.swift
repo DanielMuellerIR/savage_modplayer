@@ -21,7 +21,7 @@ final class NoteRainVideoRendererTests: XCTestCase {
     private func noStaging(_ root: URL) throws {
         XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: root.path).contains { $0.hasPrefix(".savage-video-") })
     }
-    private func audio(_ url: URL) async throws -> (pcm: Data, frames: Int, duration: Int64) {
+    nonisolated private static func audio(_ url: URL) async throws -> (pcm: Data, frames: Int, duration: Int64) {
         let asset = AVURLAsset(url: url)
         let tracks = try await asset.loadTracks(withMediaType: .audio)
         let track = try XCTUnwrap(tracks.first)
@@ -42,7 +42,7 @@ final class NoteRainVideoRendererTests: XCTestCase {
         let range = try await track.load(.timeRange)
         return (data, frames, CMTimeConvertScale(range.duration, timescale: 48_000, method: .default).value)
     }
-    private func video(_ url: URL) async throws -> (frames: [Int64], duration: Int64) {
+    nonisolated private static func video(_ url: URL) async throws -> (frames: [Int64], duration: Int64) {
         let asset = AVURLAsset(url: url)
         let tracks = try await asset.loadTracks(withMediaType: .video)
         let track = try XCTUnwrap(tracks.first)
@@ -64,7 +64,7 @@ final class NoteRainVideoRendererTests: XCTestCase {
         let root = try directory(), destination = root.appendingPathComponent("partial.mov")
         let report = try NoteRainVideoRenderer.export(mod: VideoTestModules.module(), to: destination,
             options: options(seconds: 1_001.25 / 48_000))
-        let audio = try await audio(destination), video = try await video(destination)
+        let audio = try await Self.audio(destination), video = try await Self.video(destination)
         XCTAssertEqual(report.audioFrameCount, 1_001); XCTAssertEqual(report.videoFrameCount, 1)
         XCTAssertEqual(audio.frames, 1_001); XCTAssertEqual(audio.duration, 1_001)
         XCTAssertEqual(video.frames, [0]); XCTAssertEqual(video.duration, 1_001)
@@ -79,7 +79,7 @@ final class NoteRainVideoRendererTests: XCTestCase {
             options.audio.maximumSeconds = 0.137
             let url = root.appendingPathComponent(quality.rawValue + ".mov")
             let report = try NoteRainVideoRenderer.export(mod: mod, to: url, options: options)
-            let audio = try await audio(url), video = try await video(url)
+            let audio = try await Self.audio(url), video = try await Self.video(url)
             if let reference { XCTAssertEqual(audio.pcm, reference) } else { reference = audio.pcm }
             XCTAssertEqual(report.options.quality, quality)
             XCTAssertEqual(audio.duration, Int64(report.audioFrameCount))
@@ -100,7 +100,7 @@ final class NoteRainVideoRendererTests: XCTestCase {
             let reference = try ChannelStemRenderer.export(mod: mod, to: referenceURL, options: options.audio, output: .stereoMix)
             let destination = root.appendingPathComponent(format.rawValue + ".mov")
             let report = try NoteRainVideoRenderer.export(mod: mod, to: destination, options: options)
-            let audio = try await audio(destination), video = try await video(destination)
+            let audio = try await Self.audio(destination), video = try await Self.video(destination)
             XCTAssertEqual(report.audioFrameCount, reference.frameCount)
             XCTAssertEqual(audio.pcm, try VideoTestModules.wavePCM(referenceURL.appendingPathComponent("Mix.wav")))
             XCTAssertEqual(audio.frames, Int(reference.frameCount)); XCTAssertEqual(audio.duration, Int64(reference.frameCount))
@@ -114,7 +114,7 @@ final class NoteRainVideoRendererTests: XCTestCase {
         let root = try directory(), destination = root.appendingPathComponent("natural.mov")
         let report = try NoteRainVideoRenderer.export(mod: VideoTestModules.module(), to: destination, options: options(seconds: 2))
         XCTAssertTrue(report.endedNaturally); XCTAssertEqual(report.audioFrameCount, 7_680); XCTAssertEqual(report.videoFrameCount, 5)
-        let audio = try await audio(destination), video = try await video(destination)
+        let audio = try await Self.audio(destination), video = try await Self.video(destination)
         XCTAssertEqual(audio.duration, 7_680); XCTAssertEqual(video.duration, 7_680); XCTAssertEqual(audio.frames, 7_680)
         try noStaging(root)
     }
@@ -184,12 +184,12 @@ final class NoteRainVideoRendererTests: XCTestCase {
         let file = root.appendingPathComponent("nna.mov")
         let report = try NoteRainVideoRenderer.export(mod: mod, to: file, options: options)
         XCTAssertTrue(report.endedNaturally); XCTAssertEqual(report.audioFrameCount, expected.frameCount)
-        let result = try await audio(file)
+        let result = try await Self.audio(file)
         XCTAssertEqual(result.pcm, try VideoTestModules.wavePCM(reference.appendingPathComponent("Mix.wav")))
         options.audio.mutedChannels = [1]
         let mutedFile = root.appendingPathComponent("nna-muted.mov")
         let muted = try NoteRainVideoRenderer.export(mod: mod, to: mutedFile, options: options)
-        let silence = try await audio(mutedFile)
+        let silence = try await Self.audio(mutedFile)
         XCTAssertEqual(muted.audioFrameCount, report.audioFrameCount)
         XCTAssertEqual(silence.pcm, Data(count: silence.frames * 8))
         try noStaging(root)
@@ -209,7 +209,7 @@ final class NoteRainVideoRendererTests: XCTestCase {
         let file = root.appendingPathComponent("flow.mov")
         let report = try NoteRainVideoRenderer.export(mod: mod, to: file, options: options)
         XCTAssertTrue(report.endedNaturally); XCTAssertEqual(report.audioFrameCount, expected.frameCount)
-        let audio = try await audio(file), video = try await video(file)
+        let audio = try await Self.audio(file), video = try await Self.video(file)
         XCTAssertEqual(audio.pcm, try VideoTestModules.wavePCM(reference.appendingPathComponent("Mix.wav")))
         XCTAssertEqual(video.duration, Int64(expected.frameCount)); XCTAssertEqual(audio.duration, video.duration)
         try noStaging(root)
