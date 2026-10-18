@@ -1,21 +1,20 @@
 # Aktiver Projekt-Backlog
 
-Stand: 2026-10-18 · Version 1.6.52.
+Stand: 2026-10-18 · Version 1.6.53.
 
 Diese Datei ist die einzige aktive Projektliste. Erledigte Chronik liegt in
 Release Notes, abgeschlossenen Tasks und `archive/`.
 
 ## Priorisiert
 
-0. **Zeitgrenzen auf geteilten CI-Runnern reproduzierbar prüfen.** In 1.6.52
-   bestehen die strengen Vollsuiten auf kontrollierten macOS- und Linux-Rechnern.
-   GitHub-Runner überschreiten jedoch teils die Zeitziele: der vorbereitete
-   Callback mit 64 Kanälen und 256 Stimmen benötigt etwa 2,03 Sekunden für
-   1,96 Sekunden Audio bei 8 kHz; die Einrichtung von 20.000 Titeln benötigt
-   dort etwa 54–77 Sekunden bei einer 60-Sekunden-Grenze. Funktions- und
-   Datenprüfungen bestehen dabei, ebenso die gemessene Hauptthread-Reaktion.
-   Die Grenzwerte bleiben unverändert. Hardware, verfügbare CPU-Zeit und
-   Messbedingungen vor einer Änderung der Freigaberegeln vergleichen.
+0. **Zeitgrenze der 20.000-Titel-Einrichtung auf geteilten CI-Runnern prüfen.**
+   Mit 1.6.52 benötigten GitHub-Runner etwa 54–77 Sekunden bei einer
+   unveränderten 60-Sekunden-Grenze. Funktions- und Datenprüfungen bestehen,
+   ebenso die gemessene Hauptthread-Reaktion. Der getrennte Linux-Renderpfad
+   ist mit 1.6.53 optimiert: etwa 1,05 statt 1,70–1,74 Sekunden im direkten
+   Vergleich, bei unveränderter 1,96-Sekunden-Grenze und bytegleichem PCM.
+   Den nächsten öffentlichen CI-Lauf zusätzlich bestätigen; Grenzwerte und
+   Prüfungen bleiben aktiv.
    [Prüfstand und Grenzen](../docs/testing.md#performance-abnahme-und-geteilte-ci-runner).
 
 0. **Gerätetest der iPhone-App: verbleibende Abnahmen.** Auf einem echten iPhone stehen

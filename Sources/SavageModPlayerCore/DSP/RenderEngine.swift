@@ -769,6 +769,29 @@ private struct RenderedVoiceFrame {
     let isStereo: Bool
 }
 
+private struct VoiceMixParameters {
+    var volumeGain: Float = 0
+    var panning: Float = 0.5
+}
+
+// Die Werte ändern sich nur am Tick, beim Seek und beim A/B-Neustart.
+// Der Audiothread überschreibt den vorallozierten Speicher ohne COW-Kopie.
+private final class VoiceMixBuffer: @unchecked Sendable {
+    let pointer: UnsafeMutablePointer<VoiceMixParameters>
+    private let count: Int
+
+    init(count: Int) {
+        self.count = count
+        pointer = .allocate(capacity: count)
+        pointer.initialize(repeating: VoiceMixParameters(), count: count)
+    }
+
+    deinit {
+        pointer.deinitialize(count: count)
+        pointer.deallocate()
+    }
+}
+
 // Wertkopie des Sequencer-Zustands an einer festen Frame-Grenze. Sie enthaelt
 // bewusst keine Referenz auf den laufenden Zustand und kein endReached: Die
 // Probe setzt dieses Live-/Offline-Abbruchsignal heute nicht.
@@ -1001,6 +1024,7 @@ public enum RenderEngine {
         }
         let globalVolumeScale = Float(mod.globalVolumeScale.rawValue)
         let visualizationExchange = vuBuffer.visualizationExchange
+        let voiceMix = VoiceMixBuffer(count: voiceCount)
 
         return { (frameCount, left, right) in
             let safeFrameCount = Int(frameCount)
@@ -1064,13 +1088,23 @@ public enum RenderEngine {
             }
 
             for frame in 0..<safeFrameCount {
-                sectionLoop?.beginFrame(state: state, channels: dspChannels)
+                let restartedSection = sectionLoop?.beginFrame(state: state, channels: dspChannels) == true
+                let refreshVoiceMix = frame == 0 || restartedSection || state.outputsUntilNextTick <= 0
                 SequencerCore.advanceIfNeeded(
                     state: state,
                     channels: dspChannels,
                     mod: mod,
                     sampleRate: sampleRate
                 )
+
+                if refreshVoiceMix {
+                    for index in 0..<voiceCount {
+                        let channel = dspChannels[index]
+                        voiceMix.pointer[index] = VoiceMixParameters(
+                            volumeGain: Self.voiceVolumeGain(channel),
+                            panning: channel.effectivePanning)
+                    }
+                }
 
                 state.outputsUntilNextTick -= 1.0
                 state.elapsedFrames += 1
@@ -1128,9 +1162,11 @@ public enum RenderEngine {
                         ? voiceIndex
                         : (ch.itPatternState?.channelIndex ?? -1)
                     guard ownerIndex >= 0, ownerIndex < logicalChannelCount else { continue }
+                    let parameters = voiceMix.pointer[voiceIndex]
                     let voiceFrame = Self.renderChannelFrame(
                         channel: ch,
-                        useInterpolation: state.useInterpolation
+                        useInterpolation: state.useInterpolation,
+                        volumeGain: parameters.volumeGain
                     )
                     let outputSample = voiceFrame.mono * globalGain
 
@@ -1155,7 +1191,7 @@ public enum RenderEngine {
                     waveBuffer.channelWavesPointer[ownerIndex * 32 + wIdx] += outputSample
 
                     // Panning LRRL mit Separation (XM: inkl. Panning-Hüllkurve)
-                    let p = ch.effectivePanning
+                    let p = parameters.panning
                     let separation = state.stereoSeparation
                     let pEffective = max(0.0, min(1.0, 0.5 + (p - 0.5) * separation))
                     let lGain = 1.0 - pEffective
@@ -1358,7 +1394,8 @@ public enum RenderEngine {
                 if voice.framesLeft > 0 {
                     rendered = Self.renderChannelFrame(
                         channel: ch,
-                        useInterpolation: useInterpolation
+                        useInterpolation: useInterpolation,
+                        volumeGain: Self.voiceVolumeGain(ch)
                     )
                     voice.framesLeft -= 1
                 }
@@ -1514,9 +1551,15 @@ public enum RenderEngine {
     }
 
     @inline(__always)
+    nonisolated private static func voiceVolumeGain(_ channel: DSPChannel) -> Float {
+        channel.currentVolume / 64.0 * channel.xmVolumeScale * channel.itVolumeScale
+    }
+
+    @inline(__always)
     nonisolated private static func renderChannelFrame(
         channel ch: DSPChannel,
-        useInterpolation: Bool
+        useInterpolation: Bool,
+        volumeGain: Float
     ) -> RenderedVoiceFrame {
         // Note-Cut, Key-Off und Stop setzen dieses Flag. Besonders geloopte
         // Samples wuerden ohne den Guard trotz gestoppter Stimme weiterklingen.
@@ -1524,16 +1567,27 @@ public enum RenderEngine {
         guard let smp = ch.sample, smp.pcm.count > 0, ch.currentPeriod > 0 else {
             return RenderedVoiceFrame(left: 0, right: 0, mono: 0, isStereo: false)
         }
-        guard ch.sampleIndex.isFinite, !ch.sampleIndex.isNaN else {
+        // Nur der Audiothread verändert diese Werte. Lokale Berechnung vermeidet
+        // wiederholte dynamische Exklusivitätsprüfungen beim Lesen und Loopen.
+        var sampleIndex = ch.sampleIndex
+        var sampleDirection = ch.sampleDirection
+        guard sampleIndex.isFinite, !sampleIndex.isNaN else {
             return RenderedVoiceFrame(left: 0, right: 0, mono: 0, isStereo: false)
         }
 
+        defer {
+            ch.sampleIndex = sampleIndex
+            ch.sampleDirection = sampleDirection
+        }
+        let itMode = ch.itMode
         let loop = activeSampleLoop(channel: ch, sample: smp)
         if let loop {
-            wrapLoopedSampleIndexIfNeeded(channel: ch, sample: smp, loop: loop)
+            wrapLoopedSampleIndexIfNeeded(
+                index: &sampleIndex, direction: &sampleDirection,
+                frameCount: smp.pcm.count, itMode: itMode, loop: loop)
         }
 
-        let idx = Int(ch.sampleIndex)
+        let idx = Int(sampleIndex)
         guard idx >= 0, idx < smp.pcm.count else {
             // Ein beendetes One-Shot bleibt beendet. Das ist insbesondere für
             // IT Qxy wichtig: sehr kurze Samples werden nicht später aus dem
@@ -1550,6 +1604,7 @@ public enum RenderEngine {
         let leftSample = readVoiceSample(
             pcm: smp.pcm,
             channel: ch,
+            index: sampleIndex,
             loop: loop,
             useInterpolation: useInterpolation
         )
@@ -1558,6 +1613,7 @@ public enum RenderEngine {
             rightSample = readVoiceSample(
                 pcm: rightPCM,
                 channel: ch,
+                index: sampleIndex,
                 loop: loop,
                 useInterpolation: useInterpolation
             )
@@ -1567,13 +1623,14 @@ public enum RenderEngine {
 
         // sampleDirection ist bei MOD/S3M immer +1; XM-/IT-Pingpong
         // dreht sie auf -1. xmVolumeScale ist bei MOD/S3M 1.0 (Envelope/Fadeout aus).
-        ch.sampleIndex += ch.sampleSpeed * ch.sampleDirection
+        sampleIndex += ch.sampleSpeed * sampleDirection
         if let loop {
-            wrapLoopedSampleIndexIfNeeded(channel: ch, sample: smp, loop: loop)
+            wrapLoopedSampleIndexIfNeeded(
+                index: &sampleIndex, direction: &sampleDirection,
+                frameCount: smp.pcm.count, itMode: itMode, loop: loop)
         }
 
-        let gain = ch.currentVolume / 64.0 * ch.xmVolumeScale * ch.itVolumeScale
-        let filtered = ch.applyITFilter(left: leftSample * gain, right: rightSample * gain)
+        let filtered = ch.applyITFilter(left: leftSample * volumeGain, right: rightSample * volumeGain)
         return RenderedVoiceFrame(
             left: filtered.0,
             right: filtered.1,
@@ -1589,7 +1646,8 @@ public enum RenderEngine {
         channel ch: DSPChannel,
         useInterpolation: Bool
     ) -> Float {
-        renderChannelFrame(channel: ch, useInterpolation: useInterpolation).mono
+        renderChannelFrame(
+            channel: ch, useInterpolation: useInterpolation, volumeGain: voiceVolumeGain(ch)).mono
     }
 
     // Schmale interne Testnaht für Loop-, Stereo- und Filterdetails. Der
@@ -1598,7 +1656,8 @@ public enum RenderEngine {
         channel ch: DSPChannel,
         useInterpolation: Bool
     ) -> (left: Float, right: Float) {
-        let frame = renderChannelFrame(channel: ch, useInterpolation: useInterpolation)
+        let frame = renderChannelFrame(
+            channel: ch, useInterpolation: useInterpolation, volumeGain: voiceVolumeGain(ch))
         return (frame.left, frame.right)
     }
 
@@ -1606,28 +1665,29 @@ public enum RenderEngine {
     nonisolated private static func readVoiceSample(
         pcm: [Float],
         channel ch: DSPChannel,
+        index: Double,
         loop: SampleLoop?,
         useInterpolation: Bool
     ) -> Float {
         if let loop, useInterpolation {
             if loop.type == .pingpong {
                 let end = min(pcm.count, loop.start + loop.length)
-                if ch.sampleIndex >= Double(end - 1), end > 0 {
+                if index >= Double(end - 1), end > 0 {
                     return pcm[end - 1]
                 }
-                return ch.getInterpolatedSample(from: pcm, index: ch.sampleIndex)
+                return ch.getInterpolatedSample(from: pcm, index: index)
             }
             return ch.getInterpolatedSampleLooped(
                 from: pcm,
-                index: ch.sampleIndex,
+                index: index,
                 repeatOffset: loop.start,
                 repeatLength: loop.length
             )
         }
         if useInterpolation {
-            return ch.getInterpolatedSample(from: pcm, index: ch.sampleIndex)
+            return ch.getInterpolatedSample(from: pcm, index: index)
         }
-        return ch.getNearestSample(from: pcm, index: ch.sampleIndex)
+        return ch.getNearestSample(from: pcm, index: index)
     }
 
     @inline(__always)
@@ -1655,11 +1715,12 @@ public enum RenderEngine {
     }
 
     nonisolated private static func wrapLoopedSampleIndexIfNeeded(
-        channel ch: DSPChannel,
-        sample smp: Sample,
+        index: inout Double,
+        direction: inout Double,
+        frameCount: Int,
+        itMode: Bool,
         loop: SampleLoop
     ) {
-        let frameCount = smp.pcm.count
         let loopStart = max(0, min(loop.start, frameCount - 1))
         let declaredLoopEnd = loop.start + loop.length
         let loopEnd = max(loopStart + 1, min(declaredLoopEnd, frameCount))
@@ -1670,56 +1731,56 @@ public enum RenderEngine {
         let length = end - start
 
         if loop.type == .pingpong {
-            if ch.itMode {
+            if itMode {
                 // IT 2.14 (MIXWAV.INC) spiegelt Ganzzahl und Bruchteil getrennt.
                 // Oben fällt ein Sample weg; unten kehrt schon die letzte
                 // Bruchteilspanne um. Eine kontinuierliche Dreiecksfaltung
                 // verändert deshalb die belegte Loop-Periode.
-                let position = floor(ch.sampleIndex)
-                let fraction = ch.sampleIndex - position
+                let position = floor(index)
+                let fraction = index - position
                 let reverseFraction = fraction == 0 ? 0 : 1 - fraction
                 let cycle = 2 * length
-                if ch.sampleDirection > 0, position >= end {
+                if direction > 0, position >= end {
                     let phase = (position - end).truncatingRemainder(dividingBy: cycle)
                     if phase < length {
-                        ch.sampleIndex = end - phase - 1 + reverseFraction
-                        ch.sampleDirection = -1
+                        index = end - phase - 1 + reverseFraction
+                        direction = -1
                     } else {
-                        ch.sampleIndex = start + phase - length + fraction
+                        index = start + phase - length + fraction
                     }
-                } else if ch.sampleDirection < 0, position <= start {
+                } else if direction < 0, position <= start {
                     let phase = (start - position).truncatingRemainder(dividingBy: cycle)
                     if phase < length {
-                        ch.sampleIndex = start + phase + reverseFraction
-                        ch.sampleDirection = 1
+                        index = start + phase + reverseFraction
+                        direction = 1
                     } else {
-                        ch.sampleIndex = end + length - phase - 1 + fraction
+                        index = end + length - phase - 1 + fraction
                     }
                 }
                 return
             }
-            let crossedEnd = ch.sampleDirection > 0 && ch.sampleIndex >= end
-            let crossedStart = ch.sampleDirection < 0 && ch.sampleIndex < start
+            let crossedEnd = direction > 0 && index >= end
+            let crossedStart = direction < 0 && index < start
             guard crossedEnd || crossedStart else { return }
             // Zwei Spannen erhalten auch bei grossen Schritten die Richtung.
             // Das obere Ende ist exklusiv: exakt dort darf kein PCM-Zugriff landen.
             let cycle = 2 * length
-            let offset = ch.sampleIndex - start
-            let unfolded = ch.sampleDirection > 0 ? offset : cycle - offset
+            let offset = index - start
+            let unfolded = direction > 0 ? offset : cycle - offset
             var phase = unfolded.truncatingRemainder(dividingBy: cycle)
             if phase < 0 { phase += cycle }
             if phase < length {
-                ch.sampleIndex = start + phase
-                ch.sampleDirection = 1
+                index = start + phase
+                direction = 1
             } else {
-                ch.sampleIndex = min(end.nextDown, end - (phase - length))
-                ch.sampleDirection = -1
+                index = min(end.nextDown, end - (phase - length))
+                direction = -1
             }
-        } else if ch.sampleIndex >= end {
+        } else if index >= end {
             // Vorwärts-Loop: in den Repeat-Bereich zurückfalten. Der alte Swift-
             // Code setzte hart auf repeatOffset und konnte bei genauem Loop-Ende
             // kurzzeitig ausserhalb der gültigen Sampledaten landen.
-            ch.sampleIndex = start + (ch.sampleIndex - start).truncatingRemainder(dividingBy: length)
+            index = start + (index - start).truncatingRemainder(dividingBy: length)
         }
     }
 }

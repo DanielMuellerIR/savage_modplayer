@@ -192,6 +192,8 @@ For FastTracker II the engine runs a dedicated instrument voice model: the modul
 
 For Impulse Tracker the engine separates 64 logical pattern channels from a preallocated pool of 256 playback voices. It implements sample and instrument mode, NNA/DCT/DCA, 120-note sample maps, IT 2.14/2.15 compression, stereo and sustain loops, pitch/pan/filter envelopes, resonant per-voice filters, sample vibrato, surround, IT effect memory, and the `Old Effects`/`Compatible Gxx` profiles. OpenMPT-created IT files additionally use structured XTPM/STPM parsing, classic/alternative/modern tempo formulas, stored preamp and mix settings, restart position, extended filter range, and the applicable PCM `PlayBehaviour` flags.
 
+Version 1.6.53 reduces CPU overhead in the shared sample renderer while preserving audio output and the strict real-time stress-test limit. [Performance checks](docs/testing.md#performance-abnahme-und-geteilte-ci-runner).
+
 Compatibility messages are capability-based. `cwtv` identifies the creating tracker while `cmwt` controls required IT semantics; a newer OpenMPT creator version alone is not a warning. Metadata, dormant MIDI flags, unused plugin definitions, and marker-like bytes inside PCM remain silent. A warning is shown only when a pattern in the played order list actually reaches an unsupported sound-affecting feature, with its instrument, channel, plugin slot, or chunk ID where available. `savage-cli --info` exposes the complete structured diagnosis.
 
 ### Known Impulse Tracker limitations

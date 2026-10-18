@@ -64,6 +64,50 @@ final class ModulePCMSourceTests: XCTestCase {
         }
     }
 
+    func testVolumeAndPanningChangeAtExactTrackerFramesAcrossBlockSizes() {
+        let instrument = Instrument(
+            index: 1, name: "constant", length: 4, finetune: 0, volume: 64,
+            repeatOffset: 0, repeatLength: 4, bytes: [64, 64, 64, 64], isLooped: true)
+        let mod = Mod(
+            name: "tick controls", length: 1, patternTable: [0],
+            instruments: [nil, instrument],
+            patterns: [Pattern(rows: [
+                Row(notes: [Note(instrument: 1, period: 428, effectId: 0, effectData: 0)]),
+                Row(notes: [Note(instrument: 0, period: 0, effectId: 0xC, effectData: 32)]),
+                Row(notes: [Note(instrument: 0, period: 0, effectId: 0x8, effectData: 255)])
+            ])], channelCount: 1, initialSpeed: 1, initialTempo: 125,
+            channelPannings: [0])
+
+        func render(chunkSize: Int) -> [Float] {
+            let source = ModulePCMSource(
+                mod: mod, format: PCMFormat(sampleRate: 8_000, channels: 2), maxFrames: 480)
+            let block = source.renderBlock()
+            var pcm: [Float] = []
+            while pcm.count < 960 {
+                let wanted = min(chunkSize, (960 - pcm.count) / 2)
+                var buffer = [Float](repeating: 0, count: wanted * 2)
+                let produced = buffer.withUnsafeMutableBufferPointer { block($0, wanted) }
+                XCTAssertEqual(produced, wanted)
+                guard produced == wanted else { break }
+                pcm.append(contentsOf: buffer)
+            }
+            return pcm
+        }
+
+        let pcm = render(chunkSize: 480)
+        XCTAssertEqual(pcm, render(chunkSize: 97))
+        XCTAssertEqual(pcm.count, 960)
+        guard pcm.count == 960 else { return }
+        // Bei Speed 1, 125 BPM und 8 kHz dauert jede Zeile exakt 160 Frames.
+        for frame in 0..<480 {
+            let amplitude: Float = frame < 160 ? 0.25 : 0.125
+            let leftGain: Float = frame < 320 ? 0.9 : 0.1
+            let rightGain: Float = frame < 320 ? 0.1 : 0.9
+            XCTAssertEqual(pcm[frame * 2], tanh(amplitude * leftGain), accuracy: 0.000_001)
+            XCTAssertEqual(pcm[frame * 2 + 1], tanh(amplitude * rightGain), accuracy: 0.000_001)
+        }
+    }
+
     /// Ist der Song zu Ende, muss der Block WENIGER Frames melden als angefordert —
     /// nur daran erkennt der Sink das regulaere Ende (`sourceFinished`) und haengt
     /// nicht ewig. Das Demo-Modul ist kuerzer als die hier angeforderten 60 s.

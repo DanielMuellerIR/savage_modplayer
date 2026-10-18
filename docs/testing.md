@@ -915,31 +915,45 @@ Mac-Abnahme unabhängig bestätigt.
 
 ## Performance-Abnahme und geteilte CI-Runner
 
-Prüfstand 1.6.52, 2026-10-18: Die vollständige Release-Suite auf einem
-kontrollierten Mac besteht mit 754 Tests, zwei Auslassungen und keinem Fehler;
-Linux besteht mit 670 Tests, zehn umgebungsbedingten Auslassungen und keinem
-Fehler. Die Performance-Grenzen sind in diesen Läufen aktiv.
+Prüfstand 1.6.53, 2026-10-18: macOS besteht in Release und Debug mit jeweils
+755 Tests, zwei Auslassungen und keinem Fehler; Linux mit 671 Tests,
+zehn Auslassungen und keinem Fehler; iOS mit 124 Tests, einer Auslassung und
+keinem Fehler. Der vorbereitete Release-Callback benötigt in den Vollsuiten
+0,435 Sekunden auf macOS und 0,934 Sekunden auf Linux. App und Quick Look bauen
+und bestehen die Signaturprüfung; alle 22 lokalen MOD-WAVs bleiben bytegleich
+zur vor der Änderung erstellten Baseline.
 
 Der Stresstest mit 64 Kanälen und 256 Stimmen misst den vorbereiteten
 `ModulePCMSource`-Callback. Engine-Aufbau und WAV-Verpackung liegen außerhalb
-der Messung; Framezahl und nicht stumme Ausgabe werden weiterhin gegen den
-Offline-Pfad geprüft. Die strenge Grenze bleibt die Audiodauer von
-1,960784 Sekunden bei 8 kHz. Gemessen wurden 0,63–0,69 Sekunden auf dem Mac
-und 1,59–1,71 Sekunden auf dem kontrollierten Linux-Rechner. Geteilte
-GitHub-Runner benötigen dagegen etwa 2,03 Sekunden und verfehlen dort die
-Zeitgrenze. Diese Messung belegt keine Echtzeitfähigkeit unter beliebiger
-CPU-Last oder auf jedem Rechner.
+der Messung. Die strenge Release-Grenze bleibt die Audiodauer von
+1,960784 Sekunden bei 8 kHz; der Debug-Lauf behält seine dreifache Grenze.
+Framezahl, nicht stumme Ausgabe und jedes PCM-Sample werden gegen den
+Offline-Pfad geprüft.
+
+Seit 1.6.53 berechnet der Sample-Renderer Position und Looprichtung lokal.
+Stimmenpegel und Panorama stehen in einem vorallozierten Puffer und werden nach
+jedem Tracker-Tick, an Blockanfängen, nach Sprüngen und bei A/B-Neustarts
+aktualisiert. Mute und Solo bleiben pro Frame atomar lesbar. Loopformeln,
+Pegelrechnung, Filter und Limiter bleiben unverändert; Schutzprüfungen werden
+nicht abgeschaltet. Eine Regression prüft Pegel- und Panoramawechsel am
+exakten Tracker-Frame bei verschiedenen Callback-Größen.
+
+Im direkten Linux-Vergleich mit Swift 6.0.3 am 2026-10-18 lief dieselbe
+synthetische Eingabe in der Reihenfolge alt / neu / neu / alt, mit gleicher
+CPU-Affinität und aktivem Echtzeitlimit: 1,699 / 1,047 / 1,053 / 1,744 Sekunden.
+Das entspricht rund 39 Prozent weniger Renderzeit. WAV und Float-PCM bleiben
+bytegleich. Eine zuvor deutlich höhere Fremdlast verfälschte den ersten
+Vergleich; dessen Werte werden nicht als Geschwindigkeitsgewinn gewertet.
+Die Messung belegt keine Echtzeitfähigkeit unter beliebiger CPU-Last oder auf
+jedem Rechner. Der öffentliche CI-Lauf von 1.6.52 lag noch bei etwa 2,03 Sekunden;
+1.6.53 muss beim nächsten öffentlichen Push zusätzlich auf diesem Runner
+bestätigt werden.
 
 Die Einrichtung mit 20.000 Titeln benötigt auf dem kontrollierten Mac etwa
-19 Sekunden; die längste Hauptthread-Pause bleibt unter 0,4 Sekunden.
-GitHub-Runner benötigen in den bisherigen Läufen etwa 54–77 Sekunden bei
-einer unveränderten Aufbaugrenze von 60 Sekunden. Ihre gemessenen
-Hauptthread-Pausen bleiben unter der Zwei-Sekunden-Grenze. Die Aufbauzeit
-wird direkt nach der Einrichtung erfasst und enthält keine spätere Prüfung
-der gespeicherten Dateien.
-
-Diese Abweichungen bleiben als offene CI-Einschränkung im Backlog. Weder
-Grenzwerte noch Prüfungen werden für einen grünen Lauf abgeschaltet. Für eine
-Release-Abnahme zählen die tatsächlich ausgeführten strengen Vollsuiten auf
-kontrollierter Hardware; ein fehlgeschlagener CI-Zeitcheck wird zusätzlich
-benannt. Neue funktionale Fehler bleiben Freigabeblocker.
+20–31 Sekunden; die längste Hauptthread-Pause bleibt unter 0,5 Sekunden.
+GitHub-Runner benötigten mit 1.6.52 etwa 54–77 Sekunden bei einer unveränderten
+Aufbaugrenze von 60 Sekunden. Ihre gemessenen Hauptthread-Pausen bleiben unter
+der Zwei-Sekunden-Grenze. Die Aufbauzeit wird direkt nach der Einrichtung
+erfasst und enthält keine spätere Prüfung der gespeicherten Dateien.
+Diese separate CI-Einschränkung bleibt im Backlog. Neue funktionale Fehler
+bleiben Freigabeblocker.

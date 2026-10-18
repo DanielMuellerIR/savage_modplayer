@@ -399,6 +399,16 @@ final class ITVoicePoolTests: XCTestCase {
         XCTAssertGreaterThan(produced, 0)
         XCTAssertTrue(samples.prefix(produced * 2).contains { $0 != 0 })
         XCTAssertTrue(wav.dropFirst(44).contains { $0 != 0 })
+        // Der Offlinepfad nutzt andere Blockgrößen. Auch unter voller NNA-Last
+        // müssen Position und Looprichtung exakt dieselben PCM-Samples liefern.
+        let pcm = [UInt8](wav.dropFirst(44))
+        for index in 0..<min(produced * 2, pcm.count / 2) {
+            let expected = Int16(bitPattern: UInt16(pcm[index * 2])
+                | (UInt16(pcm[index * 2 + 1]) << 8))
+            let actual = Int16(max(-1, min(1, samples[index])) * 32767)
+            XCTAssertEqual(actual, expected, "PCM-Sample \(index)")
+            if actual != expected { break }
+        }
         #if DEBUG
         // Der Debug-Build trägt Bounds-/Exklusivitätsprüfungen in jeder Voice.
         // Er sichert hier gegen grobe Regressionen; das verbindliche
