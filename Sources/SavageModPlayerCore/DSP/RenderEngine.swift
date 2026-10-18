@@ -187,6 +187,35 @@ public final class RealtimePlaybackState: Sendable {
         Int(Int64(bitPattern: endReachedRowStorage.loadAcquire()))
     }
 
+    func copyPlaybackState(from source: RealtimePlaybackState) {
+        position = source.position
+        rowIndex = source.rowIndex
+        tick = source.tick
+        ticksPerRow = source.ticksPerRow
+        bpm = source.bpm
+        outputsPerTick = source.outputsPerTick
+        outputsUntilNextTick = source.outputsUntilNextTick
+        tempoMode = source.tempoMode
+        rowsPerBeat = source.rowsPerBeat
+        restartPosition = source.restartPosition
+        tempoSlide = source.tempoSlide
+        globalVolumeSlide = source.globalVolumeSlide
+        rowTickDelay = source.rowTickDelay
+        positionJump = source.positionJump
+        patternBreak = source.patternBreak
+        patternLoopRow = source.patternLoopRow
+        patternDelay = source.patternDelay
+        patternDelayCounter = source.patternDelayCounter
+        patternDelaySeen = source.patternDelaySeen
+        stereoSeparation = source.stereoSeparation
+        useInterpolation = source.useInterpolation
+        palClock = source.palClock
+        globalVolume = source.globalVolume
+        clockRateOverride = source.clockRateOverride
+        elapsedFrames = source.elapsedFrames
+        resetEndTransition()
+    }
+
     public init() {
         publishedTransportStorage = LockFreeAtomicUInt64(Self.packTransport(
             position: 0, row: -1, ticksPerRow: 6, bpm: 125, globalVolume: 64))
@@ -710,6 +739,16 @@ struct RenderCapture: @unchecked Sendable {
     let channelCount: Int
 }
 
+// Stereo-Beiträge nach Mute, Panning und Mix-Gain; alle Pointer gehören dem
+// Offline-Aufrufer und bleiben während der Renderinstanz unverändert.
+struct StereoStemCapture: @unchecked Sendable {
+    let left: UnsafeMutablePointer<Float>
+    let right: UnsafeMutablePointer<Float>
+    let mixLeft: UnsafeMutablePointer<Float>
+    let mixRight: UnsafeMutablePointer<Float>
+    let frameCapacity: Int
+}
+
 // Wertkopie eines fertigen Blocks fuer den Offline-Consumer. Diese Arrays
 // entstehen erst nach dem Callback und sind deshalb kein Echtzeit-Arbeitsschritt.
 struct RenderCaptureBlock: Sendable {
@@ -933,7 +972,9 @@ public enum RenderEngine {
         dspChannels: [DSPChannel],
         mod: Mod,
         sampleRate: Double,
-        capture: RenderCapture? = nil
+        capture: RenderCapture? = nil,
+        stereoStemCapture: StereoStemCapture? = nil,
+        sectionLoop: SectionLoopPlayback? = nil
     ) -> ModuleRenderBlock {
         // Kanalzahl und Mix-Gain einmalig ableiten: Mehr als 4 Kanäle laufen
         // sonst deutlich heißer in den tanh-Limiter als das klassische
@@ -974,6 +1015,7 @@ public enum RenderEngine {
             // Blockgrenze ist fuer Seek/Uhr genau genug und spart im Normalfall
             // zwei C11-Atomikaufrufe pro Audioframe.
             if safeFrameCount > 0, let request = state.takePendingSeek() {
+                sectionLoop?.disable()
                 state.notePreviewExchange?.append(.init(
                     kind: .seek, position: request.position, row: request.row,
                     speed: request.ticksPerRow, bpm: request.bpm,
@@ -987,6 +1029,7 @@ public enum RenderEngine {
             }
             var appliedTempo: RealtimePlaybackState.TempoSnapshot?
             if safeFrameCount > 0, let tempo = state.takePendingTempo() {
+                sectionLoop?.disable()
                 state.notePreviewExchange?.append(.init(
                     kind: .tempo, speed: tempo.ticksPerRow, bpm: tempo.bpm))
                 if let ticksPerRow = tempo.ticksPerRow {
@@ -1002,12 +1045,16 @@ public enum RenderEngine {
             }
             if safeFrameCount > 0,
                let options = state.takePendingRenderOptions() {
+                sectionLoop?.disable()
                 if options.palClock != state.palClock {
                     state.notePreviewExchange?.append(.init(kind: .options, palClock: options.palClock))
                 }
                 state.stereoSeparation = options.stereoSeparation
                 state.useInterpolation = options.useInterpolation
                 state.palClock = options.palClock
+            }
+            if safeFrameCount > 0, sectionLoop?.beginBlock() == true {
+                state.notePreviewExchange?.append(.init(kind: .sectionLoopDisabled))
             }
             if safeFrameCount > 0 {
                 let requestedElapsedFrames = state.takePendingElapsedFrames()
@@ -1017,6 +1064,7 @@ public enum RenderEngine {
             }
 
             for frame in 0..<safeFrameCount {
+                sectionLoop?.beginFrame(state: state, channels: dspChannels)
                 SequencerCore.advanceIfNeeded(
                     state: state,
                     channels: dspChannels,
@@ -1060,6 +1108,11 @@ public enum RenderEngine {
                     waveBuffer.channelWavesPointer[channel * 32 + wIdx] = 0.0
                     if let captureStems {
                         captureStems[channel * captureFrameCapacity + frame] = 0.0
+                    }
+                    if let stems = stereoStemCapture {
+                        let index = channel * stems.frameCapacity + frame
+                        stems.left[index] = 0.0
+                        stems.right[index] = 0.0
                     }
                 }
 
@@ -1108,15 +1161,24 @@ public enum RenderEngine {
                     let lGain = 1.0 - pEffective
                     let rGain = pEffective
 
+                    let contributionLeft: Float
+                    let contributionRight: Float
                     if ch.itSurround {
                         let surround = voiceFrame.isStereo
                             ? (voiceFrame.left + voiceFrame.right) * 0.25 * globalGain
                             : outputSample * 0.5
-                        outL += surround * mixGain
-                        outR -= surround * mixGain
+                        contributionLeft = surround * mixGain
+                        contributionRight = -(surround * mixGain)
                     } else {
-                        outL += voiceFrame.left * globalGain * lGain * mixGain
-                        outR += voiceFrame.right * globalGain * rGain * mixGain
+                        contributionLeft = voiceFrame.left * globalGain * lGain * mixGain
+                        contributionRight = voiceFrame.right * globalGain * rGain * mixGain
+                    }
+                    outL += contributionLeft
+                    outR += contributionRight
+                    if let stems = stereoStemCapture {
+                        let index = ownerIndex * stems.frameCapacity + frame
+                        stems.left[index] += contributionLeft
+                        stems.right[index] += contributionRight
                     }
 
                 }
@@ -1132,6 +1194,10 @@ public enum RenderEngine {
                 if let capture {
                     capture.stereoLeftPointer[frame] = outL
                     capture.stereoRightPointer[frame] = outR
+                }
+                if let stems = stereoStemCapture {
+                    stems.mixLeft[frame] = outL
+                    stems.mixRight[frame] = outR
                 }
                 
                 // Soft Limiter (Hyperbolic Tangent) gegen Clipping

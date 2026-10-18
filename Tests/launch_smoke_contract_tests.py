@@ -1,6 +1,7 @@
 """Fehlerpfade des Start-Smokes ohne Appstart oder GUI prüfen."""
 from pathlib import Path
 import os
+import plistlib
 import re
 import subprocess
 import tempfile
@@ -11,7 +12,7 @@ SCRIPT = ROOT / "Tests/launch_argument_smoke.sh"
 
 
 class LaunchSmokeContractTests(unittest.TestCase):
-    def run_failure(self, export_fails):
+    def run_failure(self, export_fails, import_fails=True):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             app = root / "Fixture.app/Contents/MacOS/SavageModPlayerApp"
@@ -21,22 +22,44 @@ class LaunchSmokeContractTests(unittest.TestCase):
             binary = root / "bin"
             binary.mkdir()
             defaults = binary / "defaults"
-            defaults.write_text('''#!/bin/sh
-printf '%s\\n' "$*" >> "$DEFAULTS_LOG"
-case "$1" in
- domains) echo com.viben.SavageModPlayer ;;
- export) printf backup > "$3"; exit "$EXPORT_FAIL" ;;
- import) exit 9 ;;
-esac
-''')
+            defaults.write_text("#!" + os.sys.executable + "\n" + """
+import os, plistlib, sys
+from pathlib import Path
+args = sys.argv[1:]
+with open(os.environ['DEFAULTS_LOG'], 'a') as log:
+    log.write(' '.join(args) + '\\n')
+state_file = Path(os.environ['DEFAULTS_STATE_FILE'])
+state = plistlib.loads(state_file.read_bytes())
+if args[0] == 'domains':
+    print('com.viben.SavageModPlayer')
+elif args[0] == 'export':
+    data = plistlib.dumps(state)
+    if args[2] == '-': sys.stdout.buffer.write(data)
+    else: Path(args[2]).write_bytes(data)
+    raise SystemExit(int(os.environ.get('EXPORT_FAIL', '0')))
+elif args[0] == 'write':
+    state[args[2]] = 'test-write'
+    state['created-by-test'] = True
+elif args[0] == 'delete':
+    if len(args) > 2: state.pop(args[2], None)
+    else: state.clear()
+elif args[0] == 'import':
+    if os.environ.get('IMPORT_FAIL') == '1': raise SystemExit(9)
+    state.update(plistlib.loads(Path(args[2]).read_bytes()))
+state_file.write_bytes(plistlib.dumps(state))
+""")
             defaults.chmod(0o755)
             for name, content in {"swiftc": "exit 7", "uuidgen": "echo unique-test-run"}.items():
                 tool = binary / name
                 tool.write_text("#!/bin/sh\n" + content + "\n")
                 tool.chmod(0o755)
+            original = {'savage.volume': 0.6, 'existing': 'kept'}
+            state_file = root / 'defaults-state.plist'
+            state_file.write_bytes(plistlib.dumps(original))
             env = os.environ.copy()
             env.update(PATH=str(binary) + os.pathsep + env["PATH"], TMPDIR=str(root),
-                       DEFAULTS_LOG=str(root / "defaults.log"), EXPORT_FAIL=str(int(export_fails)))
+                       DEFAULTS_LOG=str(root / "defaults.log"), EXPORT_FAIL=str(int(export_fails)),
+                       DEFAULTS_STATE_FILE=str(state_file), IMPORT_FAIL=str(int(import_fails)))
             result = subprocess.run(["bash", str(SCRIPT), str(root / "Fixture.app")],
                                     env=env, capture_output=True, text=True, timeout=10)
             calls = (root / "defaults.log").read_text()
@@ -44,10 +67,13 @@ esac
                 self.assertNotIn("write ", calls)
                 self.assertNotIn("delete ", calls)
                 self.assertNotIn("import ", calls)
-            else:
+            elif import_fails:
+                self.assertIn("import ", calls)
                 match = re.search(r"Sicherung bleibt unter (.+)", result.stderr)
                 self.assertIsNotNone(match, result.stderr)
-                self.assertEqual(Path(match.group(1)).read_text(), "backup")
+                self.assertEqual(plistlib.loads(Path(match.group(1)).read_bytes()), original)
+            else:
+                self.assertEqual(plistlib.loads(state_file.read_bytes()), original)
             self.assertNotEqual(result.returncode, 0)
 
     def test_failed_export_leaves_existing_defaults_untouched(self):
@@ -55,6 +81,9 @@ esac
 
     def test_failed_restore_preserves_backup(self):
         self.run_failure(False)
+
+    def test_successful_restore_removes_test_added_keys_from_merging_defaults(self):
+        self.run_failure(False, import_fails=False)
 
     def test_cleanup_does_not_kill_unrelated_process(self):
         source = SCRIPT.read_text()

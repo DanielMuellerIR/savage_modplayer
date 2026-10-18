@@ -1,5 +1,5 @@
 import XCTest
-import SavageModPlayerCore
+@testable import SavageModPlayerCore
 @testable import SavageModPlayer
 
 /// Der Ladepfad der Wiedergabe — headless im Simulator.
@@ -205,6 +205,104 @@ final class PlaybackLoadingTests: XCTestCase {
         engine.handleAudioSessionEvent(.outputDeviceLost)
         engine.handleAudioSessionEvent(.interruptionEnded(shouldResume: true))
         XCTAssertTrue(engine.coordinator.isPaused)
+    }
+
+    func testSleepTimerCancelsPendingLoadAndPreservesQueueAndVolume() async throws {
+        let track = try writeModule(named: "sleep-pending.mod", title: "SLEEP PENDING")
+        let started = CancellationFlag()
+        let release = DispatchSemaphore(value: 0)
+        engine = PlaybackEngine(settings: settings, library: LibraryStore(), readModule: { url in
+            started.set()
+            guard release.wait(timeout: .now() + 5) == .success else { throw CocoaError(.fileReadUnknown) }
+            return try Data(contentsOf: url)
+        })
+        let originalVolume = settings.volume
+        defer { release.signal(); engine.stop(); settings.volume = originalVolume }
+        settings.volume = 0.37
+        engine.applySettings()
+        engine.enqueue(track)
+        let queuedIDs = engine.pendingQueue.items.map(\.id)
+        XCTAssertEqual(queuedIDs.count, 1)
+        engine.play(track)
+        await waitUntil("Leser wartet") { started.isSet }
+        engine.coordinator.sleepTimer.start(minutes: 1)
+        engine.coordinator.sleepTimer.signal.start(seconds: 0.001, now: SleepTimerClock.now())
+        try await Task.sleep(for: .milliseconds(20))
+        engine.coordinator.sleepTimer.refresh()
+        release.signal()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(engine.currentTrack)
+        XCTAssertFalse(engine.coordinator.isPlaying)
+        XCTAssertEqual(engine.coordinator.sleepTimer.snapshot.phase, .expired)
+        XCTAssertEqual(engine.pendingQueue.items.map(\.id), queuedIDs)
+        XCTAssertEqual(settings.volume, 0.37, accuracy: 0.000001)
+    }
+
+    func testExpiredSleepTimerBlocksInterruptionResumeUntilManualPlay() async throws {
+        let track = try writeModule(named: "sleep-interrupted.mod", title: "SLEEP INT")
+        engine.select(track)
+        await waitUntil("Titel geladen") { self.engine.currentTrack == track }
+        let originalVolume = settings.volume
+        defer { engine.stop(); settings.volume = originalVolume }
+        engine.play()
+        engine.coordinator.sleepTimer.start(minutes: 1)
+        engine.coordinator.sleepTimer.signal.start(seconds: 0.001, now: SleepTimerClock.now())
+        engine.handleAudioSessionEvent(.interruptionBegan)
+        settings.volume = 0.41
+        engine.applySettings()
+        try await Task.sleep(for: .milliseconds(20))
+        engine.handleAudioSessionEvent(.interruptionEnded(shouldResume: true))
+        XCTAssertFalse(engine.coordinator.isPlaying)
+        XCTAssertEqual(engine.coordinator.sleepTimer.snapshot.phase, .expired)
+        XCTAssertEqual(settings.volume, 0.41, accuracy: 0.000001)
+        engine.play()
+        XCTAssertTrue(engine.coordinator.isPlaying)
+        XCTAssertEqual(engine.coordinator.sleepTimer.snapshot.phase, .inactive)
+        XCTAssertEqual(settings.volume, 0.41, accuracy: 0.000001)
+    }
+
+    func testSleepTimerContinuesAcrossPauseAndTitleChangeAndExplicitStopCancelsIt() async throws {
+        let first = try writeModule(named: "sleep-first.mod", title: "SLEEP FIRST")
+        let second = try writeModule(named: "sleep-second.mod", title: "SLEEP SECOND")
+        engine.select(first)
+        await waitUntil("Erster Titel geladen") { self.engine.currentTrack == first }
+        defer { engine.stop() }
+        engine.play()
+        engine.coordinator.sleepTimer.start(minutes: 1)
+        let deadline = engine.coordinator.sleepTimer.signal.deadline
+        engine.pause()
+        XCTAssertEqual(engine.coordinator.sleepTimer.signal.deadline, deadline)
+        engine.select(second)
+        await waitUntil("Zweiter Titel geladen") { self.engine.currentTrack == second }
+        engine.play()
+        XCTAssertEqual(engine.coordinator.sleepTimer.signal.deadline, deadline)
+        engine.stop()
+        XCTAssertEqual(engine.coordinator.sleepTimer.snapshot.phase, .inactive)
+        XCTAssertEqual(engine.coordinator.sleepTimer.signal.deadline, 0)
+    }
+
+    func testSceneReturnExpiresTimerAndLateSongEndCannotRestartAfterReset() async throws {
+        let first = try writeModule(named: "sleep-scene-first.mod", title: "SLEEP SCENE")
+        let second = try writeModule(named: "sleep-scene-second.mod", title: "SLEEP NEXT")
+        let originalLoopMode = settings.loopMode
+        settings.loopMode = .playlist
+        engine.setQueue([first, second])
+        engine.select(first)
+        await waitUntil("Titel geladen") { self.engine.currentTrack == first }
+        defer { engine.stop(); settings.loopMode = originalLoopMode }
+        engine.play()
+        engine.coordinator.sleepTimer.start(minutes: 1)
+        engine.setSceneActive(false)
+        engine.coordinator.sleepTimer.signal.start(seconds: 0.001, now: SleepTimerClock.now())
+        try await Task.sleep(for: .milliseconds(20))
+        engine.setSceneActive(true)
+        XCTAssertFalse(engine.coordinator.isPlaying)
+        XCTAssertEqual(engine.coordinator.sleepTimer.snapshot.phase, .expired)
+        engine.coordinator.sleepTimer.cancel()
+        engine.coordinator.songEndPulse += 1
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(engine.currentTrack, first)
+        XCTAssertFalse(engine.coordinator.isPlaying)
     }
 
     // MARK: - Kaputte Titel

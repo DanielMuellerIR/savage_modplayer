@@ -4,6 +4,12 @@
 enum SequencerCore {
 
     @inline(__always)
+    static func willAdvanceRow(state: RealtimePlaybackState) -> Bool {
+        state.outputsUntilNextTick <= 0 && state.tick + 1 >= state.ticksPerRow
+            && state.patternDelayCounter == 0 && state.patternDelay == 0
+    }
+
+    @inline(__always)
     static func outputsPerTick(
         tempoMode: ITTempoMode,
         bpm: Int,
@@ -49,6 +55,7 @@ enum SequencerCore {
         sampleRate: Double
     ) {
         guard state.outputsUntilNextTick <= 0 else { return }
+        let advancesRow = willAdvanceRow(state: state)
         state.tick += 1
         if state.tick >= state.ticksPerRow {
             if state.patternDelayCounter > 0 {
@@ -65,7 +72,7 @@ enum SequencerCore {
                 state.patternDelay = 0
                 state.tick = 0
                 channels.first?.itVoicePool?.beginPatternDelayRepeat()
-            } else {
+            } else if advancesRow {
                 state.tick = 0
                 advanceRow(state: state, channels: channels, mod: mod, sampleRate: sampleRate)
             }

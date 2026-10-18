@@ -16,6 +16,13 @@ Ausgelagert aus `AGENTS.md` am 2026-09-11 (Kontext-Hygiene); Wortlaut erhalten.
 
 ## Library und Import
 
+- **ISO-Datumsrundläufe können Sekundenbruchteile verlieren.** Ein genauer
+  Abgleich-Checkpoint allein verhindert das nicht, wenn die lokale Songstellen-
+  Datei anschließend gröber speichert. Der lokale Speicher erhält deshalb ein
+  optionales Präzisionsfeld neben dem alten ISO-Datum. Beide Werte müssen
+  zusammenpassen; alte Dateien bleiben lesbar. Mit Dateijournal und Neustart
+  prüfen, damit ein Speicherrundlauf keine Scheinkonflikte erzeugt.
+
 - **Ein fehlgeschlagener Dateisystem-Scan leert keinen Index.** Liefert ein
   Verzeichnis-Enumerator `nil` oder unvollständige Ergebnisse, ist das kein
   leerer Bestand. Den alten Index bis zum vollständigen Neuaufbau behalten oder
@@ -26,6 +33,11 @@ Ausgelagert aus `AGENTS.md` am 2026-09-11 (Kontext-Hygiene); Wortlaut erhalten.
 
 ## App-Start und SwiftUI
 
+- **Dialoginhalt und Öffnungszustand zusammen übergeben.** Die Mac-Inspektoren
+  erzeugten beim ersten Öffnen ein leeres Sheet, weil eine optionale Modulkopie
+  und ein separates Bool gleichzeitig geändert wurden. `.sheet(item:)` erhält
+  stattdessen einen identifizierbaren, beim Öffnen festgehaltenen Modulsnapshot.
+  Die echte Erstöffnung muss Teil der Bedienprüfung sein.
 - **Ein positionales Startargument kostet der Mac-App ihr Fenster.** AppKit
   deutet es als Dateiöffnung; ohne SwiftUI-Fenster greift `.onOpenURL` nicht.
   `SavageModPlayerApp.init()` setzt `NSTreatUnknownArgumentsAsOpen`; eigene

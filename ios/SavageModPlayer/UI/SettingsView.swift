@@ -1,4 +1,5 @@
 import SwiftUI
+import SavageModPlayerCore
 
 // Der Einstellungs-Tab: Klang, Darstellung, Bibliothek, Ueber.
 //
@@ -9,12 +10,17 @@ struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        Content(settings: model.settings, library: model.library)
+        Content(settings: model.settings, library: model.library, openSync: model.showCollectionSync)
+            .sheet(item: $model.collectionSyncContext) { context in
+                CollectionSyncView(model: context.model).presentationDetents([.large])
+                    .preferredColorScheme(model.settings.theme.colorScheme)
+            }
     }
 
     private struct Content: View {
         @ObservedObject var settings: PlayerSettings
         @ObservedObject var library: LibraryStore
+        let openSync: () -> Void
 
         @State private var showImport = false
         @State private var showReset = false
@@ -25,6 +31,10 @@ struct SettingsView: View {
                     soundSection
                     appearanceSection
                     librarySection
+                    Section {
+                        Button("Sammlung abgleichen", systemImage: "icloud", action: openSync)
+                            .accessibilityIdentifier("openCollectionSync")
+                    } header: { Text("Sammlung") }
                     aboutSection
                 }
                 .scrollContentBackground(.hidden)
@@ -60,6 +70,7 @@ struct SettingsView: View {
                 Text("settings.sound")
             } footer: {
                 Text("settings.sound.hint")
+                Text("Titel-Overrides haben Vorrang vor diesen globalen Klangvorgaben.")
             }
         }
 

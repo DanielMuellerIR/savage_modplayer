@@ -1,6 +1,6 @@
 # Aktiver Projekt-Backlog
 
-Stand: 2026-10-16 · Version 1.6.32.
+Stand: 2026-10-18 · Version 1.6.52.
 
 Diese Datei ist die einzige aktive Projektliste. Erledigte Chronik liegt in
 Release Notes, abgeschlossenen Tasks und `archive/`.
@@ -16,6 +16,11 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
    sind mit Version 1.6.16 am iPhone 16 Pro Max bestanden (2026-10-01).
    Der File-Provider-Wächter braucht weiterhin einen realen reproduzierbaren
    Hänger; seine Unit-Tests ersetzen diese Abnahme nicht.
+
+0. **Einschlaftimer: iPhone-Geräteabnahme für 1.6.45.** Hintergrund-/
+   Sperrbildschirmbetrieb und reale Audio-Unterbrechungen während des Countdowns
+   beziehungsweise Ausblendens am Gerät prüfen. Mac-Abnahme und visuelle
+   Simulatorprüfung ersetzen diese Geräteabnahme nicht.
 
 1. **Gezielte Audio-Gegenproben nach dem Review vom 2026-10-02.** Die originale
    IT-Pingpong-Endpunktkonvention wurde mit IT 2.14 Patch 3 / ITWAV.DRV
@@ -33,6 +38,29 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
    Für den iPhone-Gerätetest zusätzlich Unterbrechung → Kopfhörer entfernen →
    Ende der Unterbrechung prüfen; der Simulator belegt den Zustandswechsel,
    nicht das reale Audio-Routing.
+
+## Geplante Erweiterungen
+
+Die [Erweiterungsübersicht](../docs/roadmap.md) hält die vereinbarten Funktionen
+und ihre Abhängigkeiten fest. Gespeicherte Playlists und Warteschlange sind auf macOS seit 1.6.34 vorhanden.
+Auf iPhone/iPad seit 1.6.35 ebenfalls vorhanden. Der Hintergrund-Metadatenindex ist seit 1.6.36 vorhanden. Suche, Sortierung und gespeicherte Filter sind seit 1.6.37, der Sample-Inspektor seit 1.6.38, der Modul-/Instrument-Inspektor seit 1.6.39 und Songstellen/Bereichsauswahl seit 1.6.40 vorhanden. Die macOS-Grundprüfung ist bestanden: Suche nach Instrumentnamen, gespeicherter Filter nach Neustart, Titelreihenfolge und Zweier-Wiedergabe, Sample-Wellenform und leerer Slot, IT-Hüllkurve sowie Marker speichern/springen und Bereichsanzeige in Tracker/Notenregen. Die iPhone-Suite umfasst 96 bestandene Tests; die drei ergänzenden iPad-Songstellen-Tests bestehen ebenfalls. Auch die ergänzende Mac-Detailabnahme ist bestanden: festgehaltene Zweier-Wiedergabe nach Änderung der Metadatenanzeige, Sample-Zoom/Pan, Tastenzuordnung und IT-Stereo/Sustain, weitere Hüllkurven und XM-Effekttabelle sowie Marker nach Neustart bearbeiten/löschen und unterschiedliche Bereiche in zwei Orders desselben Patterns.
+
+Native A/B-Audioschleifen sind seit 1.6.42 vorhanden und vollständig abgenommen.
+Audio-Gegenproben, Linux-Suite, 22 identische MOD-Baselines und 22 samplegenaue
+A/B-Korpusvergleiche bestehen. Die native Mac-Abnahme umfasst Light/Dark,
+Notenregen mit fortlaufenden Stimmen, Pause/Stop, geänderte Audioeinstellungen,
+Bereichs-/Titelwechsel, begrenzte Vorbereitung und Abbruch. Die iOS-Simulator-
+Prüfung besteht auf iPhone und iPad in DE/EN und beiden Darstellungen.
+Die Allokationssonde bestätigt mit positiver Gegenprobe je 1.000 MOD-/XM-/IT-
+Callbacks ohne Heap-Allokation. Der Stapel-Export ist seit 1.6.44 vorhanden und vollständig am Mac abgenommen. Stereo-Kanalspuren sind seit 1.6.43 vorhanden und vollständig abgenommen: Zielwahl, Fortschritt, Abbruch in beiden Renderphasen, Zielkonflikte, festgehaltener Titel, Mute/Solo, Stereo-Mix, Finder-Ergebnis sowie Light/Dark einschließlich schmalem Fenster und größerer Schrift. Die neuen Listen-/Warteschlangenabläufe sind noch auf einem echten Gerät abzunehmen.
+
+Das [portable Sammlungsformat](../docs/collection-exchange.md) ist seit 1.6.47 im gemeinsamen Core vorhanden. Seit 1.6.48 gibt es die nativen Export-/Import-Oberflächen mit Titelzuordnung, Vorschau und Konfliktentscheidungen. Der Transfer über Dateien und AirDrop ist noch auf einem echten iPhone zu prüfen; Simulator- und Mac-Dateirundwege ersetzen diese Geräteabnahme nicht. Die native Mac-Abnahme und der tatsächliche Dateirundweg Mac → iPhone-Simulator → Mac bestehen einschließlich Konfliktentscheidungen, Neustart und Erhalt lokaler Wiedergabeeinstellungen.
+
+Der [Offline-Notenregen-Video-Renderer](../docs/note-rain-video.md) ist seit 1.6.49 im macOS-Core vorhanden. Seit 1.6.50 sind die native Exportoberfläche, Vorschau und Zielwahl implementiert. Die zusammenhängende native Abnahme mit Vorschau, Fortschritt, Abbruch, Zielschutz, festgehaltenem Titel und laufender Wiedergabe besteht. Hell/Dunkel, schmale Ansicht und größte Schrift sind visuell geprüft. Die tatsächlich exportierten MOD-/IT-Videos enthalten bytegleiches Float32-Audio zur WAV-Referenz und enden samplegenau mit ihrem Bildtrack.
+
+## Automatischer Metadatenabgleich
+
+Die [Abgleich-Anbindung](../docs/collection-sync.md) ist seit 1.6.51 auf Mac und iPhone/iPad implementiert: lokale Erfassung, atomare Speicheranbindung, dauerhafte Titelzuordnung, Einrichtung, Status, Wiederholung und Konfliktentscheidungen. Die lokale Abnahme mit simuliertem Dienst besteht einschließlich nativer Mac-Zuordnung, Konflikten, Offline-Wiederholung und Kontowechsel. Vier isolierte App-/Darstellungstests am echten iPhone bestehen bei unveränderten Produktionseinstellungen und Metadatenspeichern. Der tatsächliche Dateirundweg Mac → iPhone-Simulator → Mac besteht auch mit 1.6.51. Seit 1.6.52 sind der gemeinsame Container bestätigt und die optionalen Mac-/iOS-Builds mit geprüften Profilen, minimalen CloudKit-Berechtigungen und getrennter Entwicklungs-/Produktionsumgebung vorbereitet. Der echte Entwicklungs-Rundweg Mac → iPhone → Mac besteht für Playlists, Favoriten, Songstellen und Klang-Overrides einschließlich stabiler IDs, lokaler Lautstärke und Mac-Neustart. Das geprüfte Schema ist in Production bereitgestellt. Der konfigurierte und notarisierte Mac-Build besteht die native Abnahme ohne iCloud-Konto einschließlich Fehler/Wiederholung, Speicherschutz, Dateiübertragung und Songstellen nach Neustart. Der schreibende Production-Rundweg und echte parallele Playlistkonflikte mit Songstellen-Löschung bestehen. Development wurde nach Testablaufkorrekturen zusätzlich mit einem frischen iPhone-Client geprüft; Production besteht durchgehend. Der Mac-Endstand bleibt nach Neustart erhalten. Zusätzlich bestehen in Production der bytegleiche Asset-Rundweg einer 6,4-MB-Sammlung mit 20.000 synthetischen Titelbeschreibungen und die echte Ablehnung eines veralteten bedingten Schreibzugriffs. Die eigene temporäre Prüfzone ist gelöscht; der App-Snapshot bleibt unverändert. Reale Netztrennung, tatsächlicher Kontowechsel, Quota/Drosselung und große Sammlungen in der Oberfläche auf zwei Geräten bleiben zusätzliche Dienstabnahmen; die entsprechenden Schutz- und Grenzfälle sind lokal getestet. Standardbuilds lassen den Cloud-Zugriff ausgeschaltet; der manuelle Austausch bleibt nutzbar.
 
 ## Optionaler Feinschliff
 

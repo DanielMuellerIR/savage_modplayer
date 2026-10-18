@@ -5,7 +5,7 @@ import SwiftUI
 // Favoritenfilter und die beiden Wege, Musik auf das Geraet zu bekommen.
 //
 // Wichtig fuer das Verstaendnis der Abspielreihenfolge: gespielt wird immer die
-// FLACHE Liste (`library.tracks` bzw. `library.filteredTracks`), nie nur der
+// FLACHE, angezeigte Auswahl, nie nur der
 // aufgeklappte Ordner. Weiter und Zurueck laufen deshalb ueber Ordnergrenzen
 // hinweg, genau in der Reihenfolge, die auf dem Bildschirm steht.
 struct LibraryView: View {
@@ -31,30 +31,44 @@ struct LibraryView: View {
         Content(
             library: model.library,
             player: model.player,
+            playlists: model.playlists,
+            catalog: model.catalog,
             settings: model.settings,
             embedsNavigation: embedsNavigation,
             onOpenSettings: onOpenSettings,
             // Nur die Weitergabe, keine Beobachtung: Der innere Aufbau soll
             // AppModel nicht beobachten muessen, um Dateien annehmen zu koennen.
             onDropFiles: { [model] urls in model.importDropped(urls) },
-            onSearchActiveChange: { [model] active in model.isSearchFieldActive = active })
+            onOpenCollection: { [model] in model.showCollectionExchange() },
+            onSearchActiveChange: { [model] active in model.isSearchFieldActive = active },
+            onLibraryPanelChange: { [model] active in model.isLibraryPanelOpen = active })
     }
 
     private struct Content: View {
         @ObservedObject var library: LibraryStore
         @ObservedObject var player: PlaybackEngine
+        @ObservedObject var playlists: PlaylistCollectionStore
+        @ObservedObject var catalog: LibraryCatalogModel
         let settings: PlayerSettings
         let embedsNavigation: Bool
         let onOpenSettings: (() -> Void)?
         let onDropFiles: ([URL]) -> Void
+        let onOpenCollection: () -> Void
         let onSearchActiveChange: (Bool) -> Void
+        let onLibraryPanelChange: (Bool) -> Void
 
-        @State private var search = ""
-        @State private var favoritesOnly = false
+        private var search: String { catalog.query.search }
+        private var favoritesOnly: Bool {
+            get { catalog.query.favoritesOnly }
+            nonmutating set { catalog.query.favoritesOnly = newValue }
+        }
         // Pfade der aufgeklappten Ordner. Alles startet zugeklappt; nur der Weg
         // zum laufenden Titel klappt von selbst auf.
         @State private var expandedFolders: Set<String> = []
         @State private var showImport = false
+        @State private var showPlaylists = false
+        @State private var showQueue = false
+        @State private var showFilters = false
         // Schwebt gerade etwas ueber der Bibliothek? Nur fuer die Rueckmeldung.
         @State private var isDropTargeted = false
 
@@ -91,6 +105,12 @@ struct LibraryView: View {
             .navigationTitle("tab.library")
             .toolbar { toolbarContent }
             .sheet(isPresented: $showImport) { LibraryImportSheet() }
+            .sheet(isPresented: $showPlaylists) {
+                PlaylistsView(store: playlists, library: library, player: player)
+            }
+            .sheet(isPresented: $showQueue) { PendingQueueView(player: player) }
+            .sheet(isPresented: $showFilters) { LibraryFiltersView(catalog: catalog) }
+            .onChange(of: showPlaylists || showFilters || showImport || showQueue) { _, active in onLibraryPanelChange(active) }
             .onAppear { expandPath(to: player.currentTrack) }
             .onChange(of: player.currentTrack) { _, track in expandPath(to: track) }
         }
@@ -116,6 +136,20 @@ struct LibraryView: View {
 
         @ToolbarContentBuilder
         private var toolbarContent: some ToolbarContent {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("Sammlung übertragen", systemImage: "arrow.up.arrow.down", action: onOpenCollection)
+                        .disabled(library.isBusy).accessibilityIdentifier("collection-transfer")
+                    Button("library.filters.title", systemImage: "line.3.horizontal.decrease") { showFilters = true }
+                    Button("playlists.title", systemImage: "music.note.list") { showPlaylists = true }
+                    Button("queue.count \(player.pendingQueue.items.count)", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                        showQueue = true
+                    }
+                } label: {
+                    Label("playlists.menu", systemImage: "list.bullet.rectangle")
+                }
+                .accessibilityIdentifier("playlists-menu")
+            }
             ToolbarItem(placement: .topBarLeading) {
                 Button {
                     favoritesOnly.toggle()
@@ -223,11 +257,16 @@ struct LibraryView: View {
         // Treffer. Zugeklappte Ordner wuerden sie verstecken, also ist dann
         // alles offen.
         private var isFiltering: Bool {
-            !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || favoritesOnly
+            catalog.query.usesFlatList
         }
 
         private var rows: [LibraryRow] {
-            LibraryTree.rows(of: displayTree, expanded: expandedFolders, expandAll: isFiltering)
+            if isFiltering {
+                return playableTracks.map {
+                    LibraryRow(id: "track:" + $0.relativePath, depth: 0, kind: .track(relativePath: $0.relativePath, displayName: $0.displayName))
+                }
+            }
+            return LibraryTree.rows(of: displayTree, expanded: expandedFolders, expandAll: isFiltering)
         }
 
         private var treeList: some View {
@@ -235,7 +274,16 @@ struct LibraryView: View {
                 if library.isBusy { activityRow }
                 if let message = library.errorMessage { errorRow(message) }
                 if !library.pendingArchives.isEmpty { pendingRow }
+                LibraryIndexProgressView(catalog: catalog)
                 if !isFiltering { playAllRows }
+                else {
+                    Button("library.play.results", systemImage: "play.fill") {
+                        let tracks = playableTracks
+                        player.setExplicitQueue(tracks)
+                        if let track = tracks.first { player.play(track) }
+                    }
+                    .disabled(playableTracks.isEmpty || catalog.isFiltering)
+                }
 
                 ForEach(rows) { row in
                     switch row.kind {
@@ -261,9 +309,9 @@ struct LibraryView: View {
             // Vor `searchable`, damit der Melder INNERHALB des durchsuchbaren
             // Bereichs liegt — nur dort gibt es `isSearching`.
             .background { SearchStateReporter(onChange: onSearchActiveChange) }
-            .searchable(text: $search, prompt: Text("library.search.prompt"))
+            .searchable(text: $catalog.query.search, prompt: Text("library.search.prompt"))
             .overlay {
-                if rows.isEmpty && isFiltering {
+                if rows.isEmpty && isFiltering && catalog.progress == nil && !catalog.isFiltering {
                     ContentUnavailableView.search(text: search)
                 }
             }
@@ -382,10 +430,18 @@ struct LibraryView: View {
                         .font(.caption)
                         .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
                         .frame(width: 16)
-                    Text(verbatim: displayName)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .fontWeight(isCurrent ? .semibold : .regular)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(verbatim: displayName)
+                            .lineLimit(1).truncationMode(.middle)
+                            .fontWeight(isCurrent ? .semibold : .regular)
+                        if let metadata = catalog.records[relativePath]?.metadata {
+                            Text(verbatim: metadata.librarySummary)
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        if isFiltering {
+                            Text(verbatim: relativePath).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
                     Spacer()
                     if isFavorite {
                         Image(systemName: "star.fill")
@@ -411,6 +467,29 @@ struct LibraryView: View {
                 }
                 .tint(.yellow)
             }
+            .contextMenu {
+                if let track = library.track(forRelativePath: relativePath) {
+                    Button("queue.next", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                        player.enqueue(track, next: true)
+                    }
+                    Button("queue.add", systemImage: "text.badge.plus") { player.enqueue(track) }
+                    Menu("playlists.add", systemImage: "music.note.list") {
+                        ForEach(playlists.document.playlists) { playlist in
+                            Button(playlist.name) { playlists.add(track, to: playlist.id) }
+                        }
+                        if playlists.document.playlists.isEmpty {
+                            Button("playlists.create") { showPlaylists = true }
+                        }
+                    }
+                    .disabled(!playlists.canWrite)
+                    if catalog.preferences.heardIDs.contains(relativePath) {
+                        Button("library.mark.unheard", systemImage: "arrow.uturn.backward") {
+                            catalog.markHeard(relativePath, heard: false)
+                        }
+                        .disabled(!catalog.preferencesWritable)
+                    }
+                }
+            }
         }
 
         // Einrueckung je Ebene. Bewusst massvoll: auf einem Telefon ist der
@@ -428,20 +507,15 @@ struct LibraryView: View {
         // Die Abspielliste ist immer die vollstaendige (gefilterte) Auswahl,
         // nicht der angetippte Ordner.
         private var playableTracks: [TrackRef] {
-            library.filteredTracks(search: search, favoritesOnly: favoritesOnly)
-        }
-
-        // Dieselbe Auswahl noch einmal als Beschreibung: Die Wiedergabe merkt
-        // sie sich, damit eine spaetere Aenderung der Bibliothek die Liste
-        // innerhalb dieser Auswahl nachzieht statt sie zu ersetzen.
-        private var currentFilter: QueueFilter {
-            QueueFilter(search: search, favoritesOnly: favoritesOnly)
+            if !catalog.query.usesFlatList { return library.tracks }
+            return catalog.filteredIDs.compactMap { library.track(forRelativePath: $0) }
         }
 
         private func play(relativePath: String) {
             let tracks = playableTracks
             guard let track = tracks.first(where: { $0.relativePath == relativePath }) else { return }
-            player.setQueue(tracks, filter: currentFilter)
+            if catalog.query.usesFlatList { player.setExplicitQueue(tracks) }
+            else { player.setQueue(tracks) }
             player.play(track)
         }
 
@@ -449,7 +523,8 @@ struct LibraryView: View {
             let tracks = playableTracks
             guard !tracks.isEmpty else { return }
             settings.set(\.shuffleEnabled, to: shuffled)
-            player.setQueue(tracks, filter: currentFilter)
+            if catalog.query.usesFlatList { player.setExplicitQueue(tracks) }
+            else { player.setQueue(tracks) }
             // Bei Zufallswiedergabe faengt die Liste auch zufaellig an — sonst
             // begaenne jeder Abend mit demselben Titel.
             player.play(shuffled ? (tracks.randomElement() ?? tracks[0]) : tracks[0])

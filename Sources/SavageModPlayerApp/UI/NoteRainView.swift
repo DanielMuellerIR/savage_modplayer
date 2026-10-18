@@ -2,6 +2,7 @@ import SwiftUI
 import SavageModPlayerCore
 
 struct NoteRainView: View {
+    @EnvironmentObject private var songMarkers: SongMarkersModel
     @ObservedObject var coordinator: ModPlayerCoordinator
     @ObservedObject var playbackActions: PlaybackActions
     @ObservedObject var model: NoteRainModel
@@ -73,6 +74,8 @@ struct NoteRainView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             VStack(alignment: .leading, spacing: 10) {
+                SongSectionStrip(model: songMarkers, transport: coordinator.transport)
+                SongMarkersButton(coordinator: coordinator, theme: theme)
                 HStack(spacing: 16) {
                     ScrollView(.horizontal) {
                         HStack(spacing: 14) {

@@ -125,7 +125,7 @@ class IOSLibraryWiringTests(unittest.TestCase):
         """
         source = self._library_view()
         reporter = source.index("SearchStateReporter(onChange:")
-        searchable = source.index(".searchable(text: $search")
+        searchable = source.index(".searchable(text:")
         self.assertLess(reporter, searchable)
 
     def test_playback_commands_are_attached_to_the_scene(self):

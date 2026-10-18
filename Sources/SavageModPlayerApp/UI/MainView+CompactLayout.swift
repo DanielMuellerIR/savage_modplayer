@@ -28,6 +28,9 @@ extension MainView {
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+                SleepTimerButton(timer: coordinator.sleepTimer, theme: theme, compact: true)
+                TrackPlaybackSettingsButton(model: playbackSettings, title: coordinator.trackName, theme: theme, compact: true)
+
                 Button(action: {
                     theme = theme == .workbench ? .cyber : .workbench
                 }) {
@@ -254,11 +257,11 @@ extension MainView {
 
     private var compactAudioToggles: some View {
         HStack(spacing: 14) {
-            Toggle("LED FILTER", isOn: $coordinator.ledFilterActive)
+            Toggle("LED FILTER", isOn: filterBinding)
                 .toggleStyle(CheckboxToggleStyle(theme: theme))
                 .help("Amiga-LED-Filter: Tiefpass für den dumpferen Originalklang.")
 
-            Toggle("HI-FI INT.", isOn: $coordinator.useInterpolation)
+            Toggle("HI-FI INT.", isOn: interpolationBinding)
                 .toggleStyle(CheckboxToggleStyle(theme: theme))
                 .help("Sample-Interpolation für einen weicheren Klang.")
         }

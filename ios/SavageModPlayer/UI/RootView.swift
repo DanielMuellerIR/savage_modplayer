@@ -1,4 +1,5 @@
 import SwiftUI
+import SavageModPlayerCore
 
 // Die Oberflaeche der iPhone-App: drei Tabs (Bibliothek, Wiedergabe,
 // Einstellungen) und eine Mini-Player-Leiste, die ueber der Tab-Leiste steht,
@@ -18,6 +19,11 @@ struct RootView: View {
         // aendert sich selten). Die Einstellungen kommen als beobachtetes Objekt
         // in den inneren Aufbau, weil das Erscheinungsbild daran haengt.
         Content(model: model, settings: model.settings)
+            .sheet(item: $model.collectionContext) { context in
+                CollectionExchangeView(context: context).presentationDetents([.large])
+                    .preferredColorScheme(model.settings.theme.colorScheme)
+            }
+            .task { model.prepareCollectionSync() }
     }
 
     // Welcher Tab gerade vorn ist.
@@ -125,6 +131,7 @@ struct RootView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView()
             }
+            .onChange(of: showSettings) { _, active in model.isLibraryPanelOpen = active }
         }
 
         private var tabLayout: some View {
@@ -238,7 +245,7 @@ private struct MiniPlayerBar: View {
                         .frame(width: 32, height: 32)
                 }
                 .accessibilityLabel("transport.next")
-                .disabled(player.queue.isEmpty)
+                .disabled(player.queue.isEmpty && player.pendingQueue.items.isEmpty)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)

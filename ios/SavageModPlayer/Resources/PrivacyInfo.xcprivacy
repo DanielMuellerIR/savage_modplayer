@@ -43,6 +43,15 @@
 				<string>CA92.1</string>
 			</array>
 		</dict>
+		<dict>
+			<!-- Monotone Zeit für den Einschlaftimer; Zeitwerte bleiben lokal. -->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

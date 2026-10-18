@@ -10,6 +10,7 @@ struct RowIndexCell: View {
     let fontSize: CGFloat
     // Klick auf die Zeilennummer springt zu dieser Zeile (Play danach ab hier).
     var onTap: (() -> Void)? = nil
+    var onBoundary: ((Bool) -> Void)? = nil
 
     var body: some View {
         Text(String(format: "%02d", rIdx))
@@ -18,6 +19,12 @@ struct RowIndexCell: View {
             .frame(width: 38, height: fontSize + 6, alignment: .center)
             .contentShape(Rectangle())
             .onTapGesture { onTap?() }
+            .contextMenu {
+                if let onBoundary {
+                    Button("Als Anfang markieren") { onBoundary(true) }
+                    Button("Als Ende markieren") { onBoundary(false) }
+                }
+            }
             .help("Zu dieser Zeile springen — Play/Weiter spielt ab hier (Tempo wird rekonstruiert; laufende Slide-/Vibrato-Effekte näherungsweise).")
     }
 }
@@ -178,6 +185,7 @@ struct GridCellsBlock: View, Equatable {
     @Binding var hScrollOffset: CGFloat
     // Klick auf eine Zeilennummer -> zu dieser Zeile springen. NICHT im == (Closure).
     var onSeekRow: (Int) -> Void
+    var onBoundary: (Int, Bool) -> Void = { _, _ in }
 
     nonisolated static func == (lhs: GridCellsBlock, rhs: GridCellsBlock) -> Bool {
         let sameTheme = lhs.theme == rhs.theme
@@ -219,7 +227,7 @@ struct GridCellsBlock: View, Equatable {
             VStack(spacing: 0) {
                 ForEach(0..<rowCount, id: \.self) { rIdx in
                     RowIndexCell(rIdx: rIdx, theme: theme, fontSize: fontSize,
-                                 onTap: { onSeekRow(rIdx) }).id(rIdx)
+                                 onTap: { onSeekRow(rIdx) }, onBoundary: { onBoundary(rIdx, $0) }).id(rIdx)
                 }
             }
             // Horizontal scrollbare Kanalspalten — ALLE Zellen in EINEM Canvas.
@@ -242,6 +250,9 @@ struct TrackerGridView: View {
     let channelIndices: [Int]
     let theme: PlayerTheme
     var onSeekRow: (Int) -> Void = { _ in }
+    var selectedRows: ClosedRange<Int>?
+    var markerRows: Set<Int> = []
+    var onBoundary: (Int, Bool) -> Void = { _, _ in }
 
     @State private var hScrollOffset: CGFloat = 0
 
@@ -291,6 +302,16 @@ struct TrackerGridView: View {
                 ScrollViewReader { proxy in
                     ScrollView(.vertical) {
                         ZStack(alignment: .topLeading) {
+                            Canvas { context, size in
+                                guard let selectedRows else { return }
+                                let visible = TrackerGridGeometry.visibleRowRange(clipMinY: context.clipBoundingRect.minY,
+                                    clipMaxY: context.clipBoundingRect.maxY, rowHeight: rowHeight, rowCount: rowCount)
+                                let lower = max(selectedRows.lowerBound, visible.lowerBound)
+                                let upper = min(selectedRows.upperBound + 1, visible.upperBound)
+                                guard lower < upper else { return }
+                                context.fill(Path(CGRect(x: 0, y: CGFloat(lower) * rowHeight, width: size.width,
+                                    height: CGFloat(upper - lower) * rowHeight)), with: .color(Color.accent(theme).opacity(0.12)))
+                            }.frame(height: CGFloat(rowCount) * rowHeight).allowsHitTesting(false)
                             // Highlight-Band der aktuellen Zeile (hinter den Zellen).
                             // Bewegt sich pro Zeile, ohne den Zellen-Block anzufassen.
                             Rectangle()
@@ -313,9 +334,18 @@ struct TrackerGridView: View {
                                 rowCount: rowCount,
                                 channelIndices: channelIndices.isEmpty ? [0] : channelIndices,
                                 hScrollOffset: $hScrollOffset,
-                                onSeekRow: onSeekRow
+                                onSeekRow: onSeekRow,
+                                onBoundary: onBoundary
                             )
                             .equatable()
+                            Canvas { context, _ in
+                                let visible = TrackerGridGeometry.visibleRowRange(clipMinY: context.clipBoundingRect.minY,
+                                    clipMaxY: context.clipBoundingRect.maxY, rowHeight: rowHeight, rowCount: rowCount)
+                                for row in markerRows where visible.contains(row) {
+                                    context.fill(Path(ellipseIn: CGRect(x: 2, y: CGFloat(row) * rowHeight + rowHeight / 2 - 2,
+                                        width: 4, height: 4)), with: .color(.orange))
+                                }
+                            }.frame(height: CGFloat(rowCount) * rowHeight).allowsHitTesting(false)
                         }
                     }
                     .onChange(of: currentRow) { newRow in

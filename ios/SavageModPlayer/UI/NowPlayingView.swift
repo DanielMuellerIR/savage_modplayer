@@ -54,6 +54,17 @@ struct NowPlayingView: View {
                 }
                 .navigationTitle("tab.player")
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        SleepTimerButton(timer: player.coordinator.sleepTimer)
+                    }
+                    if player.currentTrack != nil, let module = player.coordinator.activeMod {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            TrackPlaybackSettingsButton(settings: player.playbackSettings, title: player.currentTrack?.displayName ?? module.name)
+                        }
+                        ToolbarItem(placement: .topBarTrailing) { PlayerInspectionMenu(module: module) }
+                    }
+                }
             }
             // TabView behaelt nicht ausgewaehlte Tabs im Speicher. Der
             // Auswahlzustand kommt deshalb ausdruecklich von RootView; auf

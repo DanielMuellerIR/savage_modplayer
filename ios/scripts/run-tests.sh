@@ -14,6 +14,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IOS_DIR="$(dirname "$SCRIPT_DIR")"
+APP_VERSION="$(cat "$IOS_DIR/../VERSION")"
 
 DERIVED_DATA="${DERIVED_DATA:-$IOS_DIR/build/DerivedData}"
 LOG="${TEST_LOG:-$IOS_DIR/build/run-tests.log}"
@@ -97,8 +98,13 @@ ARGS=(
     -scheme SavageModPlayer
     -configuration Debug
     -destination "$DESTINATION"
+    -parallel-testing-enabled NO
+    # Testlog und xcresult bleiben erhalten; die zusätzliche Simulator-
+    # Diagnosesammlung kann nach bereits abgeschlossenen Tests hängen bleiben.
+    -collect-test-diagnostics never
     -derivedDataPath "$DERIVED_DATA"
     CODE_SIGNING_ALLOWED=NO
+    MARKETING_VERSION="$APP_VERSION"
 )
 if [ -n "${TEST_FILTER:-}" ]; then
     ARGS+=(-only-testing:"$TEST_FILTER")

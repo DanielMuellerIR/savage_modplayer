@@ -12,6 +12,23 @@ extension MainView {
         #if os(macOS)
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if NSApp.modalWindow != nil || NSApp.keyWindow?.sheetParent != nil || NSApp.keyWindow?.attachedSheet != nil {
+                return event
+            }
+            // Escape beendet den Exportdialog auch im fokussierten Ordnernamen.
+            if showExportDialog || isExporting || stemExport.isRunning || exportStatusMessage != nil || stemExport.message != nil {
+                if event.keyCode == 53 {
+                    if stemExport.isRunning { stemExport.cancel() }
+                    else if !isExporting {
+                        showExportDialog = false
+                        exportModule = nil
+                        exportStatusMessage = nil
+                        stemExport.clear()
+                    }
+                    return nil
+                }
+                return event
+            }
             // Nicht in Textfelder (Suche/Export) eingreifen. Der Feld-Editor eines
             // fokussierten SwiftUI-TextField IST eine NSText-Subklasse (NSTextView),
             // daher greift dieser Guard tatsaechlich — kein toter Code.

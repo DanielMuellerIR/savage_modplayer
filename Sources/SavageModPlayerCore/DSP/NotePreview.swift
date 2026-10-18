@@ -72,7 +72,7 @@ public final class NotePreviewExchange: @unchecked Sendable {
 }
 
 public struct NotePreviewCommand: Sendable, Equatable {
-    enum Kind: Sendable { case seek, tempo, options }
+    enum Kind: Sendable { case seek, tempo, options, sectionLoopDisabled }
     var kind: Kind = .tempo
     var frame: UInt64 = 0
     var position = 0
@@ -92,8 +92,9 @@ public struct NotePreviewConfiguration: Sendable {
     let bpm: Int
     let globalVolume: Int
     let palClock: Bool
+    let sectionLoop: PreparedSectionLoop?
 
-    init(mod: Mod, sampleRate: Double, state: RealtimePlaybackState) {
+    init(mod: Mod, sampleRate: Double, state: RealtimePlaybackState, sectionLoop: PreparedSectionLoop? = nil) {
         self.mod = mod
         self.sampleRate = sampleRate
         position = state.position
@@ -102,6 +103,7 @@ public struct NotePreviewConfiguration: Sendable {
         bpm = state.bpm
         globalVolume = Int(state.globalVolume)
         palClock = state.palClock
+        self.sectionLoop = sectionLoop
     }
 }
 
@@ -144,9 +146,11 @@ final class NotePreviewSimulation {
     private var commandIndex = 0
     private var retainedSince: Double = 0
     private var songEnds: [Double] = []
+    private let sectionLoop: SectionLoopPlayback?
 
     init(configuration: NotePreviewConfiguration) {
         self.configuration = configuration
+        sectionLoop = configuration.sectionLoop.map(SectionLoopPlayback.init)
         channels = RenderEngine.makeRenderChannels(for: configuration.mod)
         generations = [UInt64](repeating: 0, count: channels.count)
         itGenerations = generations
@@ -171,6 +175,9 @@ final class NotePreviewSimulation {
             while commandIndex < commands.count, commands[commandIndex].frame <= frame {
                 apply(commands[commandIndex])
                 commandIndex += 1
+            }
+            if sectionLoop?.beginFrame(state: state, channels: channels) == true {
+                for index in channels.indices { close(index, at: frame) }
             }
             if state.outputsUntilNextTick <= 0 {
                 SequencerCore.advanceIfNeeded(state: state, channels: channels, mod: mod, sampleRate: rate)
@@ -206,6 +213,9 @@ final class NotePreviewSimulation {
             SequencerCore.recalculateTickDuration(state: state, sampleRate: configuration.sampleRate)
         case .options:
             state.palClock = command.palClock
+        case .sectionLoopDisabled:
+            sectionLoop?.disable()
+            _ = sectionLoop?.beginBlock()
         }
     }
 

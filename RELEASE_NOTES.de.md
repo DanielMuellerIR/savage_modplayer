@@ -1,3 +1,103 @@
+Savage Mod Player 1.6.52 ergänzt eine ausdrückliche CloudKit-Buildkonfiguration für Mac und iPhone. Optionale Builds prüfen Profil, App-Kennung, Container, Umgebung, Ablaufdatum und lokalen Signierschlüssel, bevor der Anbieter aktiviert wird. Standardbuilds lassen den Cloud-Zugriff ausgeschaltet. Entwicklung und Produktion bleiben getrennt; iOS-Builds verwenden vorhandene Profile, ohne automatisch Signiermaterial anzulegen. Der echte Entwicklungs-Rundweg Mac → iPhone → Mac besteht für Playlists, Favoriten, Songstellen und Klang-Overrides einschließlich stabiler IDs und Mac-Neustart. Das geprüfte CloudKit-Schema ist nach Production bereitgestellt. Der konfigurierte, notarisierte Mac-Build besteht die native Abnahme ohne iCloud-Konto einschließlich Wiederholung, geschütztem lokalem Speicher, Dateiübertragung und Songstellen nach Neustart. Der echte Production-Rundweg und ausdrückliche Zwei-Geräte-Konflikte mit Songstellen-Löschung bestehen; der entschiedene Stand bleibt nach Mac-Neustart erhalten. Eine zusätzliche Produktionsprüfung überträgt ein 6,4-MB-Asset mit 20.000 synthetischen Titelbeschreibungen und weist einen tatsächlich veralteten bedingten Schreibzugriff zurück. Die temporäre Prüfzone wird entfernt; der App-Snapshot bleibt unverändert. Reale Netztrennung, Kontowechsel, Dienstdrosselung und große Sammlungen in der Oberfläche auf zwei Geräten sind durch diese Prüfungen nicht belegt. Die erste Einrichtung erkennt jetzt eine noch fehlende private Zone; erst die ausdrückliche Bestätigung legt sie an. Bei bestehendem Checkpoint bleibt eine fehlende Cloud-Sammlung ein blockierender Fehler.
+
+Savage Mod Player 1.6.51 ergänzt die lokale App-Anbindung für den Metadatenabgleich auf Mac und iPhone/iPad: Einrichtung, Status, Titelzuordnung, ausdrückliche Konfliktentscheidungen und Wiederholung. Ein dauerhaft beobachteter Stand erhält bestätigte Entscheidungen über unterbrochene Veröffentlichungen und Neustarts; Playlists, Songstellen, Klang-Overrides, Abgleichstand und ausgewählte Einstellungen teilen eine Wiederherstellungstransaktion. Fehlende Speicher oder verschwundene Einstellungsschlüssel dürfen keine Cloud-Löschungen erzeugen. Globale Titel-IDs, Konto-Generationen und bedingte Schreibvorgänge schützen lokale Änderungen vor verspäteten Ergebnissen. Der echte CloudKit-Anbieter bleibt bis zur bestätigten Containerkonfiguration, passenden Entitlements und Profilen sowie einem echten Zwei-Geräte-Dienstlauf ausgeschaltet. Der manuelle Sammlungs-Austausch bleibt nutzbar. Lokale Songstellen behalten Sekundenbruchteile; ältere Dateien bleiben lesbar.
+
+Savage Mod Player 1.6.50 ergänzt den nativen Notenregen-Videoexport auf macOS. Eine pausierte Vorschau verwendet denselben Renderer wie die fertige MOV-Datei. Wählbar sind Auflösung bis Full HD, 24/25/30/60 Bilder pro Sekunde, hohe oder kompakte H.264-Kompression, Darstellung, Vorlauf und Dauergrenze. Titel und Klangoptionen werden beim Öffnen festgehalten; der Export läuft im Hintergrund mit Fortschritt und Abbruch. Vorhandene Ziele bleiben geschützt, fertige Videos lassen sich im Finder zeigen. Behebt einen Absturz beim Öffnen der Videovorschau in eigenständig gebauten App-Bundles. Die Buttons im Exportdialog bleiben auch bei größter Schrift lesbar.
+
+Savage Mod Player 1.6.49 ergänzt den Offline-Notenregen-Video-Renderer im macOS-Core. H.264-Video und verlustfreies Stereo-Float32-Audio verwenden eine gemeinsame ganzzahlige Sample-Zeitbasis; das letzte Bild wird exakt am Audioende abgeschnitten. Begrenzte Audio-, Bild- und Notenpuffer, Klangoptionen, logische IT-Kanalzuordnung und Abbruch sind enthalten. Eine neue MOV-Datei wird erst nach erfolgreichem Abschluss veröffentlicht. Die native Exportoberfläche folgt getrennt.
+
+Savage Mod Player 1.6.48 ergänzt den nativen Sammlungs-Export und -Import auf macOS und iPhone/iPad. Eine Vorschau zeigt Playlists, Favoriten, Songstellen und Klang-Einstellungen; lokale Titelzuordnungen werden geprüft, fehlende Titel zugeordnet oder übersprungen und Konflikte vor der Übernahme entschieden. Die versionierte `.savagecollection`-Datei enthält Metadaten ohne Musik oder lokale URLs. Ein Wiederherstellungsjournal schützt Sammlung und Voreinstellungen bei unterbrochenen Übernahmen. Lautstärke, laufende Timer und Warteschlange bleiben lokal. Beim manuellen Weiterblättern bleibt der nächste Warteschlangeneintrag außerdem erhalten, falls die Wiedergabe beim Ablauf des Einschlaftimers nicht startet. Mehrzeilige Mac-Zeilen halten Pfadhinweise und Zuordnungsstatus lesbar.
+
+Savage Mod Player 1.6.47 ergänzt das gemeinsame portable Sammlungsformat für Playlists, Favoriten, Songstellen sowie globale Klang-Vorgaben und Titel-Overrides. Versioniertes JSON enthält relative Dateihinweise und optionale Inhaltsnachweise; Lesen und Referenzen sind begrenzt und validiert. Importvorschauen verlangen Titelzuordnung und ausdrückliche Konfliktentscheidungen, erhalten lokale Daten und erkennen veraltete Vorschauen. Das Format enthält weder Audio noch lokale Quellen-URLs; die nativen Import-/Export-Bedienelemente folgen als eigener Schritt.
+
+Savage Mod Player 1.6.46 ergänzt Klang-Einstellungen pro Titel auf Mac und iPhone/iPad. Ausdrückliche Overrides für MOD-Clock, Stereo-Separation, Interpolation und LED-Ausgabefilter ersetzen jeweils nur die passende globale Vorgabe. Titelwechsel und Neustart erhalten die Zuordnung über stabile Quellen-IDs; Rücksetzen betrifft nur den gewählten Titel. Nicht anwendbare Clock-Optionen bleiben bei XM, S3M und IT ausgeblendet. Beschädigte Einstellungsdateien bleiben erhalten, während sichere globale Vorgaben gelten.
+
+Savage Mod Player 1.6.45 ergänzt einen Einschlaftimer für die Mac- und iPhone/iPad-App. Die letzten zehn Sekunden blenden unabhängig von der Aktualisierung der Oberfläche aus. Abbruch und Verlängerung stellen den gewünschten Pegel sanft wieder her; der Ablauf beendet die Wiedergabe und verhindert automatisches Fortsetzen nach Unterbrechungen oder verspätetem Laden. Der Countdown läuft bei Pause, Titelwechsel und A/B-Wiedergabe weiter. Der Lautstärkewert bleibt erhalten; ein aktiver Timer wird nach einem App-Neustart nicht wiederhergestellt.
+
+Savage Mod Player 1.6.44 ergänzt den WAV-Stapelexport auf macOS. Titel aus der aktuellen Playlist oder den Suchtreffern auswählen, Stereo-Mix oder Kanalspuren wählen und gespeicherte Audioeinstellungen wiederverwenden. Vorhandene Ziele werden übersprungen oder unter einem neuen Namen erhalten. Fortschritt, Abbruch und ein Stapelbericht mit Einzelergebnissen machen fertige Ausgaben sichtbar; der Export arbeitet seriell mit begrenzten Audiopuffern.
+
+Savage Mod Player 1.6.43 ergänzt den Export tatsächlich gespielter Stereo-Kanalspuren auf macOS. IT-Hintergrundstimmen bleiben ihrem logischen Kanal zugeordnet. Float32-WAVs und Referenzmix haben denselben Anfang, dieselbe Länge und einen gemeinsamen Pegelfaktor. Eine Begleitdatei hält Audiooptionen und Mastergrenzen fest: Die Spuren liegen vor dem tanh-Limiter; Mixerlautstärke und externer LED-Ausgabefilter sind nicht enthalten. Zwei blockweise Renderdurchläufe begrenzen den Speicherbedarf. Die Oberfläche zeigt Fortschritt und Abbruch; bestehende Zielordner bleiben geschützt.
+
+Savage Mod Player 1.6.42 ergänzt native A/B-Wiedergabe im Songstellenblatt.
+Ein begrenzter Renderlauf im Hintergrund rekonstruiert den tatsächlich gespielten
+Weg nach A einschließlich laufender Samples, Effekt-Memory und IT-Hintergrundstimmen.
+Jede Wiederholung stellt diesen Zustand wieder her und schließt alle Ticks und
+Delays von B ein. Abbruch, unerreichbare Grenzen, Pause und geänderte Einstellungen
+haben eigene Zustände. Der Mac-Notenregen verwendet denselben Snapshot und
+Framebereich. Der LED-Ausgabefilter verarbeitet den entstehenden Datenstrom weiter;
+seine Ausgabehistorie liegt außerhalb des Replay-Snapshots.
+Sample- und Modulinspektor erhalten das festgehaltene Modul direkt beim Öffnen;
+der erste Aufruf erzeugt dadurch kein leeres Dialogblatt mehr.
+
+Savage Mod Player 1.6.41 korrigiert Playlist- und Warteschlangenwechsel.
+Eingeschobene Mac-Titel erhalten die ursprüngliche Liste; abgebrochene
+iOS-Ladevorgänge behalten wartende Titel und Rückkehrpunkt. Während eines
+Fehlversuchs ergänzte Titel behalten ihren Vorrang. Gespeicherte Playlists
+öffnen mehr als 128 unabhängige Archive bei gemeinsamen Größenlimits;
+Sicherheitsgrenzen werden getrennt von fehlenden Quellen gemeldet.
+Native Drop- und Queue-Regressionen prüfen diese Fälle.
+
+Savage Mod Player 1.6.40 ergänzt benannte Songstellen auf Mac, iPhone und iPad.
+Position und Zeile bleiben über Neustarts pro Originalquelle erhalten, auch bei
+wiederverwendeten Patterns. Ziele lassen sich bearbeiten, löschen und mit dem
+vorhandenen zeilengenauen Sprung aufrufen. Eine getrennte visuelle Bereichsauswahl
+markiert den Mac-Tracker und die Positionsleiste des Notenregens. Fehlende Ziele
+und beschädigte Speicherdateien bleiben erhalten; die Musikdateien werden nicht
+verändert. Der gewählte Wiedergabe-Loop-Modus bleibt unabhängig von der Auswahl.
+
+Savage Mod Player 1.6.39 ergänzt den Modul-/Instrument-Inspektor auf Mac, iPhone
+und iPad. Er zeigt Aufbau und tatsächliche Herkunftsfelder, Hüllkurven mit Loop,
+Sustain und Carry sowie vorhandene IT-Kompatibilitätsdiagnosen. Ein Effektkatalog
+unterscheidet Format und Spalte, erhält Nullparameter und erklärt erkannte
+ignorierte Befehle. Statische Häufigkeiten sind keine Wiedergabezählung.
+Auf iPhone/iPad sind beide Inspektoren über das Info-Menü im Wiedergabe-Tab erreichbar.
+
+Savage Mod Player 1.6.38 ergänzt einen Sample-Inspektor auf Mac, iPhone und iPad.
+Er zeigt Wellenformen mit Zoom und Ausschnitt, beide Stereo-Kanäle, Normal-/Sustain-
+Loops und ihre Laufrichtung. Alle Instrument-Samples und der globale IT-Samplepool
+bleiben zugänglich; gespeicherte XM-/IT-Tastenzuordnungen zeigen Transposition und
+unbelegte Tasten. Die Anzeige liest vorhandene Daten und erhält die bisherige
+Instrumentvorschau. Dialogtasten bedienen das Blatt statt die Wiedergabe.
+
+Savage Mod Player 1.6.37 ergänzt Metadatensuche, Sortierung und gespeicherte
+Filter auf Mac, iPhone und iPad. Die Suche findet interne Titel und Instrumentnamen
+sowie Dateinamen und Ordner. Format, Kanalzahl, Favoriten, ungehörte und neu
+erfasste Titel lassen sich kombinieren. Die Wiedergabe behält die ausdrücklich
+gewählte Anzeigereihenfolge; Anzeigeänderungen ersetzen diese Auswahl nicht.
+Tatsächliche Wiedergabe merkt den Hörstatus über stabile IDs, bloßes Laden oder
+Wiederherstellen eines pausierten Titels nicht. Sammlungshinweise unterscheiden
+gleiche Dateinamen von identischem Inhalt und zeigen Indexfehler.
+
+Savage Mod Player 1.6.36 ergänzt einen gemeinsamen Hintergrund-Metadatenindex
+für die folgende Bibliothekssuche und Sortierung. Er erfasst Modultitel, Formate,
+Kanal-/Instrument-/Samplezahlen, Namen und begrenzte Spieldauern. Unveränderte
+Dateien verwenden einen versionierten Cache; fehlende, ungültige oder zu große
+Dateien erhalten eigene Zustände. Abbruch erhält Teilfortschritt. Größenlimits
+und nicht blockierende Prüfung regulärer Dateien schützen vor übergroßen Daten
+und benannten Pipes.
+
+Savage Mod Player 1.6.35 ergänzt gespeicherte Playlists und eine Sitzungs-
+warteschlange auf iPhone und iPad. Listen lassen sich anlegen, umbenennen, löschen
+und umsortieren. Relative Bibliotheksreferenzen bleiben bei wechselndem App-
+Container gültig; fehlende Titel bleiben gespeichert. Kontextmenüs füllen Listen
+oder die Warteschlange, die anschließend die vorherige Auswahl fortsetzt und
+gestoppte Wiedergabe erhält. Suchtreffer lassen sich ausdrücklich als
+Wiedergabebereich festlegen. Neue Bedienelemente sind deutsch und englisch.
+
+Savage Mod Player 1.6.34 ergänzt benannte Playlists in der macOS-Seitenleiste.
+Reihenfolge und Originalquellen bleiben über Neustarts erhalten, auch bei Archiven;
+fehlende Quellen bleiben vermerkt. Titelmenüs füllen gespeicherte Listen oder eine
+umsortierbare Sitzungswarteschlange. Danach geht die vorherige Liste weiter.
+Suchtreffer lassen sich ausdrücklich als Wiedergabebereich festlegen. Favoriten
+nutzen Quellen-IDs; die Migration merkt ungesehene alte Namen vor und ordnet
+mehrdeutige Namen nicht automatisch zu.
+
+Savage Mod Player 1.6.33 ergänzt einen versionierten Speicher für benannte
+Playlists und quellenbasierte Titelreferenzen. Sie überleben temporäre Kopien
+und verschachtelte Archive; gleichnamige Dateien in verschiedenen Ordnern bleiben
+unterscheidbar. Fehlende Quellen bleiben vermerkt, ungültige Playlist-Daten
+überschreiben keinen gespeicherten Bestand. Die macOS-Oberfläche folgt im nächsten Update.
+
 Savage Mod Player 1.6.32 ergänzt Sparkle-Updates in der macOS-App: manuelle
 Prüfung im App-Menü und automatische Prüfungen über die Einstellungen.
 Installationen brauchen eine Bestätigung; Update-Archive und Feed sind signiert.

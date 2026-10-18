@@ -72,11 +72,17 @@ public enum PlaylistScanner {
         public let url: URL
         public let displayName: String
         public let folderPath: [String]
+        public let source: PlaylistTrackSource
 
-        public init(url: URL, displayName: String, folderPath: [String]) {
+        public init(url: URL, displayName: String, folderPath: [String], source: PlaylistTrackSource? = nil) {
             self.url = url
             self.displayName = displayName
             self.folderPath = folderPath
+            self.source = source ?? PlaylistTrackSource(location: url)
+        }
+
+        public var reference: PlaylistTrackReference {
+            PlaylistTrackReference(source: source, displayName: displayName)
         }
     }
 
@@ -159,6 +165,20 @@ public enum PlaylistScanner {
 
     static func collectEntries(from urls: [URL], tempDir: URL,
                                archiveLimits: ArchiveUnpackLimits, maxArchives: Int) -> [Entry] {
+        collectResult(from: urls, tempDir: tempDir, archiveLimits: archiveLimits,
+                      maxArchives: maxArchives).entries
+    }
+
+    struct ScanResult {
+        let entries: [Entry]
+        let consumedBytes: Int64
+        let consumedEntries: Int
+        let limitReached: Bool
+    }
+
+    static func collectResult(from urls: [URL], tempDir: URL,
+                              archiveLimits: ArchiveUnpackLimits, maxArchives: Int) -> ScanResult {
+        var limitReached = false
         var remainingBytes = archiveLimits.maxUncompressedBytes
         var remainingEntries = archiveLimits.maxEntries
         var remainingArchives = maxArchives
@@ -174,7 +194,8 @@ public enum PlaylistScanner {
             _ fileURL: URL,
             sourceURL: URL? = nil,
             folderPath: [String],
-            archiveDepth: Int
+            archiveDepth: Int,
+            origin: PlaylistTrackSource? = nil
         ) {
             // Klassifikation und Anzeigename gehoeren zum vom Nutzer
             // ausgewaehlten Link. Gelesen wird dagegen dessen Ziel, damit die
@@ -198,12 +219,15 @@ public enum PlaylistScanner {
             // Fall, den die Reihenfolge oben verhindern soll. `LibraryImporter`
             // trennt beides bereits so.
             if isArchive(fileURL) {
-                guard archiveDepth < maxArchiveDepth else { return }
-                guard remainingArchives > 0, remainingBytes > 0, remainingEntries > 0 else { return }
+                guard archiveDepth < maxArchiveDepth else { limitReached = true; return }
+                guard remainingArchives > 0, remainingBytes > 0, remainingEntries > 0 else {
+                    limitReached = true; return
+                }
                 remainingArchives -= 1
                 let limits = ArchiveUnpackLimits(maxUncompressedBytes: remainingBytes,
                                                 maxEntries: remainingEntries)
-                if let (extractedDir, result) = extractArchive(readableURL, tempDir: tempDir, limits: limits) {
+                if let (extractedDir, result) = extractArchive(readableURL, tempDir: tempDir, limits: limits,
+                    onLimit: { limitReached = true }) {
                     remainingBytes -= result.totalUncompressedBytes
                     remainingEntries -= result.entryCount
                     // Nach dem Scan bleiben nur die eigenständigen Modul-Kopien.
@@ -215,7 +239,9 @@ public enum PlaylistScanner {
                         extractedDir,
                         folderPath: folderPath + [nodeName],
                         archiveDepth: archiveDepth + 1,
-                        insideExtractedArchive: true)
+                        insideExtractedArchive: true,
+                        archiveSource: origin ?? PlaylistTrackSource(location: fileURL),
+                        archiveRoot: extractedDir)
                 }
             } else if isModFile(fileURL) {
                 // UUID-Praefix vermeidet Namens-Kollisionen im flachen Temp-Ziel;
@@ -223,7 +249,9 @@ public enum PlaylistScanner {
                 let destURL = tempDir.appendingPathComponent("\(UUID().uuidString)_\(fileURL.lastPathComponent)")
                 do {
                     try fm.copyItem(at: readableURL, to: destURL)
-                    entries.append(Entry(url: destURL, displayName: fileURL.lastPathComponent, folderPath: folderPath))
+                    entries.append(Entry(url: destURL, displayName: fileURL.lastPathComponent,
+                                         folderPath: folderPath,
+                                         source: origin ?? PlaylistTrackSource(location: fileURL)))
                 } catch {
                     print("Fehler beim Kopieren: \(error)")
                 }
@@ -236,7 +264,9 @@ public enum PlaylistScanner {
             _ dir: URL,
             folderPath: [String],
             archiveDepth: Int,
-            insideExtractedArchive: Bool
+            insideExtractedArchive: Bool,
+            archiveSource: PlaylistTrackSource? = nil,
+            archiveRoot: URL? = nil
         ) {
             // Nutzer-Symlinks duerfen Ordner verbinden, aber Zyklen nicht zu
             // endloser Rekursion fuehren. Im Entpackverzeichnis erreichen
@@ -274,15 +304,28 @@ public enum PlaylistScanner {
                         directoryCandidate,
                         folderPath: folderPath + [child.lastPathComponent],
                         archiveDepth: archiveDepth,
-                        insideExtractedArchive: insideExtractedArchive)
+                        insideExtractedArchive: insideExtractedArchive,
+                        archiveSource: archiveSource, archiveRoot: archiveRoot)
                 } else {
+                    let origin: PlaylistTrackSource?
+                    if let archiveSource, let archiveRoot {
+                        // Foundation kann /var als /private/var zurueckgeben.
+                        // Beide Seiten vor dem relativen Archivpfad kanonisieren.
+                        let rootComponents = archiveRoot.resolvingSymlinksInPath().pathComponents
+                        let childComponents = child.resolvingSymlinksInPath().pathComponents
+                        guard childComponents.starts(with: rootComponents) else { continue }
+                        let relative = childComponents.dropFirst(rootComponents.count).joined(separator: "/")
+                        origin = archiveSource.appendingArchiveMember(relative)
+                    } else {
+                        origin = nil
+                    }
                     handleFile(
                         child,
                         sourceURL: values?.isSymbolicLink == true
                             ? child.resolvingSymlinksInPath()
                             : nil,
                         folderPath: folderPath,
-                        archiveDepth: archiveDepth)
+                        archiveDepth: archiveDepth, origin: origin)
                 }
             }
         }
@@ -314,7 +357,10 @@ public enum PlaylistScanner {
                 }
             }
         }
-        return entries
+        return ScanResult(entries: entries,
+            consumedBytes: archiveLimits.maxUncompressedBytes - remainingBytes,
+            consumedEntries: archiveLimits.maxEntries - remainingEntries,
+            limitReached: limitReached)
     }
 
     // Entpackt ein Archiv in ein frisches Unterverzeichnis von `tempDir` und
@@ -327,12 +373,18 @@ public enum PlaylistScanner {
     //   uebernimmt der eigene `ZipArchiveReader` (reines Swift); `.7z` bleibt
     //   dort unlesbar und wird sauber gemeldet statt still zu scheitern.
     private static func extractArchive(_ archive: URL, tempDir: URL,
-                                       limits: ArchiveUnpackLimits) -> (URL, ArchiveUnpackResult)? {
+                                       limits: ArchiveUnpackLimits, onLimit: () -> Void) -> (URL, ArchiveUnpackResult)? {
         let dest = tempDir.appendingPathComponent("extracted-\(UUID().uuidString)", isDirectory: true)
         do {
             let result = try unpackArchive(archive, into: dest, limits: limits, isCancelled: { false })
             return (dest, result)
         } catch {
+            if let error = error as? ZipArchiveError {
+                switch error {
+                case .tooManyEntries, .entryTooLarge, .archiveTooLarge, .compressionRatioExceeded: onLimit()
+                default: break
+                }
+            } else if let error = error as? ArchiveError, case .archiveTooLarge = error { onLimit() }
             print("Archiv-Entpacken fehlgeschlagen: \(error)")
             try? FileManager.default.removeItem(at: dest)
             return nil

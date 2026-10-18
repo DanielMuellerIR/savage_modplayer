@@ -68,6 +68,18 @@ public final class ITPlaybackVoicePool: Sendable {
         }
     }
 
+    func copyPlaybackState(from source: ITPlaybackVoicePool) {
+        nextGeneration = source.nextGeneration
+        activeVoiceCount = source.activeVoiceCount
+        for index in activeVoiceIndices.indices {
+            activeVoiceIndices[index] = source.activeVoiceIndices[index]
+            voiceIsActive[index] = source.voiceIsActive[index]
+        }
+        for index in patternChannels.indices {
+            patternChannels[index].copyPlaybackState(from: source.patternChannels[index])
+        }
+    }
+
     // Wird ausschließlich vor dem Audiostart beziehungsweise nach reset()
     // aufgerufen. Die ersten 64 Slots sind die stabilen Kanal-Anker; weitere
     // Slots werden erst bei NNA-Bedarf einem Besitzer zugewiesen.

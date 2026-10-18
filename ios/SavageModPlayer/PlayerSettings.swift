@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import SavageModPlayerCore
 
 // Alle dauerhaften Einstellungen an einem Ort. Jede steht als @AppStorage in den
 // UserDefaults und ueberlebt damit Neustarts — genau wie in der Mac-App, nur mit
@@ -11,6 +12,33 @@ import SwiftUI
 // von einem Dutzend Bindings.
 @MainActor
 final class PlayerSettings: ObservableObject {
+
+    init(defaults: UserDefaults = .standard) {
+        _palClock = AppStorage(wrappedValue: true, "savage.ios.palClock", store: defaults)
+        _ledFilterActive = AppStorage(wrappedValue: false, "savage.ios.ledFilter", store: defaults)
+        _useInterpolation = AppStorage(wrappedValue: true, "savage.ios.interpolation", store: defaults)
+        _stereoSeparation = AppStorage(wrappedValue: 0.8, "savage.ios.stereoSeparation", store: defaults)
+        _volume = AppStorage(wrappedValue: 0.6, "savage.ios.volume", store: defaults)
+        _loopModeRaw = AppStorage(wrappedValue: LoopMode.playlist.rawValue, "savage.ios.loopMode", store: defaults)
+        _shuffleEnabled = AppStorage(wrappedValue: false, "savage.ios.shuffle", store: defaults)
+        _lastPlayedRelativePath = AppStorage(wrappedValue: "", "savage.ios.lastPlayed", store: defaults)
+        _lastPlayedPosition = AppStorage(wrappedValue: 0, "savage.ios.lastPosition", store: defaults)
+        _themeRaw = AppStorage(wrappedValue: PlayerTheme.system.rawValue, "savage.ios.theme", store: defaults)
+        _visualizerFrameRate = AppStorage(wrappedValue: 20, "savage.ios.visualizerFPS", store: defaults)
+        _maxVisibleChannelScopes = AppStorage(wrappedValue: 32, "savage.ios.maxChannelScopes", store: defaults)
+    }
+
+    var playbackOptions: PlaybackOptions {
+        PlaybackOptions(palClock: palClock, stereoSeparation: stereoSeparation,
+                        useInterpolation: useInterpolation, ledFilterActive: ledFilterActive)
+    }
+
+    func setPlaybackOptions(_ options: PlaybackOptions) {
+        if palClock != options.palClock { palClock = options.palClock }
+        if stereoSeparation != options.stereoSeparation { stereoSeparation = options.stereoSeparation }
+        if useInterpolation != options.useInterpolation { useInterpolation = options.useInterpolation }
+        if ledFilterActive != options.ledFilterActive { ledFilterActive = options.ledFilterActive }
+    }
 
     // MARK: - Klang
 

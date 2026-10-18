@@ -20,6 +20,10 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CollectionSyncContainerIdentifier</key>
+	<string>$(SAVAGE_CLOUDKIT_CONTAINER)</string>
+	<key>CollectionSyncContainerEnvironment</key>
+	<string>$(SAVAGE_CLOUDKIT_ENVIRONMENT)</string>
 
 	<!-- Hintergrundwiedergabe: ohne diesen Eintrag stoppt iOS die Audio-Engine,
 	     sobald der Bildschirm gesperrt wird oder die App in den Hintergrund geht. -->
@@ -66,6 +70,13 @@
 	     bietet iOS "Oeffnen mit Savage Mod Player" gar nicht erst an. -->
 	<key>UTExportedTypeDeclarations</key>
 	<array>
+		<dict>
+			<key>UTTypeIdentifier</key><string>com.viben.savage-modplayer.collection</string>
+			<key>UTTypeDescription</key><string>Savage Mod Player Collection</string>
+			<key>UTTypeConformsTo</key><array><string>public.json</string></array>
+			<key>UTTypeTagSpecification</key>
+			<dict><key>public.filename-extension</key><array><string>savagecollection</string></array></dict>
+		</dict>
 		<dict>
 			<key>UTTypeIdentifier</key>
 			<string>com.viben.savagemodplayer.mod</string>
@@ -137,6 +148,12 @@
 	</array>
 	<key>CFBundleDocumentTypes</key>
 	<array>
+		<dict>
+			<key>CFBundleTypeName</key><string>Savage Mod Player Collection</string>
+			<key>CFBundleTypeRole</key><string>Editor</string>
+			<key>LSHandlerRank</key><string>Owner</string>
+			<key>LSItemContentTypes</key><array><string>com.viben.savage-modplayer.collection</string></array>
+		</dict>
 		<dict>
 			<key>CFBundleTypeName</key>
 			<string>Tracker-Modul</string>

@@ -27,17 +27,22 @@ enum AppInfo {
 
 @main
 struct SavageModPlayerApp: App {
+    @StateObject private var collectionRecovery: CollectionExchangeRecovery
     @StateObject private var updates = UpdateController()
     @StateObject private var coordinator = ModPlayerCoordinator()
     @StateObject private var playbackActions = PlaybackActions()
+    @StateObject private var playbackSettings = PlaybackPreferences.makeModel()
     @StateObject private var noteRain = NoteRainModel()
     @StateObject private var noteRainWindow = NoteRainWindowState()
+    @StateObject private var songMarkers = SongMarkersModel(fileURL: MainView.catalogURL("song-markers.json", environment: "SAVAGE_SONG_MARKER_STORE"))
     @Environment(\.openWindow) private var openWindow
     // Globale UI-Zoom-Stufe (CMD +/-/0), persistiert. Wird als Faktor
     // (savageFontScale) ins Environment gelegt; siehe FontScaling.swift.
     @AppStorage("savage.uiZoom") private var uiZoom = 0
 
     init() {
+        let recovery = CollectionExchangeRecovery()
+        _collectionRecovery = StateObject(wrappedValue: recovery)
         #if os(macOS)
         // AppKit deutet ein positionales Startargument als "diese Datei
         // oeffnen". Beim so gestarteten Prozess erzeugt SwiftUI sein
@@ -74,12 +79,42 @@ struct SavageModPlayerApp: App {
         // (via .onOpenURL) statt ein zweites zu erzeugen. WindowGroup hatte pro
         // geöffneter Datei ein neues, leeres Fenster gespawnt.
         Window(AppInfo.windowTitle, id: "main") {
-            MainView(coordinator: coordinator, playbackActions: playbackActions)
+            if let error = collectionRecovery.error {
+                CollectionExchangeRecoveryView(error: error) {
+                    collectionRecovery.recover()
+                    guard collectionRecovery.error == nil else { return }
+                    do {
+                        let documents = try CollectionExchangeSupport.persistence().snapshot().documents
+                        let preferences = CollectionExchangeSupport.preferences()
+                        let defaults = CollectionExchangeSoundPreferences.options(in: try preferences.values(in: preferences.capture()), prefix: "savage.")
+                        songMarkers.adoptCommitted(documents.markers)
+                        playbackSettings.adoptCommitted(documents.trackSettings, defaults: defaults)
+                    } catch { collectionRecovery.block(error) }
+                }.frame(minWidth: 640, minHeight: 420)
+            } else {
+                MainView(coordinator: coordinator, playbackActions: playbackActions)
+                .environmentObject(songMarkers)
+                .environmentObject(playbackSettings)
+                .environmentObject(collectionRecovery)
                 // UI-Schriftfaktor an den Szenen-Root haengen — alle
                 // `.scaledFont(...)`-Aufrufe im Baum lesen ihn von hier.
                 .environment(\.uiFontScale, savageFontScale(uiZoom))
+            }
         }
         .commands {
+            CommandMenu("Export") {
+                Button("Notenregen als Video…") {
+                    NotificationCenter.default.post(name: NSNotification.Name("menuVideoExport"), object: nil)
+                }.disabled(coordinator.activeMod == nil || collectionRecovery.error != nil)
+            }
+            CommandMenu("Sammlung") {
+                Button("Sammlung abgleichen…") {
+                    NotificationCenter.default.post(name: NSNotification.Name("menuCollectionSync"), object: nil)
+                }.disabled(collectionRecovery.error != nil)
+                Button("Sammlung übertragen…") {
+                    NotificationCenter.default.post(name: NSNotification.Name("menuCollectionExchange"), object: nil)
+                }.disabled(collectionRecovery.error != nil)
+            }
             #if os(macOS)
             // Standard-"Über"-Eintrag im App-Menü durch einen eigenen ersetzen,
             // damit der native macOS-About-Panel Autor und Lizenz zeigt (Icon,
@@ -148,6 +183,7 @@ struct SavageModPlayerApp: App {
         #if os(macOS)
         Window("Notenregen", id: "note-rain") {
             NoteRainView(coordinator: coordinator, playbackActions: playbackActions, model: noteRain, windowState: noteRainWindow)
+                .environmentObject(songMarkers)
                 .environment(\.uiFontScale, savageFontScale(uiZoom))
         }
         .defaultSize(width: NoteRainWindowState.defaultWidth, height: 760)

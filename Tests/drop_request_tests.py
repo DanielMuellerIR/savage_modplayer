@@ -15,7 +15,7 @@ class NativeDropRequestTests(unittest.TestCase):
         note_rain = (ROOT / 'Sources/SavageModPlayerApp/UI/NoteRainView.swift').read_text()
         actions = (ROOT / 'Sources/SavageModPlayerApp/UI/PlaybackActions.swift').read_text()
         actions = actions[actions.index('final class PlaybackActions'):]
-        transport = playback[playback.index('    func togglePlayback()'):playback.index('    // Zufaelligen')]
+        transport = playback[playback.index('    func togglePlayback()'):playback.index('    var eligiblePlaylistIndices:')]
         rain_toggle = note_rain[note_rain.index('    private func togglePlayback()'):note_rain.index('    private func updateMuteState()')].replace('private func', 'func')
         self.assertIn('Button(action: togglePlayback)', note_rain)
         self.assertIn('Button(action: stopPlayback)', note_rain)
@@ -27,7 +27,7 @@ class NativeDropRequestTests(unittest.TestCase):
             source = view[view.index('publisher(for: NSNotification.Name("' + event + '"))'):]
             media[event] = source.split('{ _ in', 1)[1].split('\n            }', 1)[0]
         container = view[view.index('final class DropURLsContainer'):view.index('struct MainView')]
-        drop = view[view.index('                let requestID = UUID()', view.index('.onDrop(')):
+        drop = view[view.index('                playbackActions.prepareManualPlayback(', view.index('.onDrop(')):
                     view.index('                return true', view.index('.onDrop('))]
         revision = files[files.index('        let requestID: UUID'):files.index('        self.errorMessage = nil')]
         script = '''import Foundation
@@ -41,7 +41,13 @@ class Provider {
     }
 }
 ''' + container + '''
+class SleepTimer {
+    func prepareForManualPlayback() {}
+    func cancel() {}
+}
 class ModPlayerCoordinator {
+    let sleepTimer = SleepTimer()
+    var onSleepTimerExpired: (() -> Void)?
     var activeMod: Bool? = true
     var isPlaying = true
     var isPaused = false
@@ -97,6 +103,13 @@ older.completion?(URL(fileURLWithPath: "/synthetic/old.mod"), nil)
 drain()
 assert(harness.calls.isEmpty, "Alter Drop startet nach Stop")
 assert(!harness.coordinator.isPlaying)
+let sleeping = Provider()
+assert(harness.drop([sleeping]))
+harness.coordinator.stop()
+harness.coordinator.onSleepTimerExpired?()
+sleeping.completion?(URL(fileURLWithPath: "/synthetic/sleep.mod"), nil)
+drain()
+assert(harness.calls.isEmpty, "Alter Drop startet nach Timerablauf")
 for action in [harness.togglePlayback, rain.togglePlayback, harness.stopPlayback, rain.stopPlayback] {
     harness.coordinator.isPlaying = true
     harness.coordinator.isPaused = false

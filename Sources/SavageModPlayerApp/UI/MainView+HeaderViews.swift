@@ -129,6 +129,9 @@ extension MainView {
             // Block nur den Rest, den die intrinsisch breiten Buttons uebriglassen.
             .frame(maxWidth: .infinity, alignment: .leading)
 
+            SleepTimerButton(timer: coordinator.sleepTimer, theme: theme)
+            TrackPlaybackSettingsButton(model: playbackSettings, title: coordinator.trackName, theme: theme)
+
             // Theme Selector
             HStack(spacing: 4) {
                 ForEach(PlayerTheme.allCases) { t in
@@ -198,11 +201,11 @@ extension MainView {
             // Untere Zeile: kompakte Optionsleiste (aus der oberen Zeile
             // ausgelagert, damit die Oszis dort die volle Breite bekommen).
             HStack(spacing: 16) {
-                Toggle("LED FILTER", isOn: $coordinator.ledFilterActive)
+                Toggle("LED FILTER", isOn: filterBinding)
                     .toggleStyle(CheckboxToggleStyle(theme: theme))
                     .help("Amiga-LED-Filter: zuschaltbarer Tiefpass bei ~3,2 kHz, der die Höhen kappt — der dumpfere Originalklang, wie wenn am echten Amiga die Power-LED leuchtete.")
 
-                Toggle("HI-FI INT.", isOn: $coordinator.useInterpolation)
+                Toggle("HI-FI INT.", isOn: interpolationBinding)
                     .toggleStyle(CheckboxToggleStyle(theme: theme))
                     .help("Hi-Fi-Interpolation: glättet die Samples beim Resampling (weicherer Klang). Ausgeschaltet klingt es wie die Original-Hardware — roher 8-Bit-Sound mit hörbarem Aliasing.")
 
@@ -359,7 +362,7 @@ extension MainView {
                     .scaledFont(11)
                     .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
 
-                Slider(value: $coordinator.stereoSeparation, in: 0.0...1.0)
+                Slider(value: separationBinding, in: 0.0...1.0)
                     .accentColor(Color.accent(theme))
                     .frame(width: 80)
                     // Tooltip auch direkt am Slider: ein Slider verschluckt die
@@ -367,7 +370,7 @@ extension MainView {
                     // Zeigen auf den Slider-Track allein nicht ausgeloest wird.
                     .help("Stereo-Separation: 100 % = hartes Amiga-Panning (Kanäle ganz links/rechts), 0 % = Mono. Dazwischen wird Übersprechen beigemischt, das Kopfhörer-Ermüdung vermeidet. Am deutlichsten mit Kopfhörern hörbar; über Laptop-Lautsprecher kaum.")
 
-                Text(String(format: "%d%%", Int(coordinator.stereoSeparation * 100)))
+                Text(String(format: "%d%%", Int((coordinator.stereoSeparation * 100).rounded())))
                     .scaledFont(9)
                     .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
                     .frame(width: 32, alignment: .trailing)
@@ -396,7 +399,7 @@ extension MainView {
     var palClockSelector: some View {
         HStack(spacing: 4) {
             Button("PAL (3.546MHz)") {
-                coordinator.palClock = true
+                playbackSettings.setPALClock(true)
             }
             .scaledFont(9, weight: .bold)
             .padding(.horizontal, 6)
@@ -408,7 +411,7 @@ extension MainView {
             .help("PAL-Paula-Takt (3,546 MHz) wie bei europäischen Amigas — die Referenz-Tonhöhe und -Geschwindigkeit der meisten Module.")
 
             Button("NTSC (3.580MHz)") {
-                coordinator.palClock = false
+                playbackSettings.setPALClock(false)
             }
             .scaledFont(9, weight: .bold)
             .padding(.horizontal, 6)

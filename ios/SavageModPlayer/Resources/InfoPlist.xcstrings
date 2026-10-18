@@ -108,6 +108,24 @@
           }
         }
       }
+    },
+    "Savage Mod Player Collection" : {
+      "comment" : "Dokumenttyp für .savagecollection.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sammlung für Savage Mod Player"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Savage Mod Player collection"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

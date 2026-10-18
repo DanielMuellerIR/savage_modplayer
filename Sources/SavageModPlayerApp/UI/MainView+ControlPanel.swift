@@ -184,12 +184,21 @@ extension MainView {
 
                 if coordinator.activeMod != nil {
                     // Exporter wav button
-                    Button(action: { runWavExport() }) {
+                    Button(action: { openWavExporter() }) {
                         Image(systemName: "square.and.arrow.up")
-                            .foregroundColor(isExporting ? .green : .spaceTextSecondary)
+                            .foregroundColor(isExporting || stemExport.isRunning ? .green : .spaceTextSecondary)
                     }
                     .buttonStyle(PlainButtonStyle())
-                    .help("Aktuellen Song als WAV-Datei exportieren.")
+                    .help("Stereo-Mix oder gespielte Kanalspuren als WAV exportieren.")
+                    .accessibilityIdentifier("wavExport")
+                    Button(action: { openVideoExporter() }) {
+                        Image(systemName: "film")
+                            .foregroundColor(theme == .workbench ? .lightTextPrimary : .spaceTextSecondary)
+                            .frame(minWidth: 28, minHeight: 28)
+                    }.buttonStyle(PlainButtonStyle())
+                        .help("Notenregen mit synchronem Audio als Video exportieren.")
+                        .accessibilityLabel("Notenregen als Video exportieren")
+                        .accessibilityIdentifier("videoExport")
                 }
 
                 // Volume slider with glow
@@ -202,6 +211,7 @@ extension MainView {
                         get: { volume },
                         set: { volume = $0; coordinator.setVolume(Float($0)) }
                     ), in: 0...1.0)
+                    .accessibilityLabel("Lautstärke").accessibilityIdentifier("playerVolume")
                     .accentColor(Color.accent(theme))
                     .frame(width: 90)
                     .shadow(color: theme == .cyber ? Color.spaceAccent.opacity(volume * 0.8) : Color.clear, radius: 4)
@@ -313,6 +323,7 @@ extension MainView {
                     get: { volume },
                     set: { volume = $0; coordinator.setVolume(Float($0)) }
                 ), in: 0...1.0)
+                .accessibilityLabel("Lautstärke").accessibilityIdentifier("playerVolume")
                 .accentColor(Color.accent(theme))
                 .frame(width: 80)
                 .help("Gesamtlautstärke.")

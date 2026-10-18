@@ -74,6 +74,20 @@ public enum LaunchArguments {
         arguments.contains(autoplayFlag)
     }
 
+    public static func collectionArgument(
+        _ arguments: [String], probe: (String) -> PathKind = LaunchArguments.filesystemProbe
+    ) -> URL? {
+        var index = 1
+        while index < arguments.count {
+            let argument = arguments[index]
+            if argument.hasPrefix("-") { index += valueFollows(arguments, after: index) ? 2 : 1; continue }
+            index += 1
+            let url = URL(fileURLWithPath: argument)
+            if url.pathExtension.lowercased() == CollectionExchangeCodec.fileExtension, probe(argument) == .file { return url }
+        }
+        return nil
+    }
+
     /// Der optionale Filter hinter `--autoplay`: der erste Titel, dessen Name ihn
     /// enthaelt, wird zum Starttitel. Ohne Filter (Flag am Ende oder direkt vor
     /// einem weiteren Flag) `nil`.

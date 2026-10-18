@@ -85,7 +85,7 @@ struct PlaybackCommands: Commands {
                     shortcut.perform(on: model.player)
                 }
                 .keyboardShortcut(shortcut.key, modifiers: shortcut.modifiers)
-                .disabled(shortcut.isBlocked(searchFieldActive: model.isSearchFieldActive))
+                .disabled(shortcut.isBlocked(searchFieldActive: model.isTextEntryActive))
             }
         }
     }

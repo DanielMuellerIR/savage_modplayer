@@ -11,6 +11,20 @@ import XCTest
 /// welcher Pfad gewinnt, welche Argumente uebersprungen werden und wie
 /// `--autoplay` gelesen wird.
 final class LaunchArgumentsTests: XCTestCase {
+    func testCollectionArgumentIsSeparateFromAudioAndSkipsFlagValues() {
+        let file = "/synthetic/a.savagecollection", second = "/synthetic/b.SAVAGECOLLECTION"
+        let probe: (String) -> LaunchArguments.PathKind = { [file, second].contains($0) ? .file : .missing }
+        XCTAssertEqual(LaunchArguments.collectionArgument(["App", file], probe: probe)?.path, file)
+        XCTAssertNil(LaunchArguments.fileArgument(["App", file], probe: probe))
+        XCTAssertEqual(LaunchArguments.collectionArgument(["App", "-ApplePersistenceIgnoreState", file, second], probe: probe)?.path, second)
+        XCTAssertNil(LaunchArguments.collectionArgument(["App", "--autoplay", file], probe: probe))
+    }
+
+    func testCollectionArgumentRejectsMissingFilesAndFoldersWithMatchingExtension() {
+        XCTAssertNil(LaunchArguments.collectionArgument(["App", "/synthetic/a.savagecollection"], probe: { _ in .missing }))
+        XCTAssertNil(LaunchArguments.collectionArgument(["App", "/synthetic/a.savagecollection"], probe: { _ in .directory }))
+        XCTAssertNil(LaunchArguments.collectionArgument(["App", "/synthetic/a.json"], probe: { _ in .file }))
+    }
 
     /// Ein vorgegebener Dateibestand statt eines echten Dateisystems.
     private func probe(files: Set<String> = [], directories: Set<String> = [])

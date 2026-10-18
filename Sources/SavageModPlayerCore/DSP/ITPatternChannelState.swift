@@ -62,6 +62,33 @@ public final class ITPatternChannelState: Sendable {
         self.effectMemory = [UInt8](repeating: 0, count: 27)
     }
 
+    func copyPlaybackState(from source: ITPatternChannelState) {
+        channelVolume = source.channelVolume
+        channelPanning = source.channelPanning
+        foregroundVoiceIndex = source.foregroundVoiceIndex
+        isSurround = source.isSurround
+        channelVolumeSlide = source.channelVolumeSlide
+        panningSlide = source.panningSlide
+        globalVolumeSlide = source.globalVolumeSlide
+        vibratoWaveform = source.vibratoWaveform
+        tremoloWaveform = source.tremoloWaveform
+        panbrelloWaveform = source.panbrelloWaveform
+        glissandoEnabled = source.glissandoEnabled
+        highOffset = source.highOffset
+        activeFilterMacro = source.activeFilterMacro
+        patternLoopStartRow = source.patternLoopStartRow
+        patternLoopCount = source.patternLoopCount
+        rowRepeatIndex = source.rowRepeatIndex
+        pendingNote = source.pendingNote
+        pendingNoteTick = source.pendingNoteTick
+        pitchSlideMemory = source.pitchSlideMemory
+        tonePortamentoMemory = source.tonePortamentoMemory
+        volumeColumnSlideMemory = source.volumeColumnSlideMemory
+        // Keine gemeinsame Array-Storage: spätere Effekt-Memory-Schreibungen
+        // dürfen im Audiothread keine Copy-on-write-Allokation auslösen.
+        for index in effectMemory.indices { effectMemory[index] = source.effectMemory[index] }
+    }
+
     @inline(__always)
     public func remembered(command: Int, parameter: Int, memoryCommand: Int? = nil) -> Int {
         let slot = memoryCommand ?? command

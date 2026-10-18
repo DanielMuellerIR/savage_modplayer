@@ -74,10 +74,67 @@ If no preview appears:
 - **PAL & NTSC clocks**: switchable Paula clocking (3.546 MHz PAL vs. 3.580 MHz NTSC) for Paula-based MOD formats; the control is hidden for formats with their own frequency model.
 - **Volume & stereo separation**: psychoacoustic (quadratic) volume scaling and adjustable stereo separation (bleed from 0% mono to 100% hard panning).
 - **Hi-fi resampling**: switchable linearly interpolated sample playback for a smoother sound (can be disabled for the original 8-bit crunch).
-- **WAV & stem export (macOS app)**: export the entire song to a stereo WAV file, or export individual instrument samples as WAV. The iPhone app deliberately has no export.
+- **WAV and channel stem export (macOS app)**: export the stereo mix, played stereo channels as Float32 WAV files with a shared gain and reference mix, or individual instrument samples. [Channel stem export](docs/channel-stem-export.md) preserves mute/solo and audio options, with progress, cancellation and new destination folders. The [batch exporter](docs/batch-wav-export.md) renders selected playlist tracks or search results with saved settings, progress, cancellation and destination conflict handling. The iPhone app deliberately has no WAV export.
+- **Sleep timer (macOS and iPhone/iPad)**: choose 1–720 minutes, fade out over the last ten seconds, add 15 minutes or cancel while preserving the volume setting. The countdown continues during pauses and track changes. [Sleep timer details](docs/sleep-timer.md).
+- **Sound settings per track (macOS and iPhone/iPad)**: global defaults and explicit track overrides for MOD clock, stereo separation, interpolation and the LED output filter; inherit individual options or reset a track. [Track settings details](docs/track-playback-settings.md).
+- **Note-rain video export (macOS)**: **Export → Notenregen als Video…** opens a paused five-second preview, resolution/frame-rate/compression controls and a protected destination chooser. H.264 video and lossless stereo Float32 audio share an exact sample clock. Progress, cancellation and Finder access are included. [Video export details](docs/note-rain-video.md).
+- **Transfer collections**: macOS and iPhone/iPad export and import playlists, favorites, song markers and sound settings as `.savagecollection` files. Open **Sammlung → Sammlung übertragen…** on Mac or **Transfer collection** in the iPhone library menu. Review local track matches, map or skip missing tracks, and resolve conflicts before importing. Music, volume, running timers and the playback queue stay local. Interrupted imports recover before the collection opens. [Format details](docs/collection-exchange.md). **Sammlung → Sammlung abgleichen…** on Mac or **Sync collection** in iPhone/iPad settings opens setup, status, track mapping and conflict decisions. The 1.6.52 macOS release includes CloudKit support; synchronization starts only after you enable it and confirm the initial mapping. Playlists, favorites, song markers and sound settings use your private iCloud database, while music files and volume stay on each device. Synthetic Mac/iPhone round trips and conflict/deletion checks pass in development and production. Builds from source keep cloud access disabled unless you supply a validated CloudKit provisioning profile. [Sync integration and prerequisites](docs/collection-sync.md).
 - **Full keyboard control (macOS app)**: space bar for play/pause, left/right arrows for song positions, up/down arrows to switch songs in the playlist.
 
+### Saved playlists and Up Next (macOS)
+
+**Playlists…** in the sidebar saves the currently visible tracks as a named list.
+The dialog opens, renames, reorders and deletes lists. A track’s context menu adds
+it to an existing list, plays it next, or appends it to the session queue. **Als
+Nächstes** opens the queue, where tracks can be moved or removed. Next uses the
+queue before continuing the previous list; Pause is preserved across track changes.
+
+Search and the favorites filter change the visible list. **Diese Ergebnisse
+abspielen** explicitly limits playback and shuffle to those results; **Alle**
+restores the full playback list. Saved lists reference original files and archive
+members, including nested archives. Keep those sources available. Missing tracks
+remain saved and are reported when opening a list. Same-named files in different
+folders have separate favorite identities. Legacy favorites migrate when found;
+ambiguous names need a new star. This interface is currently macOS-only.
+
+### Sample inspector (Mac/iPhone/iPad)
+
+**Samples untersuchen…** opens a waveform with zoom, both stereo channels and
+separate loop/sustain regions. All XM instrument samples and the global IT sample
+pool remain accessible; stored keyboard mappings show source/target notes and
+sample numbers. Inspection does not change any data. Details:
+[sample inspector](docs/sample-inspector.md) (German).
+
+**Modul untersuchen…** adds structure and source metadata, instrument envelopes
+and existing compatibility diagnostics. Its effect guide explains imported
+format-specific commands, including the volume column. On iPhone/iPad both
+inspectors are in the player’s info menu. Details:
+[module inspector](docs/module-inspector.md) (German).
+
+### Song markers and section selection (Mac/iPhone/iPad)
+
+**Songstellen…** saves named position/row pairs for each original source.
+Targets survive restarts; missing targets remain recorded. A separate section
+selection highlights rows in the Mac tracker and the note-rain position strip.
+The existing row jump preserves transport state. **A/B vorbereiten und abspielen**
+reconstructs the actual playback state at A and loops through the last tick of B.
+Preparation is cancellable and limited to ten minutes of song playback. Turning
+A/B off continues from the current point; seeking or changing audio settings clears
+it. The Mac note rain follows the same sample boundaries. Details:
+[song markers](docs/song-markers.md) (German).
+
+### Metadata search and saved filters (Mac/iPhone/iPad)
+
+Search filenames, folders, internal titles and instrument names. **Display and filters**
+combines format, channel count, favorites, unheard tracks and recent additions,
+with sorting and named saved filters. Explicit playback follows the displayed order.
+Actual playback records heard status; selection and indexing do not. Collection
+hints show invalid files and distinguish matching filenames from identical content.
+Durations marked `≥` are bounded results. See [filter behavior](docs/library-filters.md).
+
 ### iPhone app
+
+- **Saved playlists and queue**: the library toolbar opens named playlists and the session queue. Create or rename lists, add tracks from their context menu, and remove or reorder them with Edit tracks in the options menu. Play next takes priority, then resumes the previous list. Missing tracks stay recorded; references use relative library paths. Search results can explicitly become the playback selection.
 
 - **Background playback and lock screen control**: playback continues while the screen is locked. Title, format, folder, artwork, and elapsed time appear on the lock screen; play, pause, next, previous, the position scrubber, and −15 s / +30 s work from there and from headphone controls. An incoming call pauses and resumes; unplugging headphones pauses instead of switching to the speaker.
 - **Library as a folder tree**: folders start collapsed, the path to the playing track expands automatically, and playback and shuffle run across all folders. Live search, favourites, loop modes, and session restore are included.

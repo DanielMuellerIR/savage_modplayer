@@ -19,6 +19,8 @@ let appTargets: [Target] = [
         dependencies: ["SavageModPlayerCore", .product(name: "Sparkle", package: "Sparkle")],
         path: "Sources/SavageModPlayerApp",
         linkerSettings: [
+            // Die SwiftUI-Videobrücke lädt ihre AVPlayerView-Basisklasse nicht selbst.
+            .linkedFramework("AVKit"),
             .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Frameworks"])
         ]
     )

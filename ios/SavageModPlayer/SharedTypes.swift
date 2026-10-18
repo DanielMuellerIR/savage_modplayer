@@ -1,4 +1,5 @@
 import Foundation
+import SavageModPlayerCore
 import SwiftUI
 
 // Typen, die Wiedergabe, Bibliothek und Oberflaeche gemeinsam benutzen. Sie
@@ -70,8 +71,19 @@ struct TrackRef: Identifiable, Hashable, Sendable {
     let displayName: String
     let folderPath: [String]
     let url: URL
+    let addedAt: Date?
+
+    init(relativePath: String, displayName: String, folderPath: [String], url: URL, addedAt: Date? = nil) {
+        self.relativePath = relativePath; self.displayName = displayName
+        self.folderPath = folderPath; self.url = url; self.addedAt = addedAt
+    }
 
     var id: String { relativePath }
+
+    var playlistReference: PlaylistTrackReference? {
+        guard let source = PlaylistTrackSource(libraryRelativePath: relativePath) else { return nil }
+        return PlaylistTrackReference(source: source, displayName: displayName)
+    }
 }
 
 // Aus welcher Auswahl der Bibliothek die Abspielliste stammt.

@@ -91,6 +91,72 @@ final class PlaylistScannerTests: XCTestCase {
 
     // MARK: - Einsammeln mit Hierarchie
 
+    func testSourceIdentitySurvivesRescanAndNestedArchiveExtraction() throws {
+        let archive = workDir.appendingPathComponent("collection.zip")
+        let inner = storedZip([("deep/song.it", Data([3]))])
+        try storedZip([("folder/inner.zip", inner), ("song.mod", Data([1]))]).write(to: archive)
+        let first = PlaylistScanner.collectEntries(from: [archive], tempDir: tempDir)
+        let again = PlaylistScanner.collectEntries(from: [archive],
+            tempDir: workDir.appendingPathComponent("second-scan"))
+        XCTAssertEqual(Set(first.map(\.reference)), Set(again.map(\.reference)))
+        XCTAssertNotEqual(Set(first.map(\.url)), Set(again.map(\.url)))
+        let nested = try XCTUnwrap(first.first { $0.displayName == "song.it" })
+        XCTAssertEqual(nested.source.location, archive)
+        XCTAssertEqual(nested.source.archiveMembers, ["folder/inner.zip", "deep/song.it"])
+        let resolved = SavedPlaylistResolver.resolve([nested.reference],
+            tempDir: workDir.appendingPathComponent("reopened"))
+        XCTAssertEqual(resolved.entries.map(\.reference), [nested.reference])
+        XCTAssertTrue(resolved.missing.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(resolved.entries.first).url), Data([3]))
+    }
+
+    func testSavedPlaylistResolvesMoreThan128IndependentArchives() throws {
+        var tracks: [PlaylistTrackReference] = []
+        for index in 0..<129 {
+            let archive = workDir.appendingPathComponent("source-\(index).zip")
+            try storedZip([("song.mod", Data([UInt8(index)]))]).write(to: archive)
+            tracks.append(PlaylistTrackReference(source: .init(location: archive,
+                archiveMembers: ["song.mod"]), displayName: "song.mod"))
+        }
+        let result = SavedPlaylistResolver.resolve(tracks, tempDir: tempDir)
+        XCTAssertEqual(result.entries.map(\.reference), tracks)
+        XCTAssertTrue(result.missing.isEmpty)
+        XCTAssertTrue(result.limited.isEmpty)
+    }
+
+    func testSavedPlaylistReportsArchiveBudgetSeparatelyFromMissing() throws {
+        let inner = storedZip([("song.mod", Data([1]))])
+        let archive = workDir.appendingPathComponent("many.zip")
+        try storedZip((0..<129).map { ("inner-\($0).zip", inner) }).write(to: archive)
+        let tracks = (0..<129).map { index in
+            PlaylistTrackReference(source: .init(location: archive,
+                archiveMembers: ["inner-\(index).zip", "song.mod"]), displayName: "song.mod")
+        }
+        let result = SavedPlaylistResolver.resolve(tracks, tempDir: tempDir)
+        XCTAssertEqual(result.entries.count, 127)
+        XCTAssertTrue(result.missing.isEmpty)
+        XCTAssertEqual(result.limited.count, 2)
+        XCTAssertEqual(Set(result.entries.map { $0.reference.id }).union(result.limited.map(\.id)), Set(tracks.map(\.id)))
+    }
+
+    func testSavedReferencesPreserveClassifyingSymlinkNames() throws {
+        let module = try makeFile("payload.bin")
+        let moduleAlias = workDir.appendingPathComponent("alias.mod")
+        try FileManager.default.createSymbolicLink(at: moduleAlias, withDestinationURL: module)
+        let archive = workDir.appendingPathComponent("archive.bin")
+        try storedZip([("inside.mod", Data([1]))]).write(to: archive)
+        let archiveAlias = workDir.appendingPathComponent("alias.zip")
+        try FileManager.default.createSymbolicLink(at: archiveAlias, withDestinationURL: archive)
+        let entries = PlaylistScanner.collectEntries(from: [moduleAlias, archiveAlias], tempDir: tempDir)
+        XCTAssertEqual(entries.count, 2)
+        let sources = Set(entries.map(\.source.location))
+        XCTAssertEqual(sources, [moduleAlias, archiveAlias])
+        let result = SavedPlaylistResolver.resolve(entries.map(\.reference),
+            tempDir: workDir.appendingPathComponent("reopened-aliases"))
+        XCTAssertTrue(result.missing.isEmpty)
+        XCTAssertEqual(result.entries.map(\.reference), entries.map(\.reference))
+    }
+
     func testCollectEntriesKeepsFolderHierarchy() throws {
         _ = try makeFile("root.mod")
         _ = try makeFile("Chiptunes/tune.mod")

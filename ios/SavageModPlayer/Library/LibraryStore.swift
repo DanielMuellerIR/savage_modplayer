@@ -445,6 +445,11 @@ final class LibraryStore: ObservableObject {
         favoritesDidChange.send()
     }
 
+    func adoptCommittedFavorites(_ paths: Set<String>) {
+        guard favorites != paths else { return }
+        favorites = paths; invalidateFilters(); favoritesDidChange.send()
+    }
+
     private func clearFavorites() {
         guard !favorites.isEmpty else { return }
         favorites = []
@@ -690,6 +695,7 @@ struct LibrarySnapshot: Sendable {
     static func make(from library: MusicLibrary) -> LibrarySnapshot {
         let root = library.folderTree()
         let entries = PlaylistScanner.flattenedFiles(root)
+        let dates = Dictionary(uniqueKeysWithValues: library.index.items.map { ($0.relativePath, $0.addedAt) })
         let tracks = entries.map { entry in
             TrackRef(
                 // Der relative Pfad ist die stabile ID des Index und setzt sich
@@ -697,7 +703,8 @@ struct LibrarySnapshot: Sendable {
                 relativePath: (entry.folderPath + [entry.displayName]).joined(separator: "/"),
                 displayName: entry.displayName,
                 folderPath: entry.folderPath,
-                url: entry.url)
+                url: entry.url,
+                addedAt: dates[(entry.folderPath + [entry.displayName]).joined(separator: "/")])
         }
         let searchNames = tracks.map { LibraryStore.normalized($0.displayName) }
         return LibrarySnapshot(

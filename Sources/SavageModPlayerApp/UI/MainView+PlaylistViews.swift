@@ -8,43 +8,26 @@ import MediaPlayer
 // Playlist- und Instrumenten-Sidebar.
 extension MainView {
     var filteredPlaylist: [URL] {
-        var result = playlist
-        // Favoriten-Filter (Stern) und Textsuche greifen beide NUR die Anzeige
-        // ab; die volle `playlist` bleibt für Auswahl/Auto-Next unangetastet.
-        if favoritesOnly {
-            result = result.filter { isFavorite($0) }
-        }
-        if !playlistSearchQuery.isEmpty {
-            result = result.filter { cleanFilename($0).localizedCaseInsensitiveContains(playlistSearchQuery) }
-        }
-        return result
+        catalog.query.usesFlatList ? filteredPlaylistURLs : playlist
     }
 
     // MARK: - Favoriten
 
-    // UserDefaults-Schlüssel der gemerkten Favoriten (bereinigte Dateinamen).
+    // Alter Schluessel bleibt als Sicherung fuer die einmalige Migration erhalten.
     static let favoritesDefaultsKey = "savage.favoriteTracks"
 
-    // Ist dieser Titel als Favorit markiert? Vergleich über den bereinigten
-    // Dateinamen (stabil über Temp-Kopien/Neustarts hinweg).
     func isFavorite(_ url: URL) -> Bool {
-        favorites.contains(cleanFilename(url))
-    }
-
-    // Favoriten aus UserDefaults laden (beim App-Start, siehe .onAppear).
-    func loadFavorites() {
-        favorites = Set(UserDefaults.standard.stringArray(forKey: MainView.favoritesDefaultsKey) ?? [])
+        guard let reference = trackReferences[url] else { return false }
+        return favorites.contains(reference.id)
     }
 
     // Favorit an-/abschalten und sofort persistieren.
     func toggleFavorite(_ url: URL) {
-        let key = cleanFilename(url)
-        if favorites.contains(key) {
-            favorites.remove(key)
-        } else {
-            favorites.insert(key)
+        guard let key = trackReferences[url]?.id else { return }
+        updateSavedPlaylists { document in
+            if document.favoriteIDs.contains(key) { document.favoriteIDs.remove(key) }
+            else { document.favoriteIDs.insert(key) }
         }
-        UserDefaults.standard.set(Array(favorites).sorted(), forKey: MainView.favoritesDefaultsKey)
     }
 
     // Eine sichtbare Zeile der Playlist-Sidebar: entweder ein auf-/zuklappbarer
@@ -66,7 +49,7 @@ extension MainView {
     var playlistRows: [PlaylistRow] {
         // Bei aktiver Suche ODER aktivem Favoriten-Filter eine flache
         // Trefferliste zeigen — die Ordner-Hierarchie wäre dabei nur im Weg.
-        if !playlistSearchQuery.isEmpty || favoritesOnly {
+        if catalog.query.usesFlatList {
             return filteredPlaylist.map { PlaylistRow(id: $0.absoluteString, depth: 0, kind: .file($0)) }
         }
         guard let tree = playlistTree else {
@@ -142,10 +125,16 @@ extension MainView {
                             .scaledFont(11)
                             .foregroundColor(isPlayingSong ? (Color.accent(theme)) : .spaceTextSecondary)
 
-                        Text(cleanFilename(fileURL))
-                            .scaledFont(11, weight: isPlayingSong ? .bold : .medium)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(cleanFilename(fileURL))
+                                .scaledFont(11, weight: isPlayingSong ? .bold : .medium)
+                                .lineLimit(1)
+                            if let id = trackReferences[fileURL]?.id,
+                               let metadata = catalog.records[id]?.metadata {
+                                Text(metadata.librarySummary).scaledFont(9).lineLimit(1)
+                                    .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .padding(.leading, 12 + indent)
                     .padding(.vertical, 10)
@@ -154,6 +143,7 @@ extension MainView {
                     .foregroundColor(isPlayingSong ? (theme == .workbench ? .lightAccent : .white) : (theme == .workbench ? .lightTextPrimary : .spaceTextSecondary))
                 }
                 .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                .accessibilityIdentifier("playlist-track-\(playlistIndex)")
 
                 // Stern: markiert = Akzent (Light dunkelblau, Dark gelb), sonst
                 // dezent. Immer sichtbar, damit man jeden Titel direkt markieren kann.
@@ -169,6 +159,7 @@ extension MainView {
                 }
                 .buttonStyle(PlainButtonStyle())
                 .help(fav ? "Favorit entfernen" : "Als Favorit markieren")
+                .accessibilityIdentifier("playlist-favorite-\(playlistIndex)")
             }
             .background(
                 RoundedRectangle(cornerRadius: theme == .workbench ? 0 : 6)
@@ -178,26 +169,83 @@ extension MainView {
                         : Color.clear
                     )
             )
+            .contextMenu {
+                Button("Als Nächstes spielen") { enqueueTrack(fileURL, next: true) }
+                Button("An Warteschlange anhängen") { enqueueTrack(fileURL, next: false) }
+                if let id = trackReferences[fileURL]?.id, catalog.preferences.heardIDs.contains(id) {
+                    Button("Als ungehört markieren") { catalog.markHeard(id, heard: false) }
+                        .disabled(!catalog.preferencesWritable)
+                }
+                if !savedPlaylistDocument.playlists.isEmpty {
+                    Menu("Zu Playlist hinzufügen") {
+                        ForEach(savedPlaylistDocument.playlists) { saved in
+                            Button(saved.name) {
+                                guard let reference = trackReferences[fileURL] else { return }
+                                editSavedPlaylist(id: saved.id) {
+                                    if !$0.tracks.contains(where: { $0.id == reference.id }) { $0.tracks.append(reference) }
+                                }
+                            }
+                        }
+                    }.disabled(!savedPlaylistsWritable)
+                }
+            }
         }
     }
 
     var playlistSidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Button { showSavedPlaylists = true } label: {
+                    Text("Playlists…").frame(minHeight: 28).padding(.horizontal, 4)
+                }
+                    .accessibilityIdentifier("saved-playlists")
+                Button { openCollectionExchange() } label: {
+                    Image(systemName: "arrow.up.arrow.down").frame(minWidth: 28, minHeight: 28)
+                }.help("Sammlung übertragen").accessibilityLabel("Sammlung übertragen").accessibilityIdentifier("collection-transfer")
+                Spacer()
+                Button { showQueue = true } label: {
+                    Text("Als Nächstes (\(trackQueue.items.count))").frame(minHeight: 28).padding(.horizontal, 4)
+                }
+                    .accessibilityIdentifier("track-queue")
+            }
+            .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+            .foregroundColor(theme == .workbench ? .lightAccent : .spaceTextSecondary)
+            .scaledFont(11).padding(.horizontal, 8)
+            if let playlistNotice {
+                Text(playlistNotice).scaledFont(10)
+                    .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
+                    .padding(.horizontal, 8).padding(.bottom, 6)
+            }
+            if playbackSelection != nil {
+                HStack {
+                    Text("Wiedergabe: \(eligiblePlaylistIndices.count) ausgewählte Titel")
+                    Spacer()
+                    Button("Alle") { playbackSelection = nil }.help("Wieder die ganze Liste abspielen")
+                        .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                }
+                .foregroundColor(theme == .workbench ? .lightTextPrimary : .spaceTextSecondary)
+                .scaledFont(10).padding(.horizontal, 8).padding(.bottom, 6)
+            }
             // Search field
             HStack {
                 Image(systemName: "magnifyingglass")
-                    .foregroundColor(.spaceTextSecondary)
-                TextField("Titel filtern...", text: $playlistSearchQuery)
+                    .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
+                TextField("Datei oder Metadaten...", text: $catalog.query.search,
+                          prompt: Text("Datei oder Metadaten...").foregroundColor(
+                            theme == .workbench ? .lightTextSecondary : .spaceTextSecondary))
                     .textFieldStyle(PlainTextFieldStyle())
                     .scaledFont(11)
+                    .foregroundColor(theme == .workbench ? .lightTextPrimary : .spaceTextPrimary)
                     // Kein Autofokus: macOS macht das erste Textfeld sonst zum
                     // First Responder und der Cursor blinkt dauerhaft in der
                     // Sidebar. Fokus bekommt das Feld erst per Klick.
                     .focused($searchFieldFocused)
+                    .accessibilityLabel("Titel filtern")
+                    .accessibilityIdentifier("playlist-search")
                 if !playlistSearchQuery.isEmpty {
                     Button(action: { playlistSearchQuery = "" }) {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.spaceTextSecondary)
+                            .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
                     }
                     .buttonStyle(PlainButtonStyle())
                 }
@@ -206,6 +254,45 @@ extension MainView {
             .background(theme == .workbench ? Color.lightSurfaceAlt : Color.spaceBackground)
             .cornerRadius(theme == .workbench ? 0 : 6)
             .padding([.horizontal, .top], 8)
+            HStack {
+                Button("Anzeige und Filter…") { showLibraryFilters = true }
+                    .accessibilityIdentifier("library-filters")
+                Spacer()
+                if catalog.query.usesFlatList {
+                    Button("Zurücksetzen") { catalog.query = LibraryQuery() }
+                }
+            }
+            .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+            .foregroundColor(theme == .workbench ? .lightAccent : .spaceTextSecondary)
+            .scaledFont(10).padding(.horizontal, 8).padding(.top, 6)
+            LibraryIndexProgressView(status: catalog.indexStatus, cancel: catalog.cancelIndexing)
+                .scaledFont(10).padding(.horizontal, 8)
+                .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
+            SongMarkersButton(coordinator: coordinator, theme: theme)
+                .buttonStyle(PremiumHoverButtonStyle(theme: theme)).padding(.horizontal, 8).padding(.top, 6)
+            Button("Stapel-Export … (\(filteredPlaylist.count))") {
+                batchExportRequest = BatchWAVExportRequest(items: filteredPlaylist.map { url in
+                    let reference = trackReferences[url]
+                    let folder = (folderPathByURL[url] ?? []).joined(separator: " / ")
+                    return BatchWAVExportItem(source: url,
+                        displayName: reference?.displayName ?? cleanFilename(url),
+                        sourceDescription: folder.isEmpty
+                            ? (reference?.source.location ?? url).deletingLastPathComponent().path : folder)
+                })
+            }
+            .disabled(filteredPlaylist.isEmpty || catalog.isFiltering || filteredPlaylist.count > BatchWAVExporter.maximumItems)
+            .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+            .foregroundColor(theme == .workbench ? .lightAccent : .spaceTextSecondary)
+            .scaledFont(11).padding(.horizontal, 8).padding(.top, 6)
+            .accessibilityIdentifier("batchExport")
+            .help("Aktuelle Anzeige exportieren; bis zu 10.000 Titel je Stapel.")
+            if catalog.query.usesFlatList {
+                Button("Diese Ergebnisse abspielen (\(filteredPlaylist.count))") { playFilteredResults() }
+                    .disabled(filteredPlaylist.isEmpty || catalog.isFiltering).scaledFont(11).padding(8)
+                    .buttonStyle(PremiumHoverButtonStyle(theme: theme))
+                    .foregroundColor(theme == .workbench ? .lightAccent : .spaceTextSecondary)
+                    .accessibilityIdentifier("play-filtered-results")
+            }
             
             if playlist.isEmpty {
                 Spacer()
@@ -258,6 +345,9 @@ extension MainView {
                         playlistTree = nil
                         expandedFolders.removeAll()
                         folderPathByURL.removeAll()
+                        playbackSelection = nil
+                        queueResumeURL = nil
+                        playlistNotice = nil
                         currentPlaylistIndex = -1
                     }
                     .scaledFont(10, weight: .bold)
@@ -277,6 +367,12 @@ extension MainView {
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(spacing: 0) {
+                            if catalog.query.usesFlatList && filteredPlaylist.isEmpty {
+                                Text(catalog.isFiltering ? "Auswahl wird gefiltert…" : "Keine passenden Titel.")
+                                    .scaledFont(11)
+                                    .foregroundColor(theme == .workbench ? .lightTextSecondary : .spaceTextSecondary)
+                                    .padding(16)
+                            }
                             ForEach(playlistRows) { row in
                                 playlistRowView(row)
                             }
@@ -327,6 +423,7 @@ extension MainView {
                                             // Titel ist nicht mehr Teil der Playlist (z.B. nach
                                             // "Leeren") — direkt laden statt ihn in die
                                             // hierarchische Liste zu zwaengen.
+                                            playbackActions.prepareManualPlayback(coordinator: coordinator)
                                             if loadModFile(from: url) {
                                                 currentPlaylistIndex = -1
                                                 coordinator.play()
@@ -358,12 +455,20 @@ extension MainView {
     var instrumentsSidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let mod = coordinator.activeMod {
+                VStack(alignment: .leading, spacing: 8) {
+                    SampleInspectorButton(module: mod, theme: theme)
+                    ModuleInspectorButton(module: mod, theme: theme)
+                    SongMarkersButton(coordinator: coordinator, theme: theme)
+                }.padding(.horizontal, 10).padding(.vertical, 8)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(mod.playableInstrumentIndices, id: \.self) { i in
                             if let inst = mod.instruments[i],
                                let previewSample = mod.previewSelection(instrumentIndex: i)?.sample {
-                                Button(action: { coordinator.previewInstrument(index: i) }) {
+                                Button(action: {
+                                    coordinator.sleepTimer.prepareForManualPlayback()
+                                    coordinator.previewInstrument(index: i)
+                                }) {
                                     HStack(spacing: 8) {
                                         Text(String(format: "%02d", i))
                                             .foregroundColor(theme == .workbench ? .lightAccent : .codeInstrument)

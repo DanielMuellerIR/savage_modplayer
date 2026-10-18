@@ -47,7 +47,7 @@ final class DocumentTypeLocalizationTests: XCTestCase {
 
     func testEveryDeclaredDocumentTypeNameIsTranslated() throws {
         let declared = try declaredTypeNames()
-        XCTAssertEqual(declared.count, 6, "Erwartet: vier Formate plus zwei Dokumenttypen — \(declared.sorted())")
+        XCTAssertEqual(declared.count, 7, "Erwartet: vier Formate, zwei Modultypen und eine Sammlung — \(declared.sorted())")
 
         for language in ["de", "en"] {
             let table = try infoPlistStrings(language: language)

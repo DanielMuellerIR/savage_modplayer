@@ -74,10 +74,69 @@ Falls keine Vorschau erscheint:
 - **PAL- & NTSC-Taktfrequenzen**: Umschaltbare Paula-Taktung (3,546 MHz PAL vs. 3,580 MHz NTSC) für Paula-basierte MOD-Formate; bei Formaten mit eigenem Frequenzmodell ist die Steuerung ausgeblendet.
 - **Lautstärke & Stereo-Separation**: Psychoakustische (quadratische) Lautstärkeskalierung und einstellbare Stereo-Separation (Bleed von 0% Mono bis 100% Hard-Panning).
 - **Hi-Fi Resampling**: Umschaltbares linear-interpoliertes Sample-Playback für weicheren Sound (deaktivierbar für originalen 8-Bit-Crunch).
-- **WAV- & Stem-Export (macOS-App)**: Export des gesamten Songs in eine Stereo-WAV-Datei sowie Export einzelner Instrumentensamples als WAV. Die iPhone-App hat bewusst keinen Export.
+- **WAV- & Kanalspuren-Export (macOS-App)**: Stereo-Mix, tatsächlich gespielte Stereo-Kanalspuren als Float32-WAV mit gemeinsamem Pegel und Referenzmix sowie einzelne Instrumentensamples. Der [Kanalspuren-Export](docs/channel-stem-export.md) übernimmt Mute/Solo und Audiooptionen; Fortschritt, Abbruch und neue Zielordner schützen vorhandene Dateien. Der [Stapel-Export](docs/batch-wav-export.md) rendert ausgewählte Listentitel oder Suchtreffer mit gespeicherten Einstellungen, Fortschritt, Abbruch und Zielkonfliktbehandlung. Die iPhone-App hat bewusst keinen WAV-Export.
+- **Einschlaftimer (Mac und iPhone/iPad)**: 1–720 Minuten, sanftes Ausblenden in den letzten zehn Sekunden, Verlängerung um 15 Minuten und Abbruch bei unverändertem Lautstärkewert. Der Countdown läuft bei Pause und Titelwechsel weiter. [Details zum Einschlaftimer](docs/sleep-timer.md).
+- **Klang pro Titel (Mac und iPhone/iPad)**: Globale Vorgaben und ausdrückliche Titel-Overrides für MOD-Clock, Stereo-Separation, Interpolation und LED-Ausgabefilter; einzelne Werte erben oder den Titel zurücksetzen. [Details zu Titel-Einstellungen](docs/track-playback-settings.md).
+- **Notenregen als Video exportieren (macOS)**: **Export → Notenregen als Video…** öffnet eine pausierte Fünf-Sekunden-Vorschau, Auflösung/Bildrate/Kompression und geschützte Zielwahl. H.264-Bild und verlustfreies Stereo-Float32-Audio verwenden dieselbe Sample-Zeitbasis. Fortschritt, Abbruch und Finder-Zugriff sind enthalten. [Videoexport-Details](docs/note-rain-video.md).
+- **Sammlungen übertragen**: macOS und iPhone/iPad exportieren und importieren Playlists, Favoriten, Songstellen und Klang-Einstellungen als `.savagecollection`-Dateien. Am Mac öffnet **Sammlung → Sammlung übertragen…** den Dialog, auf iPhone/iPad **Sammlung übertragen** im Bibliotheksmenü. Lokale Titelzuordnungen prüfen, fehlende Titel zuordnen oder überspringen und Konflikte vor der Übernahme entscheiden. Musik, Lautstärke, laufende Timer und Warteschlange bleiben lokal. Unterbrochene Übernahmen werden vor dem Öffnen der Sammlung wiederhergestellt. [Formatdetails](docs/collection-exchange.md). **Sammlung → Sammlung abgleichen…** am Mac beziehungsweise **Sammlung abgleichen** in den iPhone/iPad-Einstellungen öffnet Einrichtung, Status, Titelzuordnung und Konfliktentscheidungen. Das macOS-Release 1.6.52 enthält CloudKit-Unterstützung; der Abgleich beginnt erst nach dem Einschalten und Bestätigen der ersten Titelzuordnung. Playlists, Favoriten, Songstellen und Klang-Einstellungen nutzen deine private iCloud-Datenbank. Musikdateien und Lautstärke bleiben auf dem jeweiligen Gerät. Synthetische Mac-/iPhone-Rundwege sowie Konflikt- und Löschprüfungen bestehen in Entwicklung und Produktion. Selbst gebaute Versionen lassen den Cloud-Zugriff ausgeschaltet, solange kein geprüftes CloudKit-Profil angegeben wird. [Abgleich und Voraussetzungen](docs/collection-sync.md).
 - **Komplette Tastatursteuerung (macOS-App)**: Leertaste für Play/Pause, Pfeiltasten links/rechts für Song-Positionen, Pfeiltasten oben/unten für Song-Wechsel in der Playlist.
 
+### Gespeicherte Playlists und Als Nächstes (macOS)
+
+**Playlists…** in der Seitenleiste speichert die aktuell sichtbaren Titel als
+benannte Liste. Der Dialog öffnet Listen und erlaubt Umbenennen, Umsortieren und
+Löschen. Das Kontextmenü eines Titels fügt ihn einer bestehenden Liste hinzu,
+spielt ihn als Nächstes oder hängt ihn an die Sitzungswarteschlange an. **Als
+Nächstes** öffnet die Warteschlange zum Verschieben und Entfernen. Weiter verwendet
+sie vor der bisherigen Liste; ein pausierter Titelwechsel bleibt pausiert.
+
+Suche und Favoritenfilter ändern die Anzeige. **Diese Ergebnisse abspielen**
+begrenzt Wiedergabe und Shuffle ausdrücklich auf die Treffer; **Alle** gibt wieder
+die ganze Liste frei. Gespeicherte Listen verweisen auf Originaldateien und
+Archivmitglieder, auch in verschachtelten Archiven. Diese Quellen müssen verfügbar
+bleiben. Fehlende Titel bleiben gespeichert und werden beim Öffnen gemeldet.
+Gleichnamige Dateien in verschiedenen Ordnern haben getrennte Favoriten. Alte
+Favoriten werden beim Auffinden übernommen; mehrdeutige Namen brauchen einen neuen
+Stern. Diese Oberfläche gibt es zunächst auf macOS.
+
+### Sample-Inspektor (Mac/iPhone/iPad)
+
+**Samples untersuchen…** öffnet Wellenform, Zoom, Stereo-Kanäle und getrennte
+Loop-/Sustain-Bereiche. Alle XM-Instrument-Samples und der globale IT-Samplepool
+bleiben erreichbar; vorhandene Tastenzuordnungen zeigen Quell-/Zielnoten und
+Sample-Nummern. Der Inspektor verändert keine Daten. Details:
+[Sample-Inspektor](docs/sample-inspector.md).
+
+**Modul untersuchen…** ergänzt Aufbau und Herkunft, Instrument-Hüllkurven und
+vorhandene Kompatibilitätsdiagnosen. Die Effektansicht erklärt übernommene
+formatabhängige Befehle samt Volume-Spalte. Auf iPhone/iPad liegen beide
+Inspektoren im Info-Menü der Wiedergabeansicht. Details:
+[Modul-Inspektor](docs/module-inspector.md).
+
+### Songstellen und Bereichsauswahl (Mac/iPhone/iPad)
+
+**Songstellen…** speichert benannte Position-/Zeilenpaare pro Originalquelle.
+Die Ziele bleiben über Neustarts erhalten; fehlende Ziele bleiben vermerkt.
+Eine getrennte Bereichsauswahl markiert Zeilen im Mac-Tracker und in der
+Positionsleiste des Notenregens. Der vorhandene zeilengenaue Sprung erhält den
+Transportzustand. **A/B vorbereiten und abspielen** rekonstruiert den tatsächlichen
+Wiedergabezustand bei A und wiederholt bis zum letzten Tick von B. Die Vorbereitung
+ist abbrechbar und auf zehn Minuten Songverlauf begrenzt. Ausschalten spielt an der
+aktuellen Stelle weiter; Sprünge oder Audioeinstellungen lösen die Schleife.
+Der Mac-Notenregen folgt denselben Samplegrenzen. Details: [Songstellen](docs/song-markers.md).
+
+### Metadatensuche und gespeicherte Filter (Mac/iPhone/iPad)
+
+Die Suche findet Dateinamen, Ordner, interne Titel und Instrumentnamen. **Anzeige und Filter**
+kombiniert Format, Kanalzahl, Favoriten, ungehörte und neu erfasste Titel mit
+Sortierung und benannten Filtern. Ausdrückliche Wiedergabe folgt der Anzeigereihenfolge.
+Tatsächliche Wiedergabe merkt den Hörstatus, Auswahl und Indexierung nicht.
+Sammlungshinweise zeigen ungültige Dateien und unterscheiden gleiche Namen von
+identischem Inhalt. `≥` kennzeichnet begrenzte Dauern. Details: [Filterbedienung](docs/library-filters.md).
+
 ### iPhone-App
+
+- **Gespeicherte Playlists und Warteschlange**: Das Listenmenü in der Bibliotheks-Werkzeugleiste öffnet benannte Listen und die Sitzungswarteschlange. Listen anlegen/umbenennen, Titel über ihr Kontextmenü hinzufügen und mit „Titel bearbeiten“ im Optionenmenü entfernen/umsortieren. „Als Nächstes“ hat Vorrang, danach geht die vorherige Liste weiter. Fehlende Titel bleiben gespeichert; Referenzen verwenden relative Bibliothekspfade. Suchtreffer lassen sich ausdrücklich abspielen.
 
 - **Hintergrundwiedergabe und Sperrbildschirm-Steuerung**: Die Wiedergabe läuft bei gesperrtem Bildschirm weiter. Titel, Format, Ordner, Titelbild und verstrichene Zeit erscheinen auf dem Sperrbildschirm; Play, Pause, Weiter, Zurück, Positionsregler sowie −15 s / +30 s funktionieren von dort und über die Kopfhörersteuerung. Ein eingehender Anruf pausiert und setzt danach fort; das Abziehen der Kopfhörer pausiert, statt auf den Lautsprecher zu wechseln.
 - **Bibliothek als Ordnerbaum**: Ordner starten zugeklappt, der Pfad zum laufenden Titel klappt automatisch auf, und Wiedergabe wie Zufallswiedergabe laufen über alle Ordner. Live-Suche, Favoriten, Loop-Modi und Sitzungswiederherstellung sind dabei.

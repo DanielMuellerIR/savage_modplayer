@@ -126,6 +126,7 @@ struct ResizableDivider: View {
 // Tracker-Grid inkl. Pattern-Auswahl aus der aktuellen Song-Position. Beobachtet
 // `transport`; das restliche MainView bleibt vom Zeilentakt entkoppelt.
 struct TrackerGridContainer: View {
+    @EnvironmentObject private var songMarkers: SongMarkersModel
     @ObservedObject var transport: TransportState
     let mod: Mod
     let channelIndices: [Int]
@@ -141,7 +142,13 @@ struct TrackerGridContainer: View {
             TrackerGridView(pattern: mod.patterns[patternIndex], patternIndex: patternIndex,
                             currentRow: transport.currentRow,
                             channelIndices: channelIndices, theme: theme,
-                            onSeekRow: onSeekRow)
+                            onSeekRow: onSeekRow,
+                            selectedRows: songMarkers.section.flatMap { songMarkers.layout.rows(in: $0, at: tableIdx) },
+                            markerRows: songMarkers.markerRowsByPosition[tableIdx] ?? [],
+                            onBoundary: { row, isStart in
+                                // Erst beim Klick lesen: wiederverwendete Patterns behalten sonst das alte Order-Ziel.
+                                songMarkers.setBoundary(SongAddress(position: transport.currentPosition, row: row), isStart: isStart)
+                            })
         } else {
             Color.clear
         }

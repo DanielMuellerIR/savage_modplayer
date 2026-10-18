@@ -24,6 +24,8 @@ extension ITPatternChannelState: ChannelMuteState {}
 
 @MainActor
 public final class ModPlayerCoordinator: ObservableObject {
+    public let sleepTimer = SleepTimerController()
+    public var onSleepTimerExpired: (@MainActor () -> Void)?
     @Published public var isPlaying = false
     // Pausiert: Engine steht, aber der komplette Wiedergabezustand (Position,
     // Kanäle, Effekt-Memory) bleibt erhalten — resume() spielt nahtlos weiter.
@@ -54,18 +56,29 @@ public final class ModPlayerCoordinator: ObservableObject {
     private var suppressRealtimeParameterWriteback = false
     private var pendingBPMSequence: UInt64?
     private var pendingSpeedSequence: UInt64?
+    @Published public private(set) var sectionLoopIsPreparing = false
+    @Published public private(set) var sectionLoopIsActive = false
+    @Published public private(set) var sectionLoopProgress: Double = 0
+    @Published public private(set) var sectionLoopError: SectionLoopError?
+    @Published public private(set) var sectionLoopTarget: SongSection?
+    private var sectionLoopPreparation: Task<Void, Never>?
+    private var sectionLoopGeneration = UUID()
+    private var pendingSectionLoop: PreparedSectionLoop?
+    private var sectionLoopPlayback: SectionLoopPlayback?
 
     @Published public var bpm = 125 {
         didSet {
-            guard !suppressRealtimeParameterWriteback,
-                  let state = playbackState, bpm > 0 else { return }
+            guard !suppressRealtimeParameterWriteback, bpm > 0 else { return }
+            cancelSectionLoop()
+            guard let state = playbackState else { return }
             pendingBPMSequence = state.requestBPM(bpm)
         }
     }
     @Published public var speed = 6 {
         didSet {
-            guard !suppressRealtimeParameterWriteback,
-                  let state = playbackState, speed > 0 else { return }
+            guard !suppressRealtimeParameterWriteback, speed > 0 else { return }
+            cancelSectionLoop()
+            guard let state = playbackState else { return }
             pendingSpeedSequence = state.requestTicksPerRow(speed)
         }
     }
@@ -154,6 +167,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
 
     private func requestRenderOptions() {
+        cancelSectionLoop()
         playbackState?.requestRenderOptions(
             stereoSeparation: stereoSeparation,
             useInterpolation: useInterpolation,
@@ -185,6 +199,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     
     @Published public var ledFilterActive: Bool = false {
         didSet {
+            if oldValue != ledFilterActive { cancelSectionLoop() }
             lowPassFilterNode?.bypass = !ledFilterActive
         }
     }
@@ -197,6 +212,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     
     // ARC-managed state captured by the AVAudioSourceNode closure
     private var playbackState: RealtimePlaybackState?
+    private var playbackSampleRate: Double?
     
     // Vorallozierte Dreifachpuffer trennen den schreibenden Audiothread vom
     // lesenden MainActor. Der Renderblock waehlt den freien Slot lockfrei.
@@ -206,7 +222,84 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Timer for VU meter visual updates
     private var vuUpdateTimer: Timer?
     
-    public init() {}
+    public init() {
+        sleepTimer.onExpired = { [weak self] in
+            guard let self else { return }
+            self.stop()
+            self.onSleepTimerExpired?()
+        }
+    }
+
+    public func cancelSectionLoop() {
+        sectionLoopGeneration = UUID()
+        sectionLoopPreparation?.cancel()
+        sectionLoopPreparation = nil
+        sectionLoopPlayback?.disable()
+        pendingSectionLoop = nil
+        sectionLoopIsPreparing = false
+        sectionLoopIsActive = false
+        sectionLoopProgress = 0
+        sectionLoopTarget = nil
+        sectionLoopError = nil
+    }
+
+    public func startSectionLoop(_ section: SongSection, beforeActivation: @escaping @MainActor () -> Void = {}) {
+        guard sleepTimer.allowsPlayback() else { return }
+        cancelSectionLoop()
+        guard let mod = activeMod else { return }
+        // Die Quellrate wurde vor dem Verbinden der Engine festgelegt. Danach
+        // kann der Mixer bereits die abweichende Geräterate melden.
+        let engine = audioEngine ?? AVAudioEngine()
+        let outputRate = engine.mainMixerNode.outputFormat(forBus: 0).sampleRate
+        let sampleRate = playbackSampleRate ?? (outputRate.isFinite && outputRate > 0 ? outputRate : 44_100)
+        let options = SectionLoopOptions(stereoSeparation: stereoSeparation,
+            useInterpolation: useInterpolation, palClock: palClock)
+        let generation = sectionLoopGeneration
+        sectionLoopIsPreparing = true
+        sectionLoopTarget = section
+        let coordinator = self
+        let worker = Task.detached(priority: .userInitiated) {
+            try PreparedSectionLoop.prepare(mod: mod, section: section, sampleRate: sampleRate, options: options) { value in
+                Task { @MainActor in
+                    guard coordinator.sectionLoopGeneration == generation,
+                          coordinator.sectionLoopIsPreparing else { return }
+                    coordinator.sectionLoopProgress = value
+                }
+            }
+        }
+        sectionLoopPreparation = Task { [weak self] in
+            do {
+                let prepared = try await withTaskCancellationHandler(operation: { try await worker.value },
+                    onCancel: { worker.cancel() })
+                guard let self, !Task.isCancelled, self.sectionLoopGeneration == generation else { return }
+                guard self.sleepTimer.allowsPlayback() else { return }
+                let paused = self.isPaused
+                let muteStates = (0..<self.channelCount).map { index in
+                    let mute = self.muteState(at: index)
+                    return (mute?.isMuted ?? false, mute?.isSoloed ?? false)
+                }
+                // Aktivierung ist ein ausdrücklicher Sprung nach A. Der neue
+                // Callback besitzt seinen Snapshot schon vor dem Audiostart.
+                self.sectionLoopPreparation = nil
+                self.stop()
+                self.pendingSectionLoop = prepared
+                self.sectionLoopTarget = section
+                self.sectionLoopIsActive = true
+                beforeActivation()
+                self.play(initiallyPaused: paused, muteStates: muteStates)
+                if self.sectionLoopIsActive {
+                    self.currentPosition = section.start.position
+                    self.currentRow = section.start.row
+                    self.visualizerState.elapsedTime = Double(prepared.startFrame) / prepared.sampleRate
+                }
+            } catch {
+                guard let self, self.sectionLoopGeneration == generation else { return }
+                self.sectionLoopPreparation = nil
+                self.sectionLoopIsPreparing = false
+                if !(error is CancellationError) { self.sectionLoopError = error as? SectionLoopError ?? .invalidSection }
+            }
+        }
+    }
     
     // fallbackName: Anzeigename (i. d. R. der Dateiname), der genutzt wird, wenn
     // das Modul selbst keinen brauchbaren Titel im Header traegt. Viele Module —
@@ -269,7 +362,10 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
 
     
-    public func play() {
+    public func play() { play(initiallyPaused: false) }
+
+    private func play(initiallyPaused: Bool, muteStates: [(Bool, Bool)] = []) {
+        guard sleepTimer.allowsPlayback() else { return }
         // Eine evtl. laufende Instrument-Vorschau weicht der Song-Wiedergabe.
         stopPreview()
         guard let mod = activeMod, mod.length > 0 else { return }
@@ -281,6 +377,12 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
         // reset() stellt MOD-Defaults her -> Format-Konfiguration neu anwenden.
         RenderEngine.configure(channels: channels, for: mod)
+        for index in muteStates.indices {
+            if let mute = muteState(at: index) {
+                mute.isMuted = muteStates[index].0
+                mute.isSoloed = muteStates[index].1
+            }
+        }
 
         let engine = AVAudioEngine()
         self.audioEngine = engine
@@ -290,6 +392,16 @@ public final class ModPlayerCoordinator: ObservableObject {
         if sampleRate <= 0.0 || sampleRate.isNaN || sampleRate.isInfinite {
             sampleRate = 44100.0
         }
+        if let prepared = pendingSectionLoop, prepared.sampleRate != sampleRate {
+            pendingSectionLoop = nil
+            sectionLoopIsActive = false
+            sectionLoopError = .sampleRateChanged
+            audioEngine = nil
+            return
+        }
+        let sectionLoop = pendingSectionLoop.map(SectionLoopPlayback.init)
+        sectionLoopPlayback = sectionLoop
+        pendingSectionLoop = nil
         
         // Define a guaranteed standard stereo format for our sourceNode
         guard let stereoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
@@ -365,17 +477,21 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
         // Rekonstruiertes Global-Volume (Zeilen-Sprung) uebernehmen.
         if let gv = pendingGlobalVolume { state.globalVolume = Float(gv) }
+        // Auch eine zunächst pausierte Aktivierung besitzt schon den Zustand
+        // vor A. Ausschalten vor dem ersten Callback darf ihn nicht verlieren.
+        sectionLoop?.prepared.snapshot.apply(to: state, channels: channels)
         state.publishTransportSnapshot()
         pendingStartPosition = nil
         pendingStartRow = nil
         pendingGlobalVolume = nil
 
         self.playbackState = state
+        self.playbackSampleRate = sampleRate
         #if os(macOS)
         let noteExchange = NotePreviewExchange()
         state.notePreviewExchange = noteExchange
         notePreviewSource = NotePreviewSource(
-            configuration: .init(mod: mod, sampleRate: sampleRate, state: state),
+            configuration: .init(mod: mod, sampleRate: sampleRate, state: state, sectionLoop: sectionLoop?.prepared),
             exchange: noteExchange)
         #endif
         
@@ -389,10 +505,12 @@ public final class ModPlayerCoordinator: ObservableObject {
             waveBuffer: waveBuffer,
             dspChannels: dspChannels,
             mod: mod,
-            sampleRate: sampleRate
+            sampleRate: sampleRate,
+            sectionLoop: sectionLoop
         )
         
-        let sourceNode = AVAudioSourceNode(renderBlock: Self.makeSourceNodeRenderBlock(renderBlock))
+        let sourceNode = AVAudioSourceNode(renderBlock: Self.makeSourceNodeRenderBlock(
+            renderBlock, sleepTimer: sleepTimer.signal, sampleRate: sampleRate))
 
         self.sourceNode = sourceNode
         engine.attach(sourceNode)
@@ -417,13 +535,14 @@ public final class ModPlayerCoordinator: ObservableObject {
         // Fehlerbehandlung ein `print` war — zwei Stellen, die denselben
         // Systemzustand setzen, und keine davon zustaendig.
         do {
-            try engine.start()
+            guard sleepTimer.allowsPlayback() else { return }
+            if initiallyPaused { engine.prepare() } else { try engine.start() }
             // Gespeicherte Lautstaerke auf den neuen Mixer anwenden, damit die
             // Ausgabe sofort zum UI-Slider passt (nicht erst nach Slider-Bewegung).
             mixer.outputVolume = lastVolume * lastVolume
             isPlaying = true
-            isPaused = false
-            startVUUpdates()
+            isPaused = initiallyPaused
+            if !initiallyPaused { startVUUpdates() }
         } catch {
             print("Fehler beim Starten der AVAudioEngine: \(error)")
             // Startet die Engine nicht, muessen die eben erzeugten Ressourcen
@@ -437,6 +556,9 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
 
     public func stop() {
+        cancelSectionLoop()
+        sectionLoopPlayback = nil
+        pendingSectionLoop = nil
         stopPreview()
         if let engine = audioEngine {
             engine.stop()
@@ -448,6 +570,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         stopVUUpdates()
 
         self.playbackState = nil
+        self.playbackSampleRate = nil
         notePreviewSource = nil
         pendingSeekSequence = nil
         pendingSeekTransport = nil
@@ -470,6 +593,7 @@ public final class ModPlayerCoordinator: ObservableObject {
 
     // Pausierte Wiedergabe nahtlos fortsetzen.
     public func resume() {
+        guard sleepTimer.allowsPlayback() else { return }
         guard isPaused, let engine = audioEngine else { return }
         do {
             try engine.start()
@@ -491,6 +615,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     public func setVolume(_ v: Float) {
         lastVolume = v
         audioEngine?.mainMixerNode.outputVolume = v * v // Psychoacoustic scaling
+        previewEngine?.mainMixerNode.outputVolume = v * v
     }
     
     // Merkt die per Slider gewaehlte Startposition, wenn gerade nichts spielt.
@@ -505,6 +630,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Zeilen-genauer Sprung: Grid-Klick auf eine Zeile. Rekonstruiert Speed/Tempo/
     // Global-Volume, damit die Wiedergabe ab dort im richtigen Tempo laeuft.
     public func seek(toPosition pos: Int, row: Int) {
+        cancelSectionLoop()
         guard let mod = activeMod else { return }
         let p = max(0, min(mod.length - 1, pos))
         let r = max(0, min(RenderEngine.patternRowCount(mod, at: p) - 1, row))
@@ -530,6 +656,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
 
     public func seek(toPosition: Int) {
+        cancelSectionLoop()
         guard let mod = activeMod else { return }
         let pos = max(0, min(mod.length - 1, toPosition))
         // Der Positionsslider veraendert nur die Position. Manuell gesetzte
@@ -909,8 +1036,20 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Pointer-Wrapper, der aufgerufene Block ist ein bereits erzeugter Closure.
     // Keine Allokation, kein Lock, kein dynamischer Objective-C-Aufruf.
     nonisolated static func makeSourceNodeRenderBlock(
-        _ block: @escaping ModuleRenderBlock
+        _ block: @escaping ModuleRenderBlock,
+        sleepTimer: SleepTimerSignal? = nil,
+        sampleRate: Double = 44_100
     ) -> AVAudioSourceNodeRenderBlock {
+        let render: ModuleRenderBlock
+        if let sleepTimer {
+            let gain = SleepTimerGain(signal: sleepTimer, sampleRate: sampleRate)
+            render = { frames, left, right in
+                block(frames, left, right)
+                gain.process(frames: frames, left: left, right: right)
+            }
+        } else {
+            render = block
+        }
         return { _, _, frameCount, outputData -> OSStatus in
             let buffers = UnsafeMutableAudioBufferListPointer(outputData)
             guard buffers.count >= 2,
@@ -918,7 +1057,7 @@ public final class ModPlayerCoordinator: ObservableObject {
                   let rightPtr = buffers[1].mData else {
                 return noErr
             }
-            block(
+            render(
                 frameCount,
                 leftPtr.assumingMemoryBound(to: Float.self),
                 rightPtr.assumingMemoryBound(to: Float.self)
@@ -934,6 +1073,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     // niemals einen Song-Kanal (frueher wurde channels.last uebernommen und dabei
     // dessen Mute/Solo geloescht).
     public func previewInstrument(index: Int) {
+        guard sleepTimer.allowsPlayback() else { return }
         guard let mod = activeMod, index >= 1 && index < mod.instruments.count,
               let inst = mod.instruments[index],
               let selection = mod.previewSelection(instrumentIndex: index) else { return }
@@ -1018,10 +1158,12 @@ public final class ModPlayerCoordinator: ObservableObject {
         let voice = PreviewVoice(framesLeft: Int(sampleRate * 1.6))
         let renderBlock = RenderEngine.createPreviewRenderBlock(channel: ch, voice: voice, useInterpolation: self.useInterpolation)
 
-        let sourceNode = AVAudioSourceNode(renderBlock: Self.makeSourceNodeRenderBlock(renderBlock))
+        let sourceNode = AVAudioSourceNode(renderBlock: Self.makeSourceNodeRenderBlock(
+            renderBlock, sleepTimer: sleepTimer.signal, sampleRate: sampleRate))
         engine.attach(sourceNode)
         engine.connect(sourceNode, to: mixer, format: stereoFormat)
         do {
+            guard sleepTimer.allowsPlayback() else { return }
             try engine.start()
             mixer.outputVolume = lastVolume * lastVolume
             self.previewEngine = engine

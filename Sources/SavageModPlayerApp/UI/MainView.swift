@@ -32,6 +32,15 @@ enum LoopMode: String, CaseIterable, Identifiable {
 }
 
 struct MainView: View {
+    @EnvironmentObject var songMarkers: SongMarkersModel
+    @EnvironmentObject var playbackSettings: TrackPlaybackSettingsModel
+    @EnvironmentObject var collectionRecovery: CollectionExchangeRecovery
+    @StateObject var catalog = LibraryCatalogModel(
+        metadataURL: MainView.catalogURL("metadata.json", environment: "SAVAGE_METADATA_STORE"),
+        preferencesURL: MainView.catalogURL("library-preferences.json", environment: "SAVAGE_LIBRARY_PREFERENCES_STORE"))
+    @State var showLibraryFilters = false
+    @State var filteredPlaylistURLs: [URL] = []
+    @State var activeTrackSourceID: String?
     @ObservedObject var coordinator: ModPlayerCoordinator
     @ObservedObject var playbackActions: PlaybackActions
     // Theme, Lautstaerke und loopMode ueber Neustarts hinweg merken (@AppStorage).
@@ -46,10 +55,10 @@ struct MainView: View {
     // sequenziell durch die Playlist. Ueberlebt App-Neustarts.
     @AppStorage("savage.shuffle") var shuffleEnabled = false
 
-    // Zuletzt gespielter Titel als stabiler Anzeigename (ohne UUID-Temp-Praefix).
-    // Bei ausgeschaltetem Shuffle nimmt der naechste Start diesen Titel wieder
-    // auf, statt stur beim ersten der Liste zu beginnen.
+    // Die Quellen-ID stellt den letzten Titel wieder her. Der alte Anzeigename
+    // bleibt fuer noch nicht migrierte Einstellungen und den Startlauf-Smoke.
     @AppStorage("savage.lastPlayed") var lastPlayedSongName: String = ""
+    @AppStorage("savage.lastPlayedSource") var lastPlayedSourceID: String = ""
 
     // Autoplay-Ordner aus den Einstellungen (leer = nicht gesetzt, dann greifen
     // nur die audio/-Fallbacks in loadLocalAudioFolder). Gesetzt wird der Wert
@@ -74,9 +83,29 @@ struct MainView: View {
     
     // Playlist states
     // `playlist` bleibt die flache Abspielliste in Anzeige-Reihenfolge
-    // (Tiefensuche durch den Baum) — Weiter/Zurueck/Shuffle/Loop arbeiten
-    // damit unveraendert ueber alle Ordner hinweg.
+    // (Tiefensuche durch den Baum). Eine explizite Treffer-Auswahl begrenzt
+    // Weiter/Zurueck/Shuffle; eingereihte Titel haben bei Weiter Vorrang.
     @State var playlist: [URL] = []
+    @State var trackReferences: [URL: PlaylistTrackReference] = [:]
+    @State var savedPlaylistDocument = SavedPlaylistDocument()
+    @State var savedPlaylistsWritable = false
+    @State var playlistStorageError: String?
+    @State var showSavedPlaylists = false
+    @State var collectionContext: CollectionExchangeContext?
+    @State var collectionSync: CollectionSyncModel?
+    @State var collectionSyncContext: CollectionSyncContext?
+    @Environment(\.scenePhase) var scenePhase
+    @State var pendingCollectionURLs: [URL] = []
+    struct PendingAudioRequest { let urls: [URL]; let autoPlay: Bool; let epoch: UUID }
+    @State var pendingAudioRequest: PendingAudioRequest?
+    @State var dropRequestID = UUID()
+    @State var collectingPlaylistRequest: UUID?
+    var isCollectingPlaylist: Bool { collectingPlaylistRequest == playlistRequestID }
+    @State var playlistNotice: String?
+    @State var playbackSelection: [URL]?
+    @State var trackQueue = TrackQueue()
+    @State var queueResumeURL: URL?
+    @State var showQueue = false
     var playlistRequestID: UUID {
         get { playbackActions.fileRequestID }
         nonmutating set { playbackActions.fileRequestID = newValue }
@@ -91,16 +120,17 @@ struct MainView: View {
     @State var folderPathByURL: [URL: [String]] = [:]
     
     // Search & Filter
-    @State var playlistSearchQuery: String = ""
+    var playlistSearchQuery: String {
+        get { catalog.query.search }
+        nonmutating set { catalog.query.search = newValue }
+    }
     // Favoriten-Filter: zeigt nur mit Stern markierte Titel (Umschalt-Knopf im
     // Playlist-Kopf).
-    @State var favoritesOnly = false
-    // Gemerkte Favoriten. Schlüssel ist bewusst der BEREINIGTE Dateiname
-    // (cleanFilename), NICHT der Pfad: Drag&Drop-Titel werden in pro-Sitzung
-    // wechselnde Temp-Ordner kopiert — ein pfadbasierter Schlüssel überlebte den
-    // Neustart nicht. Der bereinigte Name (ohne Temp-UUID-Präfix) ist über
-    // Sitzungen hinweg stabil. Persistiert in UserDefaults (siehe
-    // loadFavorites/toggleFavorite).
+    var favoritesOnly: Bool {
+        get { catalog.query.favoritesOnly }
+        nonmutating set { catalog.query.favoritesOnly = newValue }
+    }
+    // Quellen-IDs bleiben auch fuer Archivmitglieder ueber Temp-Kopien stabil.
     @State var favorites: Set<String> = []
 
     // Recent Songs History
@@ -125,6 +155,14 @@ struct MainView: View {
     @State var showExportDialog = false
     @State var exportSecondsLimit: Double = 180.0
     @State var exportStatusMessage: String? = nil
+    @State var exportChannelStems = false
+    @State var exportFolderName = ""
+    @State var exportModule: Mod?
+    @State var exportTitle = ""
+    @State var exportRenderOptions = ChannelStemExportOptions()
+    @StateObject var stemExport = ChannelStemExportModel()
+    @State var batchExportRequest: BatchWAVExportRequest?
+    @State var videoExportRequest: NoteRainVideoExportRequest?
     
     // Disk rotation state
     // Steuert die Rotation der Drop-Zone-Disc (nur wenn kein Song läuft). Die
@@ -378,8 +416,10 @@ struct MainView: View {
                 // die Datei nie gefunden wurde (Drop tat scheinbar nichts). macOS
                 // liefert `public.file-url` heute als URL-String-Data, nicht mehr
                 // als Plist mit rohem Pfad wie früher.
+                playbackActions.observeSleepTimer(coordinator: coordinator)
                 let requestID = UUID()
-                playlistRequestID = requestID
+                dropRequestID = requestID
+                let startingPlaylistRequest = playlistRequestID
                 let container = DropURLsContainer()
                 let dispatchGroup = DispatchGroup()
 
@@ -393,12 +433,14 @@ struct MainView: View {
                 }
 
                 dispatchGroup.notify(queue: .main) {
-                    guard playlistRequestID == requestID else { return }
+                    guard dropRequestID == requestID else { return }
                     let urls = container.urls
+                    if urls.contains(where: { $0.pathExtension.lowercased() != CollectionExchangeCodec.fileExtension }),
+                       playlistRequestID != startingPlaylistRequest { return }
                     if !urls.isEmpty {
-                        // Ein Drop aufs Fenster startet die Wiedergabe sofort — der
+                        // Musik per Drop startet die Wiedergabe sofort — der
                         // Nutzer hat die Datei/den Ordner bewusst reingezogen.
-                        handleDroppedURLs(urls, autoPlay: true, requestID: requestID)
+                        handleDroppedURLs(urls, autoPlay: true)
                     }
                 }
                 return true
@@ -406,6 +448,13 @@ struct MainView: View {
             // Finder „Öffnen mit" / Doppelklick auf eine .mod/.s3m/.xm/.it: die App
             // erhält die URL hierüber (nicht als argv) — direkt laden und abspielen.
             .onOpenURL { url in
+                if url.pathExtension.lowercased() == CollectionExchangeCodec.fileExtension {
+                    didLoadInitialContent = true
+                    pendingCollectionURLs.append(url)
+                    if playlist.isEmpty && coordinator.activeMod == nil && !isCollectingPlaylist { loadLocalAudioFolder(autoPlay: false) }
+                    openNextCollectionIfPossible()
+                    return
+                }
                 // „Öffnen mit" / Dock-Drop / Doppelklick: bewusst geöffneten Titel
                 // laden + abspielen und den Autoplay-Ordner unterdrücken (auch
                 // wenn onAppear leicht später feuert).
@@ -413,8 +462,20 @@ struct MainView: View {
                 handleDroppedURLs([url], autoPlay: true)
             }
             .onAppear {
+                playbackSettings.onResolvedChange = { [weak coordinator = coordinator] options in
+                    guard let coordinator else { return }
+                    Self.applyPlaybackOptions(options, to: coordinator)
+                }
+                if playbackSettings.sourceID == nil || activeTrackSourceID != nil || coordinator.activeMod == nil {
+                    playbackSettings.setContext(sourceID: activeTrackSourceID, format: coordinator.activeMod?.format)
+                }
                 isDiskAnimating = coordinator.isPlaying
-                loadFavorites()
+                loadSavedPlaylists()
+                prepareCollectionSync()
+                refreshLibraryCatalog()
+                if songMarkers.moduleID == nil || activeTrackSourceID != nil || coordinator.activeMod == nil {
+                    updateSongMarkerContext()
+                }
                 setupNotifications()
                 installKeyMonitor()
                 setupMediaRemoteCommands()
@@ -426,7 +487,15 @@ struct MainView: View {
                 // oder Öffnen-mit) hat Vorrang vor dem Autoplay-Ordner: direkt laden
                 // und abspielen — praktisch für headless Tests/CPU-Messungen ohne
                 // Klicken. Sonst wie bisher den konfigurierten Autoplay-Ordner laden.
-                if let launchURL = Self.launchFileArgument() {
+                if let collectionURL = LaunchArguments.collectionArgument(CommandLine.arguments), !playbackActions.hasHandledCollectionLaunch {
+                    playbackActions.hasHandledCollectionLaunch = true
+                    didLoadInitialContent = true; pendingCollectionURLs.append(collectionURL)
+                    if let audioURL = Self.launchFileArgument() { handleDroppedURLs([audioURL], autoPlay: false) }
+                    else { loadLocalAudioFolder(autoPlay: false) }
+                    openNextCollectionIfPossible()
+                } else if LaunchArguments.collectionArgument(CommandLine.arguments) != nil {
+                    didLoadInitialContent = true
+                } else if let launchURL = Self.launchFileArgument() {
                     didLoadInitialContent = true
                     handleDroppedURLs([launchURL], autoPlay: true)
                 } else {
@@ -446,10 +515,67 @@ struct MainView: View {
                 }
             }
             .onDisappear {
+                playbackSettings.flush()
                 removeKeyMonitor()
+                stemExport.cancel()
+                collectionSync?.deactivate()
             }
+            .sheet(isPresented: $showSavedPlaylists) { savedPlaylistsSheet }
+            .sheet(item: $collectionContext) { context in
+                CollectionExchangeView(context: context).frame(width: 660, height: 680)
+                    .preferredColorScheme(theme == .workbench ? .light : .dark)
+            }
+            .onChange(of: collectionContext?.id) { value in
+                collectionSync?.setPaused(value != nil)
+                if value == nil { openNextCollectionIfPossible() }
+            }
+            .sheet(item: $collectionSyncContext) { context in
+                CollectionSyncView(model: context.model).frame(width: 660, height: 680)
+                    .preferredColorScheme(theme == .workbench ? .light : .dark)
+            }
+            .onChange(of: collectionSyncContext?.id) { value in
+                if value == nil { collectionSync?.activate(); openNextCollectionIfPossible() }
+            }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active { collectionSync?.activate() } else { collectionSync?.deactivate() }
+            }
+            .onReceive(songMarkers.metadataDidChange.receive(on: DispatchQueue.main)) { collectionSync?.metadataDidChange() }
+            .onReceive(playbackSettings.metadataDidChange.receive(on: DispatchQueue.main)) { collectionSync?.metadataDidChange() }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEndSheetNotification).receive(on: DispatchQueue.main)) { _ in
+                DispatchQueue.main.async { openNextCollectionIfPossible() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuCollectionExchange")).receive(on: DispatchQueue.main)) { _ in
+                openCollectionExchange()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuCollectionSync")).receive(on: DispatchQueue.main)) { _ in
+                openCollectionSync()
+            }
+            .sheet(isPresented: $showQueue) { queueSheet }
+            .sheet(isPresented: $showLibraryFilters) {
+                LibraryFiltersView(catalog: catalog)
+                    .preferredColorScheme(theme == .workbench ? .light : .dark)
+            }
+            .sheet(item: $batchExportRequest) { request in
+                BatchWAVExportView(request: request)
+                    .preferredColorScheme(theme == .workbench ? .light : .dark)
+            }
+            .sheet(item: $videoExportRequest) { request in
+                NoteRainVideoExportView(request: request)
+                    .preferredColorScheme(theme == .workbench ? .light : .dark)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuVideoExport")).receive(on: DispatchQueue.main)) { _ in
+                openVideoExporter()
+            }
+            .onChange(of: playlist) { _ in refreshLibraryCatalog() }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification).receive(on: DispatchQueue.main)) { _ in
+                playbackSettings.flush()
+            }
+            .onChange(of: favorites) { catalog.setFavorites($0) }
+            .onReceive(catalog.$filteredIDs) { ids in applyCatalogSelection(ids) }
+            .onChange(of: loadedModuleID) { _ in markActiveTrackHeard(); updateSongMarkerContext() }
             .onChange(of: coordinator.isPlaying) { isPlaying in
                 isDiskAnimating = isPlaying && !coordinator.isPaused
+                markActiveTrackHeard()
             }
             // Die Bildrate wird im eigenen Einstellungs-Fenster gesetzt. Ohne
             // diese Zeile wirkte eine Aenderung erst beim naechsten Start.
@@ -459,6 +585,7 @@ struct MainView: View {
             // Pause haelt auch die Disk-Animation an (isPlaying bleibt true).
             .onChange(of: coordinator.isPaused) { isPaused in
                 isDiskAnimating = coordinator.isPlaying && !isPaused
+                markActiveTrackHeard()
             }
             .onChange(of: coordinator.trackName) { newTrackName in
                 if coordinator.isPlaying {
@@ -506,7 +633,7 @@ struct MainView: View {
             }
             
             // WAV offline exporter dialog
-            if showExportDialog {
+            if showExportDialog || isExporting || stemExport.isRunning || exportStatusMessage != nil || stemExport.message != nil {
                 wavExporterDialog
             }
             

@@ -41,6 +41,13 @@ if [ ! -x "$BIN" ]; then
 fi
 
 WORK="$(mktemp -d)"
+export SAVAGE_PLAYLIST_STORE="$WORK/playlists.json"
+export SAVAGE_METADATA_STORE="$WORK/metadata.json"
+export SAVAGE_LIBRARY_PREFERENCES_STORE="$WORK/library-preferences.json"
+export SAVAGE_SONG_MARKER_STORE="$WORK/song-markers.json"
+export SAVAGE_TRACK_PLAYBACK_STORE="$WORK/track-settings.json"
+export SAVAGE_COLLECTION_JOURNAL="$WORK/collection-import"
+export SAVAGE_COLLECTION_SYNC_STORE="$WORK/collection-sync.json"
 
 BACKUP="$WORK/defaults-backup.plist"
 DEFAULTS_STATE=unknown
@@ -58,12 +65,32 @@ stop_test_processes() {
     done
     TEST_PIDS=()
 }
+restore_test_defaults() {
+    # `defaults import` fuehrt zusammen. Nur vom Test neu angelegte Schluessel
+    # entfernen, dann die Originalwerte importieren und vollstaendig vergleichen.
+    python3 - "$DOMAIN" "$BACKUP" <<'PY'
+import plistlib
+import subprocess
+import sys
+
+domain, backup = sys.argv[1:]
+with open(backup, 'rb') as source:
+    original = plistlib.load(source)
+current = plistlib.loads(subprocess.check_output(['defaults', 'export', domain, '-']))
+for key in current.keys() - original.keys():
+    subprocess.run(['defaults', 'delete', domain, key], check=True)
+subprocess.run(['defaults', 'import', domain, backup], check=True)
+restored = plistlib.loads(subprocess.check_output(['defaults', 'export', domain, '-']))
+if restored != original:
+    raise SystemExit('Die Voreinstellungen weichen von der Sicherung ab.')
+PY
+}
 cleanup() {
     local status=$? restore_failed=0
     trap - EXIT
     stop_test_processes
-    if [ "$DEFAULTS_STATE" = present ]; then
-        if defaults import "$DOMAIN" "$BACKUP" >/dev/null 2>&1; then
+    if [ "$DEFAULTS_STATE" = present ] && [ "$DEFAULTS_TOUCHED" -eq 1 ]; then
+        if restore_test_defaults >/dev/null 2>&1; then
             rm -f "$BACKUP"
         else
             echo "FEHLER: Wiederherstellung fehlgeschlagen; Sicherung bleibt unter $BACKUP" >&2

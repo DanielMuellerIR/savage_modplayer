@@ -12,9 +12,29 @@ set -euo pipefail
 # Notary-Ticket.
 cd "$(dirname "$0")"
 
+APPLE_TEAM_ID="${APPLE_TEAM_ID:-9QSWKSR4NQ}"
+SIGN_APP="${SIGN_APP:-auto}"
+SWIFT_BUILD_ARGS=(-c release)
+CLOUDKIT_SETTINGS=""
+if [[ -n "${SAVAGE_CLOUDKIT_PROFILE:-}" ]]; then
+    [[ "$SIGN_APP" != "0" ]] || { echo "ABBRUCH: CloudKit benötigt eine gültige Signatur." >&2; exit 1; }
+    mkdir -p .build/cloudkit-macos
+    CLOUDKIT_SETTINGS="$PWD/.build/cloudkit-macos/settings.json"
+    python3 tools/prepare-cloudkit.py \
+        --profile "$SAVAGE_CLOUDKIT_PROFILE" --platform macos --team "$APPLE_TEAM_ID" \
+        --container "${SAVAGE_CLOUDKIT_CONTAINER:-iCloud.com.viben.SavageModPlayer}" \
+        --environment "${SAVAGE_CLOUDKIT_ENVIRONMENT:-Development}" \
+        --identity "${CODESIGN_IDENTITY:-}" --output-directory .build/cloudkit-macos \
+        > "$CLOUDKIT_SETTINGS"
+    CODESIGN_IDENTITY="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["identity"])' "$CLOUDKIT_SETTINGS")"
+    SIGN_APP=1
+    SWIFT_BUILD_ARGS+=(-Xswiftc -DSAVAGE_CLOUDKIT_ENABLED)
+fi
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-Developer ID Application: Daniel Mueller ($APPLE_TEAM_ID)}"
+
 echo "=== Building Savage Mod Player App in Release Mode ==="
-swift build -c release
-SWIFT_RELEASE_DIR="$(swift build -c release --show-bin-path)"
+swift build "${SWIFT_BUILD_ARGS[@]}"
+SWIFT_RELEASE_DIR="$(swift build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)"
 APP_VERSION="$(cat VERSION)"
 # Build-/Release-Datum (ISO 8601) — wird in die Info.plist geschrieben und im
 # Fenstertitel angezeigt ("Datum dieser Version").
@@ -25,9 +45,6 @@ APP_DIR="Savage Mod Player.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
-APPLE_TEAM_ID="${APPLE_TEAM_ID:-9QSWKSR4NQ}"
-CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-Developer ID Application: Daniel Mueller ($APPLE_TEAM_ID)}"
-SIGN_APP="${SIGN_APP:-auto}"
 
 # Recreate the folders
 rm -rf "$APP_DIR"
@@ -214,6 +231,12 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
+            <key>CFBundleTypeName</key><string>Savage Mod Player Collection</string>
+            <key>CFBundleTypeRole</key><string>Editor</string>
+            <key>LSHandlerRank</key><string>Owner</string>
+            <key>LSItemContentTypes</key><array><string>com.viben.savage-modplayer.collection</string></array>
+        </dict>
+        <dict>
             <key>CFBundleTypeName</key>
             <string>Tracker Module</string>
             <key>CFBundleTypeRole</key>
@@ -227,9 +250,18 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
             </array>
         </dict>
     </array>
-    <!-- UTI-Deklarationen fuer Tracker-Dateien: LaunchServices braucht sie, damit
-         die Quick-Look-Extension (QLSupportedContentTypes) den Dateitypen
-         zugeordnet werden kann. -->
+    <!-- Sammlungsdateien oeffnen die Importvorschau. -->
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>com.viben.savage-modplayer.collection</string>
+            <key>UTTypeDescription</key><string>Savage Mod Player Collection</string>
+            <key>UTTypeConformsTo</key><array><string>public.json</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict><key>public.filename-extension</key><array><string>savagecollection</string></array></dict>
+        </dict>
+    </array>
+    <!-- Tracker-UTIs ordnen die Quick-Look-Extension den Dateitypen zu. -->
     <key>UTImportedTypeDeclarations</key>
     <array>
         <dict>
@@ -306,6 +338,23 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
 EOF
 
 QL_ENTITLEMENTS="quicklook/SavageModPlayerQuickLook.entitlements"
+APP_SIGN_ARGS=(--force --options runtime --timestamp --sign "$CODESIGN_IDENTITY")
+if [[ -n "$CLOUDKIT_SETTINGS" ]]; then
+    cp "$SAVAGE_CLOUDKIT_PROFILE" "$CONTENTS_DIR/embedded.provisionprofile"
+    python3 - "$CONTENTS_DIR/Info.plist" "$CLOUDKIT_SETTINGS" <<'PY'
+import json, plistlib, sys
+with open(sys.argv[2]) as handle:
+    settings = json.load(handle)
+with open(sys.argv[1], 'rb') as handle:
+    info = plistlib.load(handle)
+info['CollectionSyncContainerIdentifier'] = settings['containerIdentifier']
+info['CollectionSyncContainerEnvironment'] = settings['environment']
+with open(sys.argv[1], 'wb') as handle:
+    plistlib.dump(info, handle)
+PY
+    CLOUDKIT_ENTITLEMENTS="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["entitlementsPath"])' "$CLOUDKIT_SETTINGS")"
+    APP_SIGN_ARGS+=(--entitlements "$CLOUDKIT_ENTITLEMENTS")
+fi
 
 # Debug-Symbole entfernen, BEVOR signiert wird (strip macht eine vorhandene
 # Signatur ungueltig). `swift build -c release` legt eine Debug-Map in jede
@@ -349,7 +398,7 @@ if [[ "$SIGN_APP" != "0" ]]; then
         codesign --force --options runtime --timestamp \
             --entitlements "$QL_ENTITLEMENTS" \
             --sign "$CODESIGN_IDENTITY" "$APP_DIR/Contents/PlugIns/SavageModPlayerQuickLook.appex"
-        codesign --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP_DIR"
+        codesign "${APP_SIGN_ARGS[@]}" "$APP_DIR"
         codesign --verify --deep --strict --verbose=2 "$APP_DIR"
     elif [[ "$SIGN_APP" == "1" || "${REQUIRE_CODESIGN:-0}" == "1" ]]; then
         echo "ABBRUCH: Codesign-Identity nicht gefunden: $CODESIGN_IDENTITY" >&2

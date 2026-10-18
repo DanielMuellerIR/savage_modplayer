@@ -67,10 +67,19 @@ XCODEBUILD_ARGS=(
     -destination 'generic/platform=iOS'
     -derivedDataPath "$DERIVED_DATA"
     -archivePath "$ARCHIVE_PATH"
-    -allowProvisioningUpdates
-    CODE_SIGN_STYLE=Automatic
     MARKETING_VERSION="$APP_VERSION"
 )
+if [ -n "${SAVAGE_CLOUDKIT_PROFILE:-}" ]; then
+    CLOUDKIT_DIR="$DERIVED_DATA/CloudKit"
+    mkdir -p "$CLOUDKIT_DIR"
+    python3 "$REPO_DIR/tools/prepare-cloudkit.py" \
+        --profile "$SAVAGE_CLOUDKIT_PROFILE" --platform ios \
+        --team "${SAVAGE_DEVELOPMENT_TEAM:-9QSWKSR4NQ}" \
+        --container "${SAVAGE_CLOUDKIT_CONTAINER:-iCloud.com.viben.SavageModPlayer}" \
+        --environment "${SAVAGE_CLOUDKIT_ENVIRONMENT:-Development}" \
+        --output-directory "$CLOUDKIT_DIR" > "$CLOUDKIT_DIR/settings.json"
+    XCODEBUILD_ARGS+=(-xcconfig "$CLOUDKIT_DIR/CloudKit.xcconfig")
+fi
 if [ -n "${SAVAGE_DEVELOPMENT_TEAM:-}" ]; then
     XCODEBUILD_ARGS+=(DEVELOPMENT_TEAM="$SAVAGE_DEVELOPMENT_TEAM")
 fi

@@ -122,6 +122,14 @@ final class PlaybackShortcutTests: XCTestCase {
             searchFieldActive: model.isSearchFieldActive))
     }
 
+    func testLibraryPanelKeepsSpaceAvailableForFilterAndPlaylistNames() {
+        model.isLibraryPanelOpen = true
+        XCTAssertTrue(PlaybackShortcut.playPause.isBlocked(searchFieldActive: model.isTextEntryActive))
+        XCTAssertFalse(PlaybackShortcut.nextTrack.isBlocked(searchFieldActive: model.isTextEntryActive))
+        model.isLibraryPanelOpen = false
+        XCTAssertFalse(model.isTextEntryActive)
+    }
+
     /// Die beiden Sprungkürzel gehen in entgegengesetzte Richtungen und um
     /// denselben Betrag.
     func testSkipShortcutsAreSymmetric() {

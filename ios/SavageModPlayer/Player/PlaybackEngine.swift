@@ -24,8 +24,10 @@ final class PlaybackEngine: ObservableObject {
     // Der Renderkern aus dem Core. Oeffentlich, weil die Visualisierungs-Views
     // seine beiden Unterzustaende direkt beobachten.
     let coordinator = ModPlayerCoordinator()
+    let playbackSettings: TrackPlaybackSettingsModel
 
     @Published private(set) var currentTrack: TrackRef?
+    @Published private(set) var loadedModuleID = UUID()
 
     // "Die Engine laeuft" — auch im pausierten Zustand true. Erst stop() setzt
     // sie zurueck. Dieselbe Bedeutung wie im Core, damit nichts auseinanderlaeuft.
@@ -33,6 +35,7 @@ final class PlaybackEngine: ObservableObject {
     @Published private(set) var isPaused = false
 
     @Published private(set) var queue: [TrackRef] = []
+    @Published private(set) var pendingQueue = TrackQueue()
 
     // -1 = es ist nichts aus der Liste gewaehlt.
     @Published private(set) var currentIndex = -1
@@ -48,6 +51,7 @@ final class PlaybackEngine: ObservableObject {
 
     private let settings: PlayerSettings
     private let library: LibraryStore
+    private let catalog: LibraryCatalogModel?
     private let session = AudioSessionController()
     private let nowPlaying = NowPlayingController()
 
@@ -89,15 +93,27 @@ final class PlaybackEngine: ObservableObject {
     // Schlange zehn Ladeauftraege nacheinander ab, bevor der zuletzt gewaehlte
     // Titel klingt.
     private var loadTask: Task<Void, Never>?
+    private(set) var requestRevision: UInt64 = 0
     private var loadCancellation: CancellationFlag?
+    private var explicitQueuePaths: [String]?
+    private var resumeTrackPath: String?
+    private var isPlayingQueuedTrack = false
 
     // MARK: - Aufbau
 
-    init(settings: PlayerSettings, library: LibraryStore,
+    init(settings: PlayerSettings, library: LibraryStore, catalog: LibraryCatalogModel? = nil,
+         playbackSettings: TrackPlaybackSettingsModel? = nil,
          readModule: @escaping @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) }) {
         self.settings = settings
         self.library = library
+        self.catalog = catalog
         self.readModule = readModule
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        self.playbackSettings = playbackSettings ?? TrackPlaybackSettingsModel(
+            fileURL: support.appendingPathComponent("SavageModPlayer/track-playback-settings.json"),
+            defaults: settings.playbackOptions, saveDefaults: { [weak settings] in settings?.setPlaybackOptions($0) })
+        self.playbackSettings.onResolvedChange = { [weak self] options in self?.applyPlaybackOptions(options) }
+        coordinator.onSleepTimerExpired = { [weak self] in self?.stopPlayback() }
 
         configureSession()
         configureRemoteControl()
@@ -205,25 +221,30 @@ final class PlaybackEngine: ObservableObject {
     // Coordinators sind @Published, ein blindes Zuweisen wuerde also bei jedem
     // beliebigen UserDefaults-Schreibvorgang die Oberflaeche neu zeichnen.
     func applySettings() {
-        let separation = Float(settings.stereoSeparation)
-        if coordinator.stereoSeparation != separation {
-            coordinator.stereoSeparation = separation
-        }
-        if coordinator.useInterpolation != settings.useInterpolation {
-            coordinator.useInterpolation = settings.useInterpolation
-        }
-        if coordinator.palClock != settings.palClock {
-            coordinator.palClock = settings.palClock
-        }
-        if coordinator.ledFilterActive != settings.ledFilterActive {
-            coordinator.ledFilterActive = settings.ledFilterActive
-        }
+        playbackSettings.updateDefaults(settings.playbackOptions, persist: false)
+        applyPlaybackOptions(playbackSettings.effective)
         let volume = Float(settings.volume)
         if appliedVolume != volume {
             appliedVolume = volume
             coordinator.setVolume(volume)
         }
         applyVisualizerState()
+    }
+
+    private func applyPlaybackOptions(_ options: PlaybackOptions) {
+        let separation = Float(options.stereoSeparation)
+        if coordinator.stereoSeparation != separation {
+            coordinator.stereoSeparation = separation
+        }
+        if coordinator.useInterpolation != options.useInterpolation {
+            coordinator.useInterpolation = options.useInterpolation
+        }
+        if coordinator.palClock != options.palClock {
+            coordinator.palClock = options.palClock
+        }
+        if coordinator.ledFilterActive != options.ledFilterActive {
+            coordinator.ledFilterActive = options.ledFilterActive
+        }
     }
 
     // MARK: - Abspielliste
@@ -234,13 +255,24 @@ final class PlaybackEngine: ObservableObject {
     private(set) var queueFilter = QueueFilter()
 
     func setQueue(_ tracks: [TrackRef], filter: QueueFilter = QueueFilter()) {
+        explicitQueuePaths = nil
+        applyQueue(tracks, filter: filter)
+    }
+
+    func setExplicitQueue(_ tracks: [TrackRef]) {
+        explicitQueuePaths = tracks.map(\.relativePath)
+        applyQueue(tracks, filter: QueueFilter())
+    }
+
+    private func applyQueue(_ tracks: [TrackRef], filter: QueueFilter) {
         queueFilter = filter
         queue = tracks
         // Laeuft gerade etwas, das auch in der neuen Liste steht, behaelt es
         // seinen Platz — sonst spraenge "weiter" unerwartet an den Anfang.
         // Andernfalls ist nichts aus der Liste gewaehlt (-1); ein bereits
         // geladener Titel spielt trotzdem zu Ende.
-        if let track = currentTrack, let index = tracks.firstIndex(of: track) {
+        let path = isPlayingQueuedTrack ? resumeTrackPath : currentTrack?.relativePath
+        if let index = tracks.firstIndex(where: { $0.relativePath == path }) {
             currentIndex = index
         } else {
             currentIndex = -1
@@ -254,17 +286,31 @@ final class PlaybackEngine: ObservableObject {
     // danach durch die ganze Sammlung weiter — schon ein einzelner neuer
     // Favorit reichte dafuer.
     func refreshQueueFromLibrary() {
-        setQueue(
+        if let paths = explicitQueuePaths {
+            applyQueue(paths.compactMap { library.track(forRelativePath: $0) }, filter: queueFilter)
+            return
+        }
+        applyQueue(
             library.filteredTracks(
                 search: queueFilter.search,
                 favoritesOnly: queueFilter.favoritesOnly),
             filter: queueFilter)
     }
 
+    func enqueue(_ track: TrackRef, next: Bool = false) {
+        guard let reference = track.playlistReference else { return }
+        pendingQueue.enqueue(reference, next: next)
+    }
+
+    func removeQueued(id: UUID) { pendingQueue.remove(id: id) }
+    func moveQueued(id: UUID, by offset: Int) { pendingQueue.move(id: id, by: offset) }
+    func clearQueued() { pendingQueue.removeAll() }
+
     // MARK: - Titel waehlen
 
     // Laden und sofort abspielen.
     func play(_ track: TrackRef) {
+        coordinator.sleepTimer.prepareForManualPlayback()
         replaceLoadTask { engine, cancellation in
             await engine.start(track, autoPlay: true, cancellation: cancellation)
         }
@@ -297,6 +343,7 @@ final class PlaybackEngine: ObservableObject {
     // ungueltig. `Task.cancel()` allein reicht nicht: Die DispatchQueue-Arbeit
     // ist kein Kind-Task und liest deshalb den threadsicheren Schalter.
     private func cancelPendingLoad() {
+        requestRevision &+= 1
         loadCancellation?.set()
         loadCancellation = nil
         loadTask?.cancel()
@@ -304,6 +351,8 @@ final class PlaybackEngine: ObservableObject {
     }
 
     private func start(_ track: TrackRef, autoPlay: Bool, cancellation: CancellationFlag) async {
+        isPlayingQueuedTrack = false
+        resumeTrackPath = nil
         if let index = queue.firstIndex(of: track) {
             await activateTrack(at: index, autoPlay: autoPlay, cancellation: cancellation)
             return
@@ -318,7 +367,7 @@ final class PlaybackEngine: ObservableObject {
             errorMessage = message
         case .loaded:
             currentIndex = -1
-            if autoPlay { play() }
+            if autoPlay { continuePlayback() }
         }
     }
 
@@ -358,9 +407,11 @@ final class PlaybackEngine: ObservableObject {
                 // eine Meldung setzen noch etwas abspielen.
                 return
             case .loaded:
+                isPlayingQueuedTrack = false
+                resumeTrackPath = nil
                 currentIndex = queue.firstIndex(where: { $0.relativePath == track.relativePath }) ?? -1
                 errorMessage = Self.skipMessage(for: skipped)
-                if autoPlay { play() }
+                if autoPlay { continuePlayback() }
                 return
             case .failed:
                 skipped.append(track.displayName)
@@ -371,8 +422,10 @@ final class PlaybackEngine: ObservableObject {
         // Kein einziger Titel liess sich laden.
         coordinator.stop()
         currentTrack = nil
+        loadedModuleID = UUID()
         currentIndex = -1
         activeFormat = nil
+        playbackSettings.setContext(sourceID: nil, format: nil)
         errorMessage = "Kein Titel der Liste liess sich laden."
         updateNowPlaying(force: true)
     }
@@ -415,6 +468,7 @@ final class PlaybackEngine: ObservableObject {
         let prepared = await onLoader {
             Self.prepare(url, readModule: readModule, isCancelled: { cancellation.isSet })
         }
+        coordinator.sleepTimer.refresh()
         // Zwischen Schlange und MainActor kann der Auftrag ueberholt worden
         // sein. Ab hier wird Zustand veraendert — also noch einmal pruefen.
         guard !cancellation.isSet else { return .cancelled }
@@ -429,9 +483,11 @@ final class PlaybackEngine: ObservableObject {
             // Die Dauer ist schon gemessen; setMod muss den Sequencer dafuer
             // nicht noch einmal auf dem MainActor durchtakten.
             coordinator.setMod(mod, fallbackName: fallbackName, precomputedDuration: duration)
+            loadedModuleID = UUID()
 
             activeFormat = mod.format
             currentTrack = track
+            playbackSettings.setContext(sourceID: track.relativePath, format: mod.format, sourceDescription: track.relativePath)
             // Klangeinstellungen gelten auch fuer den frisch geladenen Song.
             applySettings()
 
@@ -498,6 +554,12 @@ final class PlaybackEngine: ObservableObject {
 
     func play() {
         guard coordinator.activeMod != nil else { return }
+        coordinator.sleepTimer.prepareForManualPlayback()
+        continuePlayback()
+    }
+
+    private func continuePlayback() {
+        guard coordinator.activeMod != nil, coordinator.sleepTimer.allowsPlayback() else { return }
         // Erst jetzt die Session anmelden — ab hier gehoert die Tonausgabe uns.
         session.activate()
         pausedByInterruption = false
@@ -506,7 +568,21 @@ final class PlaybackEngine: ObservableObject {
         } else if !coordinator.isPlaying {
             coordinator.play()
         }
+        if coordinator.isPlaying && !coordinator.isPaused, let track = currentTrack {
+            catalog?.markHeard(track.relativePath)
+        }
         updateNowPlaying(force: true)
+    }
+
+    func startSectionLoop(_ section: SongSection) {
+        guard coordinator.activeMod != nil else { return }
+        coordinator.sleepTimer.prepareForManualPlayback()
+        cancelPendingLoad()
+        coordinator.startSectionLoop(section) { [weak self] in
+            guard let self, self.coordinator.sleepTimer.allowsPlayback() else { return }
+            self.session.activate()
+            self.pausedByInterruption = false
+        }
     }
 
     func pause() {
@@ -518,6 +594,13 @@ final class PlaybackEngine: ObservableObject {
     }
 
     func stop() {
+        coordinator.sleepTimer.cancel()
+        stopPlayback()
+    }
+
+    // Auch natürliches Songende und Timerablauf stoppen die Ausgabe, ohne die
+    // Deadline zu quittieren. Nur der ausdrückliche Stop-Button löscht den Timer.
+    private func stopPlayback() {
         // Stop bedeutet auch: Ein eben angetippter, noch ladender Titel darf
         // nicht nach diesem Aufruf verspaetet die Wiedergabe starten.
         cancelPendingLoad()
@@ -527,7 +610,7 @@ final class PlaybackEngine: ObservableObject {
         // Session freigeben und andere Apps informieren, dass sie ihre eigene
         // Wiedergabe fortsetzen duerfen.
         session.deactivate()
-        updateNowPlaying(force: true)
+        syncTransportState()
     }
 
     func next() {
@@ -542,31 +625,78 @@ final class PlaybackEngine: ObservableObject {
     // Songende vom bewussten Antippen: manuell wird immer gespielt, wenn vorher
     // gespielt wurde, und am Listenrand wird umgebrochen.
     private func advance(step: Int, automatic: Bool) {
-        guard !queue.isEmpty else { return }
+        if automatic && !coordinator.sleepTimer.allowsPlayback() { return }
+        guard !queue.isEmpty || !pendingQueue.items.isEmpty else { return }
         // setMod() im Ladepfad ruft stop(), also VOR dem Wechsel merken, ob
         // gerade wirklich gespielt wurde (pausiert zaehlt nicht als spielend).
         let wasPlaying = coordinator.isPlaying && !coordinator.isPaused
         let shouldPlay = wasPlaying || automatic
 
-        // Zielindex und Suchrichtung stehen hier fest, noch bevor der
-        // Ladeauftrag laeuft — sonst rechnete er nach dem ersten `await` mit
-        // einer moeglicherweise schon anderen Liste.
-        let target: Int
-        let direction: Int
-        if settings.shuffleEnabled {
-            target = randomIndex(excluding: currentIndex)
-            direction = 1
-        } else {
-            let next = currentIndex + step
-            // Am Rand der Liste von der anderen Seite weitermachen.
-            target = (next >= 0 && next < queue.count) ? next : (next < 0 ? queue.count - 1 : 0)
-            direction = step
-        }
-
+        // Die Warteschlange laedt zuerst. Danach wird die aktuelle Liste am
+        // gemerkten Anker fortgesetzt, auch nach einem Bibliotheksabgleich.
         replaceLoadTask { engine, cancellation in
+            var skipped: String?
+            if step > 0 {
+                let outcome = await engine.activateQueued(autoPlay: shouldPlay, cancellation: cancellation)
+                if outcome.handled { return }
+                skipped = outcome.message
+            }
+            guard !cancellation.isSet else { return }
+            guard !engine.queue.isEmpty else {
+                if automatic { engine.stopPlayback() }
+                if let skipped { engine.errorMessage = skipped }
+                return
+            }
+            let target: Int
+            let direction: Int
+            if engine.settings.shuffleEnabled {
+                target = engine.randomIndex(excluding: engine.currentIndex)
+                direction = 1
+            } else {
+                let next = engine.currentIndex + step
+                target = (next >= 0 && next < engine.queue.count) ? next : (next < 0 ? engine.queue.count - 1 : 0)
+                direction = step
+            }
             await engine.activateTrack(
                 at: target, direction: direction, autoPlay: shouldPlay, cancellation: cancellation)
+            if !cancellation.isSet, engine.errorMessage == nil { engine.errorMessage = skipped }
         }
+    }
+
+    private func activateQueued(autoPlay: Bool, cancellation: CancellationFlag) async
+        -> (handled: Bool, message: String?) {
+        let anchor = isPlayingQueuedTrack ? resumeTrackPath
+            : (queue.indices.contains(currentIndex) ? queue[currentIndex].relativePath : nil)
+        var skipped: [String] = []
+        while let item = pendingQueue.items.first {
+            guard !cancellation.isSet else { return (true, nil) }
+            guard let path = item.track.source.libraryRelativePath,
+                  let track = library.track(forRelativePath: path) else {
+                pendingQueue.remove(id: item.id)
+                skipped.append(item.track.displayName)
+                continue
+            }
+            switch await loadModule(track, cancellation: cancellation) {
+            case .cancelled: return (true, nil)
+            case .failed:
+                pendingQueue.remove(id: item.id)
+                skipped.append(track.displayName)
+            case .loaded:
+                pendingQueue.remove(id: item.id)
+                isPlayingQueuedTrack = true
+                resumeTrackPath = anchor
+                currentIndex = queue.firstIndex { $0.relativePath == anchor } ?? -1
+                errorMessage = Self.queuedSkipMessage(skipped)
+                if autoPlay { continuePlayback() }
+                return (true, nil)
+            }
+        }
+        return (false, Self.queuedSkipMessage(skipped))
+    }
+
+    private static func queuedSkipMessage(_ skipped: [String]) -> String? {
+        guard !skipped.isEmpty else { return nil }
+        return String(localized: "queue.skipped") + " " + skipped.joined(separator: ", ")
     }
 
     // Zufaelliger Titel, aber nie derselbe zweimal hintereinander — solange die
@@ -583,6 +713,12 @@ final class PlaybackEngine: ObservableObject {
 
     // Wird ausgeloest, wenn der Renderblock das Songende erreicht hat.
     private func handleSongEnd() {
+        guard coordinator.isPlaying, !coordinator.isPaused, coordinator.sleepTimer.allowsPlayback() else { return }
+        if !pendingQueue.items.isEmpty || isPlayingQueuedTrack {
+            if queue.isEmpty && pendingQueue.items.isEmpty { stopPlayback(); return }
+            advance(step: 1, automatic: true)
+            return
+        }
         switch settings.loopMode {
         case .track:
             // Der Renderblock springt am Songende von selbst zurueck zum
@@ -603,6 +739,12 @@ final class PlaybackEngine: ObservableObject {
 
     func seek(toPosition position: Int) {
         coordinator.seek(toPosition: position)
+        persistPlaybackPosition()
+        updateNowPlaying(force: true)
+    }
+
+    func seek(to address: SongAddress) {
+        coordinator.seek(toPosition: address.position, row: address.row)
         persistPlaybackPosition()
         updateNowPlaying(force: true)
     }
@@ -643,6 +785,8 @@ final class PlaybackEngine: ObservableObject {
     // laufen. Die ausfuehrliche Begruendung steht bei `visualizersVisible` in
     // ModPlayerCoordinator.swift.
     func setSceneActive(_ active: Bool) {
+        if !active { playbackSettings.flush() }
+        coordinator.sleepTimer.refresh()
         guard sceneIsActive != active else { return }
         sceneIsActive = active
         applyVisualizerState()
@@ -741,6 +885,9 @@ final class PlaybackEngine: ObservableObject {
         let paused = coordinator.isPaused
         if isPlaying != playing { isPlaying = playing }
         if isPaused != paused { isPaused = paused }
+        if coordinator.sectionLoopIsActive, playing, !paused, let track = currentTrack {
+            catalog?.markHeard(track.relativePath)
+        }
         updateNowPlaying(force: true)
     }
 
@@ -774,6 +921,7 @@ final class PlaybackEngine: ObservableObject {
 
     private func handleInterruptionBegan() {
         cancelPendingLoad()
+        if coordinator.sectionLoopIsPreparing { coordinator.cancelSectionLoop() }
         // Anruf, Wecker, Siri: iOS hat die Engine bereits angehalten. Wir ziehen
         // den eigenen Zustand nach und merken uns, dass WIR nicht schuld sind —
         // nur dann darf spaeter automatisch fortgesetzt werden.
@@ -785,6 +933,7 @@ final class PlaybackEngine: ObservableObject {
     }
 
     private func handleInterruptionEnded(shouldResume: Bool) {
+        guard coordinator.sleepTimer.allowsPlayback() else { return }
         guard pausedByInterruption else { return }
         pausedByInterruption = false
         // Ohne die Empfehlung des Systems bleibt die Wiedergabe stehen. Der
@@ -800,6 +949,7 @@ final class PlaybackEngine: ObservableObject {
 
     private func handleOutputDeviceLost() {
         cancelPendingLoad()
+        if coordinator.sectionLoopIsPreparing { coordinator.cancelSectionLoop() }
         pausedByInterruption = false
         // Kopfhoerer abgezogen. Hier wird bewusst NICHT gemerkt, dass wir
         // pausiert haben: die Musik darf spaeter nicht von selbst wieder
@@ -816,8 +966,9 @@ final class PlaybackEngine: ObservableObject {
     // Titel neu laden, an die alte Stelle springen, den Zustand play/pause
     // beibehalten. Stehenbleiben waere fuer den Nutzer nicht erklaerbar.
     private func rebuildAfterMediaServicesReset() {
-        let wasPlaying = coordinator.isPlaying && !coordinator.isPaused
-        let wasPaused = coordinator.isPaused
+        let allowsPlayback = coordinator.sleepTimer.allowsPlayback()
+        let wasPlaying = allowsPlayback && coordinator.isPlaying && !coordinator.isPaused
+        let wasPaused = allowsPlayback && coordinator.isPaused
         let position = coordinator.currentPosition
         let row = max(0, coordinator.currentRow)
         let track = currentTrack
@@ -831,7 +982,7 @@ final class PlaybackEngine: ObservableObject {
         session.prepare()
         nowPlaying.activate()
 
-        guard let track else {
+        guard allowsPlayback, let track else {
             updateNowPlaying(force: true)
             return
         }
@@ -854,7 +1005,7 @@ final class PlaybackEngine: ObservableObject {
             engine.persistPlaybackPosition()
 
             if wasPlaying || wasPaused {
-                engine.play()
+                engine.continuePlayback()
                 if wasPaused { engine.coordinator.pause() }
             }
             engine.updateNowPlaying(force: true)
