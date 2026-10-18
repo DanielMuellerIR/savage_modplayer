@@ -132,7 +132,11 @@ class IOSLibraryWiringTests(unittest.TestCase):
         source = (
             ROOT / "ios/SavageModPlayer/SavageModPlayerApp.swift"
         ).read_text(encoding="utf-8")
-        self.assertIn(".commands { PlaybackCommands(model: model) }", source)
+        self.assertRegex(
+            source,
+            r"\.commands\s*\{\s*(?:if let model = bootstrap\.model\s*\{\s*)?"
+            r"PlaybackCommands\(model: model\)",
+        )
 
 
 if __name__ == "__main__":
