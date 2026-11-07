@@ -554,6 +554,18 @@ Der Audiocallback ruft keine D-Bus-Funktion auf; Pegel und Framezähler sind
 lockfreie 64-Bit-Atomics in der C-Brücke.
 
 
+## Linux-Menüstart
+
+`python3 Tests/desktop_entry_tests.py` prüft Installation, Desktop-Argumente,
+Dateitypen sowie den Start ohne Datei mit Pfadeingabe, Fehlerwiederholung und
+Abbruch. Auf Linux gehören `desktop-file-validate` und die GIO-Python-Anbindung
+dazu; deren Auslassungen auf macOS ersetzen den Linux-Lauf nicht.
+
+Mit 1.6.54 bestanden auf Linux alle neun Startertests und alle fünf
+AppImage-Prüfungen. Der installierte Starter blieb im Pseudoterminal offen und
+bestand Fehleingabe → Datei/Ordner → Wiedergabe → `q`. ALSA-Nullausgabe:
+kein Nachweis für hörbaren Ton oder die Darstellung im Desktop-Terminal.
+
 ## Linux-AppImage
 
 Zuerst `bash linux/build-static.sh`, dann `bash linux/build-appimage.sh` auf
@@ -958,3 +970,61 @@ der Zwei-Sekunden-Grenze. Die Aufbauzeit wird direkt nach der Einrichtung
 erfasst und enthält keine spätere Prüfung der gespeicherten Dateien.
 Diese separate CI-Einschränkung bleibt im Backlog. Neue funktionale Fehler
 bleiben Freigabeblocker.
+
+## Linux-GUI
+
+Die Qt-App hat einen eigenen Prozessvertrag mit dem gemeinsamen Swift-Koordinator.
+Die Standardprüfung öffnet kein Desktop-Fenster und verwendet synthetische
+Nullsamples:
+
+```bash
+bash linux/build-gui.sh
+SAVAGE_DESKTOP_ENGINE="$PWD/.build/linux-gui/savage-desktop-engine" \
+SAVAGE_VIDEO_RENDERER="$PWD/.build/linux-gui/savage-mod-player" \
+python3 Tests/desktop_engine_tests.py
+SAVAGE_DESKTOP_ENGINE="$PWD/.build/linux-gui/savage-desktop-engine" \
+SAVAGE_GUI="$PWD/.build/linux-gui/savage-mod-player" \
+dbus-run-session -- python3 Tests/linux_gui_tests.py
+```
+
+Die zweite Suite benötigt `gdbus`, `desktop-file-validate` und die GIO-Anbindung
+für Python (`python3-gi` bzw. `python-gobject`). Ihr echter Desktop-Dateistart
+verwendet ein Testprogramm ohne Fenster. MPRIS und Instanzweiterleitung laufen
+unter `QT_QPA_PLATFORM=offscreen` auf einem isolierten Sitzungsbus. Videoverträge
+benötigen FFmpeg/ffprobe. Ein Skip ersetzt keinen dieser Linux-Belege.
+
+`desktop_engine_tests.py` prüft Play/Pause/Stopp und Seek, Mute, Timer,
+Inspektion, Neustart/Persistenz, explizite Songstellen und A/B, Warteschlange
+nach Bibliothekswechsel, Titelklangregler, Playlistbearbeitung, geschützte
+beschädigte Daten, WAV-Zielschutz einschließlich bestätigtem Ersetzen,
+Sample-Snapshots über Titelwechsel und Sammlungstransfer mit veralteten
+Entscheidungen. Archivdiagnosen dürfen den JSON-Kanal nicht beschädigen. Vier Video-Bildraten müssen exakt am 5040. Audiosample enden;
+ein abgebrochener Export darf kein fertiges Ziel veröffentlichen.
+
+Für echte Prüfbilder besitzt die Qt-App `--screenshot <PNG>`, `--capture-delay
+<Millisekunden>` und `--review-view <Ansicht>`. Dabei stets eine eigene
+`SAVAGE_DESKTOP_DATA`-Ablage und eine ALSA-Nullausgabe setzen; alte PNGs vorher
+entfernen und den Exit-Code prüfen. Ansichten: `paused`, `compact`, `light`,
+`zoom`, `settings`, `filters`, `markers`, `module`, `samples`, `playlists`,
+`queue`, `export`, `batch`, `video`, `collection`, `noteRain`, `sound`, `timer`, `instruments`. Für den Vergleich mit einer gestoppten Mac-Referenz dient `stopped`; `signals` und `multi` verwenden synthetische Signalmodule aus `Tests/gui_fixture.py`. Die Prüfung hält
+die Wiedergabe vor der Aufnahme an, damit automatische Titelwechsel keine
+Dialoge schließen. Ein PNG belegt Darstellung, keine tatsächliche Bedienung.
+
+Referenzmerkmale bei gleicher Eingabe und 1440×860 Nutzfläche: 260 Pixel Sidebar,
+70 Pixel Kopfbereich, 39 Pixel Positionsleiste, 142 Pixel Kanalbereich,
+38 Pixel feste Zeilennummern, 18 Pixel Trackerzeilen bei vier Kanälen,
+Farben/Schriftgrößen, Mute/Solo, kompakte Umschaltung und größte Schriftstufe.
+macOS-Referenzen ohne Fokus über ein unsichtbares NSPanel mit isolierten
+Speichern erzeugen. Linux-Menüleisten/Fensterrahmen vor Geometrievergleichen
+abziehen. Zulässige Plattformgrenzen stehen unter [Linux-GUI](linux-gui.md).
+Ein sichtbarer Test des installierten Menüstarts, nativer Dateidialoge und
+Drag & Drop benötigt die bestehende Zustimmung für GUI-Fokus.
+
+Prüfstand 1.6.55 (2026-11-07): macOS 757 Swift-Tests, zwei Auslassungen,
+kein Fehler; Linux 671 Swift-Tests, zehn Auslassungen, kein Fehler. App-Bau,
+Startargument-Smoke, CLI-Verträge und CLI-Wiedergabe bestehen. Die WAVs von
+22 lokalen MOD-Dateien bleiben bytegleich zur Baseline vor dem Port.
+Die vollständige Linux-Suite verwendet einen getrennten Scratch-Pfad
+(`swift test -c release --scratch-path .build/linux-tests`), damit statisch
+und dynamisch gebaute Swift-Laufzeiten keine Artefakte teilen. Die Desktop-
+Prozesssuite besteht mit 15, die Qt-/Desktop-Suite mit zwei Tests.

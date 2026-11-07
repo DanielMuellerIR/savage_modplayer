@@ -7,14 +7,15 @@
 **🌐 Sprache / Language:** [English](README.md) · [Deutsch](README.de.md)
 
 <p align="center">
-  <strong>Native macOS and iPhone tracker player for MOD, S3M, XM, and IT — powered by an independent Swift replay engine.</strong>
+  <strong>Tracker player for macOS, Linux, and iPhone for MOD, S3M, XM, and IT — powered by an independent Swift replay engine.</strong>
 </p>
 
-A self-contained tracker module player led by its native macOS and iOS apps:
+A self-contained tracker module player with desktop apps for macOS and Linux and a native iOS app:
 
 1. **Native macOS app (`Savage Mod Player.app`)** — a SwiftUI desktop application built on `AVAudioEngine`/`AVAudioSourceNode` with true real-time oscilloscopes and VU meters. It plays ProTracker and multichannel MODs (6/8/… channels, including `6CHN`/`8CHN`/`FLT8`), 15-sample Soundtracker modules, **ScreamTracker 3 (`.s3m`)**, **FastTracker II (`.xm`)**, and **Impulse Tracker (`.it`)** — and ships with a **Quick Look plugin**: pressing the space bar on a `.mod`/`.s3m`/`.xm`/`.it` file in Finder opens a playable audio preview.
 2. **Native iPhone app (`ios/`)** — a SwiftUI app on the same replay engine. It keeps playing while the screen is locked, is operated from the lock screen and headphone controls, browses the library as a real folder tree, and takes in entire collection folders in one go — including ZIP archives, which it unpacks itself. Distributed by sideloading with your own developer team.
-3. **Bonus HTML5 player (`savage-mod-player.html`)** — a tiny single HTML file (under 60 KB) that runs straight from the file system with a double click, no web server required. It deliberately focuses on classic 4-channel ProTracker MODs.
+3. **Linux desktop app (`savage-mod-player`)** — a Qt 6 interface following the macOS design and sharing its Swift playback coordinator. Full and compact layouts, themes, tracker, note rain, collections, and exports are available on Linux. [Build and platform boundaries](docs/linux-gui.md).
+4. **Bonus HTML5 player (`savage-mod-player.html`)** — a tiny single HTML file (under 60 KB) that runs straight from the file system with a double click, no web server required. It deliberately focuses on classic 4-channel ProTracker MODs.
 
 **Not a libopenmpt wrapper:** the native apps parse, sequence, synthesize, and mix MOD/S3M/XM/IT themselves in Swift. They do not link or ship `libopenmpt`, `libxmp`, `libmodplug`, DUMB, or another module replay library. `openmpt123` is used only as an optional external reference during development and testing.
 
@@ -192,7 +193,7 @@ For FastTracker II the engine runs a dedicated instrument voice model: the modul
 
 For Impulse Tracker the engine separates 64 logical pattern channels from a preallocated pool of 256 playback voices. It implements sample and instrument mode, NNA/DCT/DCA, 120-note sample maps, IT 2.14/2.15 compression, stereo and sustain loops, pitch/pan/filter envelopes, resonant per-voice filters, sample vibrato, surround, IT effect memory, and the `Old Effects`/`Compatible Gxx` profiles. OpenMPT-created IT files additionally use structured XTPM/STPM parsing, classic/alternative/modern tempo formulas, stored preamp and mix settings, restart position, extended filter range, and the applicable PCM `PlayBehaviour` flags.
 
-Version 1.6.53 reduces CPU overhead in the shared sample renderer while preserving audio output and the strict real-time stress-test limit. [Performance checks](docs/testing.md#performance-abnahme-und-geteilte-ci-runner).
+Version 1.6.55 adds a Linux desktop app using Qt 6 and the shared Swift playback coordinator. Launching from the menu now opens the graphical interface.
 
 Compatibility messages are capability-based. `cwtv` identifies the creating tracker while `cmwt` controls required IT semantics; a newer OpenMPT creator version alone is not a warning. Metadata, dormant MIDI flags, unused plugin definitions, and marker-like bytes inside PCM remain silent. A warning is shown only when a pattern in the played order list actually reaches an unsupported sound-affecting feature, with its instrument, channel, plugin slot, or chunk ID where available. `savage-cli --info` exposes the complete structured diagnosis.
 
@@ -321,8 +322,7 @@ runs to the end unless Linux desktop media controls are used. Ctrl-C closes the 
 
 #### Linux
 
-The core library and `savage-cli` build and run on Linux; the SwiftUI app and the
-Quick Look extension are macOS-only and are excluded from the package there.
+Linux provides the Qt desktop app `savage-mod-player`, the core library, and `savage-cli`. SwiftUI and the Quick Look extension remain Apple-specific; the Linux interface uses the same Swift coordinator and renderer.
 
 ```bash
 docker run --rm -v "$PWD":/src -w /src swift:6.0 \
@@ -351,18 +351,26 @@ supported; desktop clients receive the corresponding capabilities.
 ##### Installing on the desktop
 
 ```bash
-bash linux/build-static.sh            # build a static savage-cli in a container
-bash linux/install.sh                 # into ~/.local, no root needed
-bash linux/install.sh --uninstall     # remove it again
+./build.sh                            # build Qt app and static Swift engine
+./install.sh                          # install GUI into ~/.local, no root
+./install.sh --uninstall              # remove GUI launch entries
 ```
 
-`install.sh` puts `savage-cli` into `~/.local/bin` and the entry
-`savage-cli.desktop` into `~/.local/share/applications`; `--prefix` selects a
-different target. The player then shows up in the menu and can be chosen as the
-application for MOD, S3M, XM and IT files. The entry starts in a terminal on
-purpose — the keyboard controls need one. All four file types are already
-defined by freedesktop.org; the entry only registers for them instead of
-inventing its own.
+Building requires CMake, a C++17 compiler, Docker, and Qt 6.4 or newer
+(Quick, Quick Controls, Widgets, DBus, Network, and Multimedia). Video export
+and preview require FFmpeg. See [Linux GUI](docs/linux-gui.md) for dependencies,
+controls, and specific platform differences. The menu entry opens without a
+terminal. Open or drop files, folders, and archives; later file launches reach
+the same instance. Existing `savage-cli.desktop` associations are forwarded to
+the GUI. Collection data lives in `$XDG_DATA_HOME/savage-mod-player` or
+`~/.local/share/savage-mod-player` and survives uninstallation.
+
+The separate terminal edition remains available:
+
+```bash
+bash linux/build-static.sh
+bash linux/install.sh                 # install CLI and terminal launcher only
+```
 
 The static binary is around 70 MB and runs without an installed Swift runtime.
 An AppImage is available for Linux x86_64 (tested on Ubuntu 24.04):

@@ -121,6 +121,7 @@ public struct SleepTimerSnapshot: Equatable, Sendable {
 
 #if canImport(Combine)
 import Combine
+#endif
 
 @MainActor
 public final class SleepTimerController: ObservableObject {
@@ -216,4 +217,3 @@ public final class SleepTimerController: ObservableObject {
         }
     }
 }
-#endif

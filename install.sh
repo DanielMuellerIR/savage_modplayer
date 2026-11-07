@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh — Savage Mod Player notarisiert nach /Applications installieren.
+# install.sh — macOS-App notarisiert installieren; unter Linux die Qt-App benutzerlokal.
 #
 # Die drei Einstiegspunkte des Projekts trennen bewusst:
 #   ./build.sh          baut die App im Projektverzeichnis, mehr nicht (Unterbau: build_app.sh)
@@ -18,6 +18,7 @@
 # Letzte Zeile bei Erfolg: INSTALL OK: /Applications/Savage Mod Player.app (<version>)
 set -euo pipefail
 cd "$(dirname "$0")"
+if [ "$(uname -s)" = Linux ]; then exec bash linux/install-gui.sh "$@"; fi
 
 usage() {
     cat <<EOF

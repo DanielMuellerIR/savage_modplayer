@@ -64,6 +64,7 @@ let package = Package(
     ],
     products: appProducts + [
         .executable(name: "savage-cli", targets: ["SavageCLI"]),
+        .executable(name: "savage-desktop-engine", targets: ["SavageDesktopEngine"]),
         .library(name: "SavageModPlayerCore", targets: ["SavageModPlayerCore"])
     ],
     dependencies: appDependencies,
@@ -115,6 +116,11 @@ let package = Package(
             name: "SavageCLI",
             dependencies: cliDependencies,
             path: "Sources/SavageCLI"
+        ),
+        .executableTarget(
+            name: "SavageDesktopEngine",
+            dependencies: ["SavageModPlayerCore"],
+            path: "Sources/SavageDesktopEngine"
         ),
         .testTarget(
             name: "SavageModPlayerTests",

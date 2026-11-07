@@ -1,11 +1,18 @@
 # Aktiver Projekt-Backlog
 
-Stand: 2026-10-18 · Version 1.6.53.
+Stand: 2026-11-07 · Version 1.6.55.
 
 Diese Datei ist die einzige aktive Projektliste. Erledigte Chronik liegt in
 Release Notes, abgeschlossenen Tasks und `archive/`.
 
 ## Priorisiert
+
+0. **Linux-GUI: sichtbare Desktop-Abnahme.** Version 1.6.55 besteht die
+   Prozessverträge und visuellen Offscreen-Prüfungen. Noch offen sind der
+   sichtbare Menüstart, native Datei-/Speicherdialoge, Drag & Drop und Audio
+   über ein reales Ausgabegerät. Diese Prüfung braucht Zustimmung für GUI-Fokus.
+   Die [Plattformgrenzen](../docs/linux-gui.md#konkrete-plattformunterschiede)
+   sind ausdrücklich dokumentiert.
 
 0. **Zeitgrenze der 20.000-Titel-Einrichtung auf geteilten CI-Runnern prüfen.**
    Mit 1.6.52 benötigten GitHub-Runner etwa 54–77 Sekunden bei einer
@@ -138,7 +145,7 @@ Die [Abgleich-Anbindung](../docs/collection-sync.md) ist seit 1.6.51 auf Mac und
 - **Linux-Lieferung abgeschlossen.** Seit 1.6.27 erzeugt das Bauskript ein
   x86_64-AppImage mit festem appimagetool und Runtime. MPRIS2 über libdbus-1
   ist seit 1.6.26 umgesetzt und auf einem echten Desktop-Sitzungsbus geprüft.
-  Ein natives Linux-GUI bleibt ausgeschlossen.
+  Seit 1.6.55 ergänzt die [Qt-Desktop-App](../docs/linux-gui.md) die separate CLI-Ausgabe.
 - **`.7z` auf iOS.** Aktuell nicht unterstützt und als solches gemeldet — seit
   1.6.10 ist `.7z` auch auf Mac und Linux der einzige Grund, `bsdtar` überhaupt
   zu installieren. Nur

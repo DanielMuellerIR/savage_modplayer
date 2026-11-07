@@ -1,0 +1,39 @@
+#!/bin/sh
+# Der Menüstart braucht eine Quelle, bevor der CLI-Player übernehmen kann.
+set -eu
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ "$#" -gt 0 ] && [ "$1" != --play ]; then
+    exec "$BIN_DIR/savage-cli" "$@"
+fi
+
+printf 'Savage Mod Player\n\n'
+printf 'MOD / S3M / XM / IT\n'
+printf 'Datei oder Ordner eingeben (Pfad ohne Anführungszeichen).\n'
+printf 'File or folder path (without quotes). Enter: quit.\n\n'
+while :; do
+    printf '> '
+    IFS= read -r source_path || exit 0
+    [ -n "$source_path" ] || exit 0
+    case "$source_path" in
+        '~') source_path=$HOME ;;
+        '~/'*) source_path=$HOME/${source_path#\~/} ;;
+    esac
+    # Relative Namen mit Bindestrich dürfen nicht als CLI-Option gelten.
+    case "$source_path" in
+        /*) ;;
+        *) source_path=$PWD/$source_path ;;
+    esac
+    if [ -d "$source_path" ]; then
+        set -- --list "$source_path" --play
+    elif [ -f "$source_path" ]; then
+        set -- "$source_path" --play
+    else
+        printf 'Nicht gefunden / not found: %s\n' "$source_path" >&2
+        continue
+    fi
+    if "$BIN_DIR/savage-cli" "$@"; then
+        exit 0
+    fi
+    printf '\nWiedergabe fehlgeschlagen. Anderen Pfad eingeben oder Enter zum Beenden.\n'
+    printf 'Playback failed. Enter another path or press Enter to quit.\n'
+done

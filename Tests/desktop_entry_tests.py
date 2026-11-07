@@ -58,7 +58,7 @@ class DesktopEntryTests(unittest.TestCase):
 
     def test_starts_the_player_in_a_terminal_with_one_file(self):
         exec_line = self.section["Exec"]
-        self.assertTrue(exec_line.startswith("savage-cli "), exec_line)
+        self.assertTrue(exec_line.startswith("savage-desktop "), exec_line)
         self.assertIn("--play", exec_line, "ohne --play wuerde der Eintrag nur rendern")
         self.assertIn("%f", exec_line, "der Eintrag bekommt genau eine Datei")
         self.assertNotIn("%F", exec_line, "mehrere Dateien nimmt der Player nicht entgegen")
@@ -84,7 +84,7 @@ class DesktopEntryTests(unittest.TestCase):
             # shlex erhält den Backslash vor $, der Desktop-Exec-Parser entfernt ihn.
             args[2] = args[2].replace(r'\$', '$')
             self.assertEqual(args[2], 'exec "$@"')
-            self.assertEqual(args[4], str((prefix / "bin/savage-cli").resolve()))
+            self.assertEqual(args[4], str((prefix / "bin/savage-desktop").resolve()))
             args[5] = "/tmp/example module.mod"
             result = subprocess.run(args, check=True, capture_output=True, text=True)
             self.assertEqual(result.stdout.splitlines(), [args[5], "--play"])
@@ -143,6 +143,55 @@ class DesktopEntryTests(unittest.TestCase):
         installer = (ROOT / "linux/install.sh").read_text(encoding="utf-8")
         self.assertIn("linux/savage-cli.desktop", installer)
         self.assertIn("savage-cli.desktop", installer)
+
+    def test_menu_start_accepts_file_folder_retry_and_cancel(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / "prefix"
+            binary = root / "fake-player"
+            binary.write_text('#!/bin/sh\nprintf "\\n"\nprintf "ARG:%s\\n" "$@"\n')
+            binary.chmod(0o755)
+            subprocess.run(["bash", str(ROOT / "linux/install.sh"), "--prefix",
+                            str(prefix), "--binary", str(binary)], check=True,
+                           capture_output=True, timeout=10)
+            launcher = prefix / "bin/savage-desktop"
+            target = root / "song $literal `name` 50%.mod"
+            target.touch()
+            cases = [
+                (["--play"], f"{target}\n", [str(target), "--play"]),
+                ([], f"{root}\n", ["--list", str(root), "--play"]),
+                ([], f"{root / 'missing'}\n{target}\n", [str(target), "--play"]),
+                ([], "\n", []),
+                ([], "", []),
+            ]
+            for args, user_input, expected in cases:
+                with self.subTest(args=args, user_input=user_input):
+                    result = subprocess.run([str(launcher), *args], input=user_input,
+                                            capture_output=True, text=True, timeout=3)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("File or folder", result.stdout)
+                    self.assertEqual([line[4:] for line in result.stdout.splitlines()
+                                      if line.startswith("ARG:")], expected)
+            result = subprocess.run([str(launcher), str(target), "--play"],
+                                    capture_output=True, text=True, timeout=3)
+            self.assertEqual(result.stdout.splitlines(),
+                             ["", "ARG:" + str(target), "ARG:--play"])
+
+    def test_menu_playback_failure_remains_available_for_retry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shutil.copyfile(ROOT / "linux/savage-desktop", root / "savage-desktop")
+            binary = root / "savage-cli"
+            binary.write_text('#!/bin/sh\necho "Invalid module" >&2\nexit 3\n')
+            binary.chmod(0o755)
+            target = root / "bad.mod"
+            target.touch()
+            result = subprocess.run(["sh", str(root / "savage-desktop")],
+                                    input=f"{target}\n\n", capture_output=True,
+                                    text=True, timeout=3)
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("Invalid module", result.stderr)
+            self.assertIn("Playback failed", result.stdout)
 
 
 if __name__ == "__main__":

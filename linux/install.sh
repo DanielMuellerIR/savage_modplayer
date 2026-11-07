@@ -4,6 +4,7 @@
 #
 # Was hier landet (Vorgabe `~/.local`):
 #   <prefix>/bin/savage-cli                              das Programm
+#   <prefix>/bin/savage-desktop                          der Menüstart
 #   <prefix>/share/applications/savage-cli.desktop       der Eintrag im Menue
 #
 # Die vier Dateitypen (MOD, S3M, XM, IT) sind bei freedesktop.org bereits
@@ -52,9 +53,9 @@ refresh_desktop_database() {
 }
 
 if [ "$UNINSTALL" -eq 1 ]; then
-    rm -f "$BIN_DIR/savage-cli" "$DESKTOP_FILE"
+    rm -f "$BIN_DIR/savage-cli" "$BIN_DIR/savage-desktop" "$DESKTOP_FILE"
     refresh_desktop_database
-    echo "Entfernt: $BIN_DIR/savage-cli und $DESKTOP_FILE"
+    echo "Entfernt: $BIN_DIR/savage-cli, $BIN_DIR/savage-desktop und $DESKTOP_FILE"
     exit 0
 fi
 
@@ -71,11 +72,12 @@ if [[ -L "$DESKTOP_FILE" || ( -e "$DESKTOP_FILE" && ! -f "$DESKTOP_FILE" ) ]]; t
 fi
 mkdir -p "$BIN_DIR" "$APP_DIR"
 install -m 0755 "$BINARY" "$BIN_DIR/savage-cli"
+install -m 0755 linux/savage-desktop "$BIN_DIR/savage-desktop"
 # Exec verwendet zwei Escape-Ebenen: Desktop-String und dessen Argumentliste.
 # Der Zielpfad bleibt ein Argument: GIO sucht sonst vor der Feldcode-Expansion
 # nach einem Programmnamen mit %% statt %. Das feste Shellskript führt nur die
 # übergebenen Argumente aus; auch ein Gleichheitszeichen bleibt Teil des Pfads.
-EXEC_PATH="$(cd "$BIN_DIR" && pwd -P)/savage-cli"
+EXEC_PATH="$(cd "$BIN_DIR" && pwd -P)/savage-desktop"
 EXEC_PATH="${EXEC_PATH//\\/\\\\\\\\}"
 EXEC_PATH="${EXEC_PATH//\"/\\\\\"}"
 EXEC_PATH="${EXEC_PATH//\$/\\\\\$}"
@@ -100,6 +102,7 @@ refresh_desktop_database
 
 echo "Installiert:"
 echo "  $BIN_DIR/savage-cli"
+echo "  $BIN_DIR/savage-desktop"
 echo "  $DESKTOP_FILE"
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;

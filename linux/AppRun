@@ -3,4 +3,7 @@ set -eu
 if [ -z "${APPDIR:-}" ]; then
     APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 fi
+if [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = --play ]; }; then
+    exec "$APPDIR/usr/bin/savage-desktop"
+fi
 exec "$APPDIR/usr/bin/savage-cli" "$@"

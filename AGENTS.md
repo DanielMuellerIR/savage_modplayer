@@ -4,13 +4,13 @@
 
 - **Typ:** native macOS-GUI-App (SwiftUI/AVAudioEngine) mit Quick-Look-Extension,
   native iPhone-App (`ios/`), plattformübergreifendes headless CLI (`savage-cli`,
-  macOS + Linux) und kompakte HTML5-Variante.
+  macOS + Linux), Linux-Desktop-App (Qt 6 + Swift-Koordinator) und kompakte HTML5-Variante.
 - **Zweck:** Tracker-Modul-Player für MOD, S3M, XM und IT. Die native Variante
   unterstützt alle vier Formate; der Single-File-Browserplayer bleibt bewusst
   auf klassische 4-Kanal-ProTracker-MODs begrenzt.
-- **Linux ist Ist-Zustand:** Core und `savage-cli` bauen, testen und spielen dort;
-  App und Quick Look blendet `Package.swift` als macOS-only aus.
-  Grenzen: [Linux-Plan](tasks/2026-07-05-linux-port/plan.md).
+- **Linux ist Ist-Zustand:** Qt-GUI `linux/gui/` mit `savage-desktop-engine`, Core und CLI.
+  Gemeinsamer Swift-Koordinator, ALSA-Ausgabe und MPRIS; SwiftUI/Quick Look bleiben macOS-only.
+  Bau und Plattformgrenzen: [Linux-GUI](docs/linux-gui.md).
 - **iOS ist Ist-Zustand:** Hintergrundwiedergabe, Sperrbildschirm, Bibliothek,
   rekursiver Import; kein WAV-Export. Team-ID und Bundle-Signatur sind
   öffentlich, Schlüssel und Notary-Profil geheim.
@@ -101,6 +101,7 @@ Vollständige Befehle, Fixture-Regeln und Quick-Look-Fallen stehen in
 | Swift allgemein | gezielter Test, vollständiges `swift test`, `git diff --check` |
 | `savage-cli` | `swift build -c release --product savage-cli`, dann `python3 Tests/cli_contract_tests.py` und `python3 Tests/cli_playback_tests.py` |
 | App/Core/Quick Look | zusätzlich `bash build_app.sh` |
+| Linux-GUI/Engine/Installation | `bash linux/build-gui.sh`, `Tests/desktop_engine_tests.py`, `Tests/linux_gui_tests.py` unter isoliertem Sitzungsbus; betroffene Ansichten offscreen visuell prüfen |
 | App-Start (`AppMain`, `onAppear`, `onOpenURL`, `LaunchArguments`) | zusätzlich `bash Tests/launch_argument_smoke.sh` |
 | `RenderEngine`, `Audio/`, `Package.swift`, Parser-Kern | zusätzlich Linux-Lauf (Docker, siehe Linux-Plan) als einziger Beleg für Plattformneutralität |
 | Audio-Renderpfad | `savage-cli`-WAVs über den lokalen MOD-Korpus byteidentisch zur Baseline von vor der Änderung |

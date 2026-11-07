@@ -62,7 +62,6 @@ struct ChannelCellsCanvas: View, Equatable {
             && lhs.showVolume == rhs.showVolume && lhs.fontSize == rhs.fontSize
     }
 
-    private static let noteNames = ["C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-"]
 
     var body: some View {
         let rowHeight = fontSize + 6
@@ -120,43 +119,9 @@ struct ChannelCellsCanvas: View, Equatable {
         }
     }
 
-    private static func noteName(_ note: Note) -> String {
-        if note.key == Note.keyCut { return "^^^" }   // S3M Note-Cut
-        if note.key == Note.keyOff { return "===" }   // XM Key-Off (Note 97) korrekt zeigen
-        if note.key == Note.keyFade { return "~~~" }  // IT Note Fade
-        if note.key >= 0 { return "\(noteNames[note.key % 12])\(note.key / 12)" }
-        // MOD: aus der Amiga-Periode.
-        guard note.period >= 113 && note.period <= 856 else { return "---" }
-        let idx = Int(round(24.0 + 12.0 * log2(428.0 / Double(note.period))))
-        guard idx >= 0 else { return "---" }
-        return "\(noteNames[idx % 12])\((idx / 12) + 1)"
-    }
+    private static func noteName(_ note: Note) -> String { TrackerNoteText(note).note }
+    private static func effString(_ note: Note) -> String { TrackerNoteText(note).effect }
 
-    private static func effString(_ n: Note) -> String {
-        guard n.hasEffect else { return "..." }
-        if n.effectId > ModuleEffect.impulseTrackerCommandBase,
-           n.effectId <= ModuleEffect.impulseTrackerCommandBase + 26 {
-            let scalar = UnicodeScalar(64 + n.effectId - ModuleEffect.impulseTrackerCommandBase)!
-            return String(format: "%@%02X", String(Character(scalar)), n.effectData)
-        }
-        if n.effectId >= 0x100 {
-            let letter: String
-            switch n.effectId {
-            case ModuleEffect.setSpeed: letter = "A"
-            case ModuleEffect.setTempo: letter = "T"
-            case ModuleEffect.globalVolume: letter = "V"
-            case ModuleEffect.tremor: letter = "I"
-            case ModuleEffect.fineVibrato: letter = "U"
-            case ModuleEffect.volumeSlideS3M: letter = "D"
-            case ModuleEffect.portaDownS3M: letter = "E"
-            case ModuleEffect.portaUpS3M: letter = "F"
-            default: letter = "?"
-            }
-            return String(format: "%@%02X", letter, n.effectData)
-        }
-        if n.effectId >= 0xE0 { return String(format: "E%X%X", n.effectId & 0x0F, n.effectData) }
-        return String(format: "%01X%02X", n.effectId, n.effectData)
-    }
 }
 
 // Der komplette (statische) Zellen-Block: feststehende Nummern-Spalte + horizontal

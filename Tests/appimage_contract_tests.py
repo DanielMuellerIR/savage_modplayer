@@ -43,6 +43,14 @@ class AppImageTests(unittest.TestCase):
             self.assertEqual((directory / "image.wav").read_bytes(),
                              (directory / "direct.wav").read_bytes())
 
+    def test_menu_start_without_file_prompts_before_exit(self):
+        for args in [[], ["--play"], ["--appimage-extract-and-run"]]:
+            with self.subTest(args=args):
+                result = subprocess.run([str(self.image), *args], input=b"\n",
+                                        capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(b"File or folder", result.stdout)
+
     def test_extraction_fallback_resources_and_runtime(self):
         with tempfile.TemporaryDirectory() as temp:
             self.run_image("--appimage-extract-and-run", "--help", cwd=temp)

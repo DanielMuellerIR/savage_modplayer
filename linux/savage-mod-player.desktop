@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Savage Mod Player
+GenericName=Tracker Module Player
+GenericName[de]=Tracker-Modul-Player
+Comment=Play MOD, S3M, XM and IT modules
+Comment[de]=MOD-, S3M-, XM- und IT-Module abspielen
+Exec=savage-mod-player %F
+Terminal=false
+Icon=savage-mod-player
+Categories=AudioVideo;Audio;Player;
+Keywords=tracker;module;amiga;protracker;fasttracker;impulse;
+MimeType=audio/x-mod;audio/x-s3m;audio/x-xm;audio/x-it;application/x-savage-collection;
+StartupNotify=true

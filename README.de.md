@@ -7,14 +7,15 @@
 **🌐 Sprache / Language:** [English](README.md) · [Deutsch](README.de.md)
 
 <p align="center">
-  <strong>Nativer macOS- und iPhone-Tracker-Player für MOD, S3M, XM und IT — mit unabhängiger Swift-Replay-Engine.</strong>
+  <strong>Tracker-Player für macOS, Linux und iPhone für MOD, S3M, XM und IT — mit unabhängiger Swift-Replay-Engine.</strong>
 </p>
 
-Ein eigenständiger Tracker-Modul-Player mit den nativen macOS- und iOS-Apps im Mittelpunkt:
+Ein eigenständiger Tracker-Modul-Player mit Desktop-Apps für macOS und Linux sowie einer nativen iOS-App:
 
 1. **Native macOS App (`Savage Mod Player.app`)** — SwiftUI-Desktop-Anwendung mit `AVAudioEngine`, `AVAudioSourceNode`, echten Echtzeit-Oszilloskopen und Pegel-Metern. Sie spielt ProTracker- und Multichannel-MODs (6/8/… Kanäle, u. a. `6CHN`/`8CHN`/`FLT8`), 15-Sample-Soundtracker-Module, **ScreamTracker 3 (`.s3m`)**, **FastTracker II (`.xm`)** und **Impulse Tracker (`.it`)** — und bringt ein **Quick-Look-Plugin** mit: Leertaste auf einer `.mod`/`.s3m`/`.xm`/`.it` im Finder öffnet eine abspielbare Audio-Vorschau.
 2. **Native iPhone-App (`ios/`)** — SwiftUI-App auf derselben Replay-Engine. Sie spielt bei gesperrtem Bildschirm weiter, lässt sich über Sperrbildschirm und Kopfhörer bedienen, zeigt die Bibliothek als echten Ordnerbaum und nimmt ganze Sammlungsordner auf einen Rutsch auf — ZIP-Archive inklusive, die sie selbst auspackt. Verteilt wird sie per Sideload mit eigenem Developer-Team.
-3. **HTML5-Bonusplayer (`savage-mod-player.html`)** — Eine winzige einzelne HTML-Datei (unter 60 KB), die ohne Webserver direkt per Doppelklick aus dem Dateisystem funktioniert. Sie konzentriert sich bewusst auf klassische 4-Kanal-ProTracker-MODs.
+3. **Linux-Desktop-App (`savage-mod-player`)** — Qt-6-Oberfläche nach der macOS-Vorlage, mit demselben Swift-Wiedergabekoordinator. Voll- und Kompaktansicht, Themes, Tracker, Notenregen, Sammlung und Exporte stehen auch unter Linux bereit. [Bau und Plattformgrenzen](docs/linux-gui.md).
+4. **HTML5-Bonusplayer (`savage-mod-player.html`)** — Eine winzige einzelne HTML-Datei (unter 60 KB), die ohne Webserver direkt per Doppelklick aus dem Dateisystem funktioniert. Sie konzentriert sich bewusst auf klassische 4-Kanal-ProTracker-MODs.
 
 **Kein libopenmpt-Wrapper:** Die nativen Apps parsen, sequenzieren, synthetisieren und mischen MOD/S3M/XM/IT selbst in Swift. Sie binden weder `libopenmpt`, `libxmp`, `libmodplug`, DUMB noch eine andere Modul-Replay-Library ein. `openmpt123` dient ausschließlich als optionale externe Referenz bei Entwicklung und Tests.
 
@@ -194,7 +195,7 @@ Für FastTracker II fährt die Engine ein eigenes Instrument-Voice-Modell: Der M
 
 Für Impulse Tracker trennt die Engine 64 logische Pattern-Kanäle von einem vorallozierten Pool mit 256 Wiedergabe-Voices. Implementiert sind Sample- und Instrument-Modus, NNA/DCT/DCA, 120er Sample-Maps, IT-2.14-/2.15-Kompression, Stereo- und Sustain-Loops, Pitch-/Pan-/Filter-Hüllkurven, resonante Filter pro Voice, Sample-Vibrato, Surround, IT-Effekt-Memory sowie die Profile `Old Effects` und `Compatible Gxx`. Von OpenMPT erzeugte IT-Dateien verwenden zusätzlich strukturiertes XTPM-/STPM-Parsing, klassische/alternative/moderne Tempoformeln, gespeicherte Preamp-/Mix-Werte, Restart-Position, erweiterten Filterbereich und die jeweils zutreffenden PCM-`PlayBehaviour`-Flags.
 
-Version 1.6.53 reduziert den CPU-Aufwand des gemeinsamen Sample-Renderers bei unveränderter Audioausgabe und strenger Echtzeitgrenze im Stresstest. [Performance-Prüfungen](docs/testing.md#performance-abnahme-und-geteilte-ci-runner).
+Version 1.6.55 ergänzt eine Linux-Desktop-App mit Qt 6 und dem gemeinsamen Swift-Wiedergabekoordinator. Der Menüstart öffnet jetzt die grafische Oberfläche.
 
 Kompatibilitätsmeldungen entstehen aus einer Capability-Analyse. `cwtv` identifiziert den erstellenden Tracker, `cmwt` steuert dagegen die erforderliche IT-Semantik; eine neuere OpenMPT-Erstellerversion ist allein kein Warnungsgrund. Metadaten, inaktive MIDI-Flags, unbenutzte Plugin-Definitionen und markerähnliche Bytes im PCM bleiben still. Eine Warnung erscheint nur, wenn ein Pattern der abgespielten Order-Liste tatsächlich ein nicht unterstütztes klangrelevantes Merkmal erreicht, soweit möglich mit Instrument, Kanal, Plugin-Slot oder Chunk-ID. `savage-cli --info` zeigt die vollständige strukturierte Diagnose.
 
@@ -325,9 +326,7 @@ und endet mit Exit-Code 130.
 
 #### Linux
 
-Die Core-Bibliothek und `savage-cli` bauen und laufen unter Linux; die SwiftUI-App
-und die Quick-Look-Extension sind macOS-only und werden dort aus dem Paket
-ausgeblendet.
+Unter Linux stehen die Qt-Desktop-App `savage-mod-player`, die Core-Bibliothek und `savage-cli` bereit. SwiftUI und die Quick-Look-Extension bleiben auf Apple-Plattformen; die Linux-Oberfläche nutzt denselben Swift-Koordinator und Renderkern.
 
 ```bash
 docker run --rm -v "$PWD":/src -w /src swift:6.0 \
@@ -358,18 +357,27 @@ Fähigkeitsangaben.
 ##### Auf dem Desktop installieren
 
 ```bash
-bash linux/build-static.sh            # statisches savage-cli im Container bauen
-bash linux/install.sh                 # nach ~/.local, ohne root
-bash linux/install.sh --uninstall     # wieder entfernen
+./build.sh                            # Qt-App und statische Swift-Engine bauen
+./install.sh                          # GUI nach ~/.local installieren, ohne root
+./install.sh --uninstall              # GUI-Starteinträge entfernen
 ```
 
-`install.sh` legt `savage-cli` in `~/.local/bin` und den Eintrag
-`savage-cli.desktop` in `~/.local/share/applications` ab; ein anderes Ziel geht
-über `--prefix`. Damit taucht der Player im Menü auf und lässt sich als
-Anwendung für MOD-, S3M-, XM- und IT-Dateien wählen. Der Eintrag startet im
-Terminal — das ist Absicht, denn die Tastensteuerung braucht eines. Die vier
-Dateitypen sind bei freedesktop.org bereits definiert; der Eintrag meldet sich
-nur dafür an, statt eigene zu erfinden.
+Der Bau benötigt CMake, einen C++17-Compiler, Docker und Qt 6.4 oder neuer
+(Quick, Quick Controls, Widgets, DBus, Network und Multimedia). Für Videoexport
+und Videovorschau muss FFmpeg installiert sein. Abhängigkeiten, Bedienung und
+konkrete Plattformunterschiede stehen unter [Linux-GUI](docs/linux-gui.md).
+Der Menüeintrag startet ohne Terminal. Dateien, Ordner und Archive lassen sich
+öffnen oder auf das Fenster ziehen; weitere Dateistarts gehen an dieselbe Instanz.
+Bestehende `savage-cli.desktop`-Zuordnungen werden auf die GUI weitergeführt.
+Sammlungsdaten liegen unter `$XDG_DATA_HOME/savage-mod-player` oder
+`~/.local/share/savage-mod-player` und bleiben bei der Deinstallation erhalten.
+
+Die separate Terminalausgabe bleibt verfügbar:
+
+```bash
+bash linux/build-static.sh
+bash linux/install.sh                 # nur CLI und Terminalstarter installieren
+```
 
 Das statische Binary ist rund 70 MB groß und läuft ohne installierte
 Swift-Laufzeit. Zusätzlich gibt es ein AppImage für Linux x86_64

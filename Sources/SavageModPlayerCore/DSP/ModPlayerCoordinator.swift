@@ -1,13 +1,16 @@
 import Foundation
 
-// Live-Wiedergabe für macOS/iOS: AVAudioEngine-Anbindung, UI-Zustand und die
+// Gemeinsame Live-Wiedergabe: AVAudioEngine-Anbindung, UI-Zustand und die
 // Instrument-Vorschau. Der plattformneutrale Renderkern liegt in
-// RenderEngine.swift — CLI und Offline-Render (Quick Look, WAV) laufen ohne diese
-// Klasse und bauen deshalb auch unter Linux, wo weder AVFoundation noch Combine
-// existieren.
-#if canImport(AVFoundation) && canImport(Combine)
+// RenderEngine.swift — CLI und Offline-Render (Quick Look, WAV) laufen ohne
+// den Koordinator. Unter Linux verwendet der gemeinsame Koordinator einen PCMSink;
+// die Qt-Oberfläche liest denselben Zustand über ihren Prozesskanal.
+#if canImport(AVFoundation)
 import AVFoundation
+#endif
+#if canImport(Combine)
 import Combine
+#endif
 
 // Gemeinsamer Nenner der beiden Traeger von Mute und Solo: bei IT der logische
 // Pattern-Kanal, sonst die Stimme selbst. Beide sind Klassen, deshalb genuegt
@@ -109,7 +112,7 @@ public final class ModPlayerCoordinator: ObservableObject {
             }
             // Läuft der VU-Timer, bei einem Sichtbarkeitswechsel mit der passenden
             // Frequenz neu aufsetzen (30 Hz sichtbar ↔ 5 Hz kompakt).
-            guard oldValue != visualizersVisible, vuUpdateTimer != nil else { return }
+            guard oldValue != visualizersVisible, hasVUUpdates else { return }
             startVUUpdates()
         }
     }
@@ -127,7 +130,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     // ergeben, ein sehr grosser Wert einen Timer, der den MainActor flutet.
     @Published public var visualizerFrameRate: Double = 30 {
         didSet {
-            guard oldValue != visualizerFrameRate, vuUpdateTimer != nil else { return }
+            guard oldValue != visualizerFrameRate, hasVUUpdates else { return }
             startVUUpdates()
         }
     }
@@ -189,6 +192,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     private var pendingSeekSequence: UInt64?
     private var pendingSeekTransport: RealtimePlaybackState.TransportSnapshot?
     
+    #if canImport(AVFoundation)
     private var audioEngine: AVAudioEngine?
     private var sourceNode: AVAudioSourceNode?
     private var lowPassFilterNode: AVAudioUnitEQ?
@@ -196,11 +200,27 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Getrennte Engine nur fuer die Instrument-Vorschau (previewInstrument).
     private var previewEngine: AVAudioEngine?
     private var previewSourceNode: AVAudioSourceNode?
+    #else
+    private var linuxOutput: DesktopPCMOutput?
+    private var linuxPreview: DesktopPCMOutput?
+    #endif
+
+    private var outputSampleRate: Double {
+        #if canImport(AVFoundation)
+        return audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100
+        #else
+        return linuxOutput?.sampleRate ?? 44100
+        #endif
+    }
     
     @Published public var ledFilterActive: Bool = false {
         didSet {
             if oldValue != ledFilterActive { cancelSectionLoop() }
+            #if canImport(AVFoundation)
             lowPassFilterNode?.bypass = !ledFilterActive
+            #else
+            linuxOutput?.setOptions(volume: lastVolume, ledFilter: ledFilterActive)
+            #endif
         }
     }
     
@@ -221,6 +241,8 @@ public final class ModPlayerCoordinator: ObservableObject {
     
     // Timer for VU meter visual updates
     private var vuUpdateTimer: Timer?
+    private var vuUpdateTask: Task<Void, Never>?
+    private var hasVUUpdates: Bool { vuUpdateTimer != nil || vuUpdateTask != nil }
     
     public init() {
         sleepTimer.onExpired = { [weak self] in
@@ -249,8 +271,12 @@ public final class ModPlayerCoordinator: ObservableObject {
         guard let mod = activeMod else { return }
         // Die Quellrate wurde vor dem Verbinden der Engine festgelegt. Danach
         // kann der Mixer bereits die abweichende Geräterate melden.
+        #if canImport(AVFoundation)
         let engine = audioEngine ?? AVAudioEngine()
         let outputRate = engine.mainMixerNode.outputFormat(forBus: 0).sampleRate
+        #else
+        let outputRate = PCMSinkFactory.preferredFormat().sampleRate
+        #endif
         let sampleRate = playbackSampleRate ?? (outputRate.isFinite && outputRate > 0 ? outputRate : 44_100)
         let options = SectionLoopOptions(stereoSeparation: stereoSeparation,
             useInterpolation: useInterpolation, palClock: palClock)
@@ -370,6 +396,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         stopPreview()
         guard let mod = activeMod, mod.length > 0 else { return }
         if isPlaying { return }
+        playbackError = nil
         
         // Ensure channels are fresh
         for ch in channels {
@@ -384,6 +411,7 @@ public final class ModPlayerCoordinator: ObservableObject {
             }
         }
 
+        #if canImport(AVFoundation)
         let engine = AVAudioEngine()
         self.audioEngine = engine
         
@@ -392,23 +420,34 @@ public final class ModPlayerCoordinator: ObservableObject {
         if sampleRate <= 0.0 || sampleRate.isNaN || sampleRate.isInfinite {
             sampleRate = 44100.0
         }
+        #else
+        let output = DesktopPCMOutput()
+        linuxOutput = output
+        let sampleRate = output.sampleRate
+        #endif
         if let prepared = pendingSectionLoop, prepared.sampleRate != sampleRate {
             pendingSectionLoop = nil
             sectionLoopIsActive = false
             sectionLoopError = .sampleRateChanged
+            #if canImport(AVFoundation)
             audioEngine = nil
+            #else
+            linuxOutput = nil
+            #endif
             return
         }
         let sectionLoop = pendingSectionLoop.map(SectionLoopPlayback.init)
         sectionLoopPlayback = sectionLoop
         pendingSectionLoop = nil
         
+        #if canImport(AVFoundation)
         // Define a guaranteed standard stereo format for our sourceNode
         guard let stereoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
             print("Fehler: Konnte standard stereo format nicht erstellen.")
             return
         }
         
+        #endif
         // Instantiate ARC-managed playback state
         let state = RealtimePlaybackState()
         state.position = 0
@@ -487,7 +526,7 @@ public final class ModPlayerCoordinator: ObservableObject {
 
         self.playbackState = state
         self.playbackSampleRate = sampleRate
-        #if os(macOS)
+        #if os(macOS) || os(Linux)
         let noteExchange = NotePreviewExchange()
         state.notePreviewExchange = noteExchange
         notePreviewSource = NotePreviewSource(
@@ -509,6 +548,7 @@ public final class ModPlayerCoordinator: ObservableObject {
             sectionLoop: sectionLoop
         )
         
+        #if canImport(AVFoundation)
         let sourceNode = AVAudioSourceNode(renderBlock: Self.makeSourceNodeRenderBlock(
             renderBlock, sleepTimer: sleepTimer.signal, sampleRate: sampleRate))
 
@@ -553,18 +593,36 @@ public final class ModPlayerCoordinator: ObservableObject {
             // Leak). stop() raeumt alles konsistent auf.
             stop()
         }
+        #else
+        do {
+            try output.start(block: renderBlock, sleepTimer: sleepTimer.signal,
+                             volume: lastVolume, ledFilter: ledFilterActive,
+                             initiallyPaused: initiallyPaused)
+            isPlaying = true
+            isPaused = initiallyPaused
+            if !initiallyPaused { startVUUpdates() }
+        } catch {
+            playbackError = error.localizedDescription
+            stop()
+        }
+        #endif
     }
+
+    public private(set) var playbackError: String?
 
     public func stop() {
         cancelSectionLoop()
         sectionLoopPlayback = nil
         pendingSectionLoop = nil
         stopPreview()
-        if let engine = audioEngine {
-            engine.stop()
-        }
+        #if canImport(AVFoundation)
+        if let engine = audioEngine { engine.stop() }
         audioEngine = nil
         sourceNode = nil
+        #else
+        linuxOutput?.stop()
+        linuxOutput = nil
+        #endif
         isPlaying = false
         isPaused = false
         stopVUUpdates()
@@ -584,8 +642,14 @@ public final class ModPlayerCoordinator: ObservableObject {
 
     // Wiedergabe anhalten, ohne den Zustand zu verwerfen. Gegenstück: resume().
     public func pause() {
-        guard isPlaying, !isPaused, let engine = audioEngine else { return }
+        guard isPlaying, !isPaused else { return }
+        #if canImport(AVFoundation)
+        guard let engine = audioEngine else { return }
         engine.pause()
+        #else
+        do { try linuxOutput?.pause() }
+        catch { playbackError = error.localizedDescription; stop(); return }
+        #endif
         isPaused = true
         // VU-Timer anhalten — die Meter fallen auf 0, elapsedTime friert ein.
         stopVUUpdates()
@@ -594,12 +658,18 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Pausierte Wiedergabe nahtlos fortsetzen.
     public func resume() {
         guard sleepTimer.allowsPlayback() else { return }
-        guard isPaused, let engine = audioEngine else { return }
+        guard isPaused else { return }
         do {
+            #if canImport(AVFoundation)
+            guard let engine = audioEngine else { return }
             try engine.start()
+            #else
+            try linuxOutput?.resume()
+            #endif
             isPaused = false
             startVUUpdates()
         } catch {
+            playbackError = error.localizedDescription
             print("Fehler beim Fortsetzen der AVAudioEngine: \(error)")
             // Engine nicht wiederbelebbar -> sauber aufraeumen statt in einem
             // halb-pausierten Zustand haengen zu bleiben.
@@ -614,8 +684,13 @@ public final class ModPlayerCoordinator: ObservableObject {
 
     public func setVolume(_ v: Float) {
         lastVolume = v
+        #if canImport(AVFoundation)
         audioEngine?.mainMixerNode.outputVolume = v * v // Psychoacoustic scaling
         previewEngine?.mainMixerNode.outputVolume = v * v
+        #else
+        linuxOutput?.setOptions(volume: v, ledFilter: ledFilterActive)
+        linuxPreview?.setOptions(volume: v, ledFilter: false)
+        #endif
     }
     
     // Merkt die per Slider gewaehlte Startposition, wenn gerade nichts spielt.
@@ -717,7 +792,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         bpm: Int,
         globalVolume: Int
     ) {
-        let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
+        let sampleRate = self.outputSampleRate
         let timing = RenderEngine.timingParameters(for: mod)
         let outputsPerTick = SequencerCore.outputsPerTick(
             tempoMode: timing.tempoMode,
@@ -800,7 +875,7 @@ public final class ModPlayerCoordinator: ObservableObject {
             position = max(0, min(mod.length - 1, state.restartPosition))
             row = 0
         }
-        let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
+        let sampleRate = self.outputSampleRate
         let timing = RenderEngine.timingParameters(for: mod)
         let outputsPerTick = SequencerCore.outputsPerTick(
             tempoMode: timing.tempoMode,
@@ -943,7 +1018,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         if let state = self.playbackState {
             synchronizePlaybackState(state)
             
-            let sampleRate = self.audioEngine?.mainMixerNode.outputFormat(forBus: 0).sampleRate ?? 44100.0
+            let sampleRate = self.outputSampleRate
             // Liegt ein Uhr-Auftrag an (Track-Loop), zaehlt bereits dieser Wert.
             // Sonst zeigte die Anzeige bis zum naechsten Audio-Callback noch
             // einmal die alte, zu lange Spielzeit.
@@ -1002,6 +1077,16 @@ public final class ModPlayerCoordinator: ObservableObject {
     }
     
     private func startVUUpdates() {
+        #if os(Linux)
+        vuUpdateTask?.cancel()
+        let interval = vuUpdateInterval
+        vuUpdateTask = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.updateVULevelsTick()
+                do { try await Task.sleep(for: .seconds(interval)) } catch { return }
+            }
+        }
+        #else
         // Evtl. laufenden Timer ersetzen (z. B. bei Frequenzwechsel Full↔Compact).
         vuUpdateTimer?.invalidate()
         // 30 Hz für flüssige Oszilloskope; im Kompaktmodus 5 Hz (vuUpdateInterval).
@@ -1018,9 +1103,12 @@ public final class ModPlayerCoordinator: ObservableObject {
         // Tracker-Ansicht froren dann ein, obwohl der Ton weiterlief.
         RunLoop.main.add(timer, forMode: .common)
         vuUpdateTimer = timer
+        #endif
     }
     
     private func stopVUUpdates() {
+        vuUpdateTask?.cancel()
+        vuUpdateTask = nil
         vuUpdateTimer?.invalidate()
         vuUpdateTimer = nil
         self.visualizerState.vuLevels = [Float](repeating: 0, count: channelCount)
@@ -1035,6 +1123,7 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Echtzeit-sicher: UnsafeMutableAudioBufferListPointer ist ein reiner
     // Pointer-Wrapper, der aufgerufene Block ist ein bereits erzeugter Closure.
     // Keine Allokation, kein Lock, kein dynamischer Objective-C-Aufruf.
+    #if canImport(AVFoundation)
     nonisolated static func makeSourceNodeRenderBlock(
         _ block: @escaping ModuleRenderBlock,
         sleepTimer: SleepTimerSignal? = nil,
@@ -1065,16 +1154,22 @@ public final class ModPlayerCoordinator: ObservableObject {
             return noErr
         }
     }
+    #endif
 
-    
     // Spielt eine einzelne Instrument-Grundnote in einer EIGENEN, vom Song
     // voellig getrennten Audio-Engine ab. Dadurch klingt die Vorschau auch im
     // gestoppten Zustand (die Song-Engine existiert dann gar nicht) und kapert
     // niemals einen Song-Kanal (frueher wurde channels.last uebernommen und dabei
     // dessen Mute/Solo geloescht).
     public func previewInstrument(index: Int) {
+        guard let mod = activeMod else { return }
+        previewInstrument(mod: mod, index: index)
+    }
+
+    public func previewInstrument(mod: Mod, index: Int) {
         guard sleepTimer.allowsPlayback() else { return }
-        guard let mod = activeMod, index >= 1 && index < mod.instruments.count,
+        playbackError = nil
+        guard index >= 1 && index < mod.instruments.count,
               let inst = mod.instruments[index],
               let selection = mod.previewSelection(instrumentIndex: index) else { return }
         let smp = selection.sample
@@ -1120,12 +1215,17 @@ public final class ModPlayerCoordinator: ObservableObject {
         ch.sampleIndex = 0.0
         ch.playing = true
 
+        #if canImport(AVFoundation)
         let engine = AVAudioEngine()
         let mixer = engine.mainMixerNode
         var sampleRate = mixer.outputFormat(forBus: 0).sampleRate
         if sampleRate <= 0.0 || sampleRate.isNaN || sampleRate.isInfinite { sampleRate = 44100.0 }
         guard let stereoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else { return }
 
+        #else
+        let output = DesktopPCMOutput()
+        let sampleRate = output.sampleRate
+        #endif
         // sampleSpeed aus der Periode ableiten — dieselbe Formel wie in
         // performTick (Paula-Frequenz / Ausgabe-Rate). clockRate wie im Song-Pfad:
         // S3M nutzt den festen ST3-Takt, MOD den PAL/NTSC-Amiga-Takt.
@@ -1158,6 +1258,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         let voice = PreviewVoice(framesLeft: Int(sampleRate * 1.6))
         let renderBlock = RenderEngine.createPreviewRenderBlock(channel: ch, voice: voice, useInterpolation: self.useInterpolation)
 
+        #if canImport(AVFoundation)
         let sourceNode = AVAudioSourceNode(renderBlock: Self.makeSourceNodeRenderBlock(
             renderBlock, sleepTimer: sleepTimer.signal, sampleRate: sampleRate))
         engine.attach(sourceNode)
@@ -1171,6 +1272,13 @@ public final class ModPlayerCoordinator: ObservableObject {
         } catch {
             print("Fehler beim Starten der Preview-Engine: \(error)")
         }
+        #else
+        do {
+            try output.start(block: renderBlock, sleepTimer: sleepTimer.signal,
+                             volume: lastVolume, ledFilter: false, initiallyPaused: false)
+            linuxPreview = output
+        } catch { playbackError = error.localizedDescription }
+        #endif
     }
 
 
@@ -1178,9 +1286,14 @@ public final class ModPlayerCoordinator: ObservableObject {
     // beim Start/Stopp der Song-Wiedergabe und beim Songwechsel gerufen, damit nie
     // zwei Engines nebeneinander laufen.
     public func stopPreview() {
+        #if canImport(AVFoundation)
         if let engine = previewEngine { engine.stop() }
         previewEngine = nil
         previewSourceNode = nil
+        #else
+        linuxPreview?.stop()
+        linuxPreview = nil
+        #endif
     }
 
 
@@ -1192,6 +1305,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         destinationURL: URL,
         durationSeconds: Double = 180.0
     ) throws {
+        #if canImport(AVFoundation)
         let sampleRate = 44100.0
         guard let stereoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
             throw NSError(domain: "ModPlayer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Konnte Audio-Format nicht erstellen"])
@@ -1282,6 +1396,11 @@ public final class ModPlayerCoordinator: ObservableObject {
                 break
             }
         }
+        #else
+        try DesktopWAVWriter.export(mod: mod, to: destinationURL,
+            stereoSeparation: stereoSeparation, useInterpolation: useInterpolation,
+            palClock: palClock, seconds: durationSeconds)
+        #endif
     }
 
     nonisolated func renderProbe(
@@ -1370,6 +1489,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         let sampleRate = mod.format == .it
             ? Double(smp.itProperties?.c5Speed ?? smp.c2spd)
             : 22050.0
+        #if canImport(AVFoundation)
         let channelCount: AVAudioChannelCount = smp.rightPCM == nil ? 1 : 2
         guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channelCount) else {
             throw NSError(domain: "ModPlayer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Konnte Sample-Format nicht erstellen"])
@@ -1403,7 +1523,8 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
         
         try audioFile.write(from: pcmBuffer)
+        #else
+        try DesktopWAVWriter.export(sample: smp, sampleRate: sampleRate, to: destinationURL)
+        #endif
     }
 }
-
-#endif
