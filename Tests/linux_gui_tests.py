@@ -144,8 +144,13 @@ class DesktopTests(unittest.TestCase):
         self.assertIn("02.mod", self.get("Metadata"))
         self.wait_status("Playing")
         self.call("Set", PLAYER, "Volume", "<0.25>", interface=PROPS)
-        time.sleep(.1)
-        self.assertIn("0.25", self.get("Volume"))
+        # Der D-Bus-Aufruf bestätigt die Übergabe; die Engine meldet den Wert asynchron zurück.
+        deadline = time.monotonic()+5
+        volume = self.get("Volume")
+        while "0.25" not in volume and time.monotonic()<deadline:
+            time.sleep(.05)
+            volume = self.get("Volume")
+        self.assertIn("0.25", volume)
         self.call("Quit", interface="org.mpris.MediaPlayer2")
         self.assertEqual(self.process.wait(timeout=5), 0)
 
