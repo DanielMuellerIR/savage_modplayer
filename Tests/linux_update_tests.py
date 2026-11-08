@@ -82,7 +82,7 @@ class UpdateTests(unittest.TestCase):
                 self.updater.extract(self.archive([(name,b'',kind)]),Path(target))
         with tempfile.TemporaryDirectory() as target,self.assertRaises(update.UpdateError):
             self.updater.extract(self.archive([('savage-mod-player-linux/a',b'x',tarfile.REGTYPE)]*2),Path(target))
-        for url in ['http://github.com/file','https://example.com/file','https://user:password@github.com/file',
+        for url in ['http://github.com/file','https://example.com/file','https://untrusted@github.com/file',
                     'https://github.com:444/file','file:///tmp/file']:
             with self.subTest(url=url),self.assertRaises(update.UpdateError): update.require_https(url)
 
