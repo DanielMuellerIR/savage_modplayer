@@ -70,10 +70,15 @@ private final class DesktopEngine {
     private var lastPlaybackError: String?
     private var lastPattern = -1
     private var lastPosition = -1
+    private var lastVisualizerRevision: UUID?
+    private var visualizerWasAnimating = false
+    private var nextStateUpdate = ContinuousClock.now
     private var ticker: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
     private var exportModule: Mod?
     private var exportOptions = ChannelStemExportOptions()
+    private var noteCommandCount = 0
+    private var noteRevision = UUID()
     private var noteTask: Task<Void, Never>?
     private var notes = [[String: Any]]()
     private var noteWorker = NotePreviewWorker()
@@ -132,16 +137,24 @@ private final class DesktopEngine {
                 query = try JSONDecoder().decode(LibraryQuery.self, from: JSONSerialization.data(withJSONObject: data))
             }
             player.setVolume(Float(number("volume", default: 0.6)))
-            player.visualizerFrameRate = number("visualizerHz", default: 30)
+            player.visualizerFrameRate = number("visualizerHz", default: 60)
             applySound()
         } catch { writable = false; emit("error", ["message": "Gespeicherte Daten sind geschützt: \(error.localizedDescription)"]) }
-        emit("ready", ["preferences": preferences, "writable": writable, "protocolVersion": 1])
+        emit("ready", ["preferences": preferences, "writable": writable, "protocolVersion": 2])
         sendLibrary()
         ticker = Task { [weak self] in
+            let clock = ContinuousClock()
+            var deadline = clock.now
             while !Task.isCancelled {
-                self?.tick()
-                let interval = self?.player.visualizersVisible == false ? 0.2 : 1 / min(60, max(1, self?.player.visualizerFrameRate ?? 30))
-                do { try await Task.sleep(for: .seconds(interval)) } catch { return }
+                guard let self else { return }
+                tick()
+                let animated = player.isPlaying && !player.isPaused
+                    && (player.visualizersVisible || noteRainVisible)
+                let rate = min(60, max(1, player.visualizerFrameRate))
+                let interval = animated ? 1 / rate : 0.2
+                deadline += .seconds(interval)
+                if deadline < clock.now { deadline = clock.now + .seconds(interval) }
+                do { try await clock.sleep(until: deadline) } catch { return }
             }
         }
         if let folder = preferences["autoplayFolder"] as? String, !folder.isEmpty {
@@ -221,10 +234,12 @@ private final class DesktopEngine {
                     try TrackPlaybackSettingsStore(fileURL: directory.appendingPathComponent("track-settings.json")).save(next)
                     overrides = next; sendDetails()
                 } else { preferences[text] = v["setting"] }
-                player.visualizerFrameRate = number("visualizerHz", default: 30)
+                player.visualizerFrameRate = number("visualizerHz", default: 60)
                 applySound(); try savePreferences()
                 emit("preferences", preferences)
-            case "compact": player.visualizersVisible = !(v["enabled"] as? Bool ?? false)
+            case "compact":
+                player.visualizersVisible = !(v["enabled"] as? Bool ?? false)
+                if !player.visualizersVisible { emit("visualizer", ["vu": [], "waves": [], "master": []]) }
             case "indexCancel": indexTask?.cancel()
             case "indexRefresh": refreshIndex(generation: scanGeneration)
             case "favorite":
@@ -238,7 +253,9 @@ private final class DesktopEngine {
             case "query":
                 query = try JSONDecoder().decode(LibraryQuery.self, from: JSONSerialization.data(withJSONObject: v["query"] ?? [:]))
                 preferences["query"] = json(query); try savePreferences(); sendLibrary()
-            case "selection": selection = v["ids"] as? [String]; sendLibrary()
+            case "selection":
+                selection = v["ids"] as? [String]; sendLibrary()
+                if let first = selection?.first { try await load(id: first, play: true) }
             case "clear": cancelPendingLoads(); player.stop(); entries = []; selection = nil; resumeSource = nil; sendLibrary()
             case "demo":
                 player.sleepTimer.prepareForManualPlayback(); player.setMod(ModParser.generateDemoMod())
@@ -294,6 +311,7 @@ private final class DesktopEngine {
                     entries = result.entries; selection = nil
                     remember(result.entries)
                     sendLibrary()
+                    refreshIndex(generation: generation)
                     if !result.missing.isEmpty || !result.limited.isEmpty {
                         emit("notice", ["message": "\(result.missing.count) fehlende und \(result.limited.count) begrenzte Quellen."])
                     }
@@ -652,20 +670,31 @@ private final class DesktopEngine {
             }
         }
         let visualizer = player.visualizerState
-        emit("state", ["playing": player.isPlaying, "paused": player.isPaused,
-            "position": player.currentPosition, "row": player.currentRow, "bpm": player.bpm, "speed": player.speed,
-            "sound": ["palClock": player.palClock, "stereoSeparation": player.stereoSeparation,
-                      "useInterpolation": player.useInterpolation, "ledFilterActive": player.ledFilterActive],
-            "elapsed": visualizer.elapsedTime, "duration": visualizer.totalDuration,
-            "vu": visualizer.vuLevels, "waves": visualizer.channelWaveforms, "master": visualizer.masterSamples,
-            "muted": (0..<player.channelCount).map { player.isMuted(channelIndex: $0) },
-            "solo": (0..<player.channelCount).map { player.isSoloed(channelIndex: $0) },
-            "timerSeconds": player.sleepTimer.snapshot.remainingSeconds, "timerActive": player.sleepTimer.snapshot.isActive,
-            "timerPhase": String(describing: player.sleepTimer.snapshot.phase),
-            "markerSaving": markerWritesInFlight > 0,
-            "sectionActive": player.sectionLoopIsActive, "sectionPreparing": player.sectionLoopIsPreparing,
-            "sectionError": player.sectionLoopError?.localizedDescription ?? "",
-            "sectionProgress": player.sectionLoopProgress])
+        let animating = player.isPlaying && !player.isPaused
+        if player.visualizersVisible && (animating || visualizerWasAnimating || lastVisualizerRevision != moduleRevision) {
+            emit("visualizer", ["vu": visualizer.vuLevels,
+                "waves": visualizer.channelWaveforms, "master": visualizer.masterSamples])
+            lastVisualizerRevision = moduleRevision
+        }
+        visualizerWasAnimating = animating && player.visualizersVisible
+        // Tracker/Transport brauchen keine 60 vollständigen Zustandsmeldungen
+        // pro Sekunde. Die Bilddaten invalidieren nur ihre eigenen QML-Views.
+        if ContinuousClock.now >= nextStateUpdate {
+            nextStateUpdate = .now + .milliseconds(50)
+            emit("state", ["playing": player.isPlaying, "paused": player.isPaused,
+                "position": player.currentPosition, "row": player.currentRow, "bpm": player.bpm, "speed": player.speed,
+                "sound": ["palClock": player.palClock, "stereoSeparation": player.stereoSeparation,
+                          "useInterpolation": player.useInterpolation, "ledFilterActive": player.ledFilterActive],
+                "elapsed": visualizer.elapsedTime, "duration": visualizer.totalDuration,
+                "muted": (0..<player.channelCount).map { player.isMuted(channelIndex: $0) },
+                "solo": (0..<player.channelCount).map { player.isSoloed(channelIndex: $0) },
+                "timerSeconds": player.sleepTimer.snapshot.remainingSeconds, "timerActive": player.sleepTimer.snapshot.isActive,
+                "timerPhase": String(describing: player.sleepTimer.snapshot.phase),
+                "markerSaving": markerWritesInFlight > 0,
+                "sectionActive": player.sectionLoopIsActive, "sectionPreparing": player.sectionLoopIsPreparing,
+                "sectionError": player.sectionLoopError?.localizedDescription ?? "",
+                "sectionProgress": player.sectionLoopProgress])
+        }
         if let mod = player.activeMod, mod.patternTable.indices.contains(player.currentPosition) {
             let pattern = mod.patternTable[player.currentPosition]
             if pattern != lastPattern || player.currentPosition != lastPosition, mod.patterns.indices.contains(pattern) {
@@ -689,6 +718,13 @@ private final class DesktopEngine {
         if noteSource != source.id {
             noteTask?.cancel(); noteTask = nil; noteSource = source.id
             noteWorker = NotePreviewWorker(); preparedThrough = 0; notes = []; nextNoteSongEnd = nil
+            noteCommandCount = 0; noteRevision = UUID()
+        }
+        let commands = source.collectCommands()
+        if commands.count != noteCommandCount {
+            noteCommandCount = commands.count; noteRevision = UUID()
+            noteTask?.cancel(); noteTask = nil
+            preparedThrough = 0; notes = []; nextNoteSongEnd = nil
         }
         let end = (preferences["loop"] as? String) == "track" ? nil : nextNoteSongEnd
         let displayed = notes.compactMap { note -> [String: Any]? in
@@ -700,15 +736,15 @@ private final class DesktopEngine {
         }
         emit("notes", ["time": time, "notes": displayed, "overflow": source.exchange.hasOverflowed, "preparing": noteTask != nil])
         guard noteTask == nil, preparedThrough < time + 9 else { return }
-        let worker = noteWorker, id = source.id, commands = source.collectCommands()
+        let worker = noteWorker, id = source.id, revision = noteRevision
         noteTask = Task { [weak self] in
             do {
                 let snapshot = try await worker.preview(source: source, commands: commands, currentTime: time, horizon: 10)
-                guard let self, !Task.isCancelled, noteSource == id else { return }
+                guard let self, !Task.isCancelled, noteSource == id, noteRevision == revision else { return }
                 notes = snapshot.notes.map { ["key": $0.key, "channel": $0.channel, "start": $0.start, "end": $0.end, "isOpen": $0.isOpen] }
                 nextNoteSongEnd = snapshot.nextSongEnd
                 preparedThrough = snapshot.preparedThrough; noteTask = nil
-            } catch { self?.noteTask = nil }
+            } catch { if let self, noteRevision == revision { noteTask = nil } }
         }
     }
     private func songKeyRange(_ mod: Mod) -> [Int] {

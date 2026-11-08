@@ -6,14 +6,8 @@ import Foundation
 import Combine
 #endif
 
-// Hochfrequenter (30 Hz) Visualisierungs-Zustand — bewusst vom ModPlayerCoordinator
-// GETRENNT. Diese Werte (VU-Pegel, Kanal-/Master-Oszilloskope, Spielzeit) setzt der
-// VU-Timer 30×/s neu. Lägen sie als @Published direkt auf dem Coordinator, würde
-// JEDE Aktualisierung die GESAMTE `MainView.body` (2000+ Zeilen: Playlist, Tracker-
-// Grid, Header, Regler …) neu evaluieren — genau das war die Haupt-CPU-Last
-// (~80–100 % bei 32-Kanal-XM). Als eigenes ObservableObject beobachten nur die
-// Oszilloskop-/VU-/Zeit-Subviews diese Werte; `MainView` selbst rendert dann nur
-// noch im Zeilen-Takt (~8 Hz, aus `currentRow`/`currentPosition`) neu.
+// Scope-/VU-/Zeit-Views beobachten diesen Zustand getrennt vom Coordinator.
+// Bildaktualisierungen lösen dadurch keinen Neuaufbau der übrigen Oberfläche aus.
 @MainActor
 public final class VisualizerState: ObservableObject {
     // Geglättete VU-Pegel je Kanal (0..1). Länge = Kanalzahl des aktiven Moduls.
@@ -29,9 +23,8 @@ public final class VisualizerState: ObservableObject {
     public init() {}
 
     // Kanal-abhängige Puffer beim Songwechsel passend dimensionieren. Im
-    // sichtbarkeitsgesteuerten iOS-Modus bleiben die Wellenformen leer, bis der
-    // Visualizer wirklich im Viewport liegt; die Mac-App reicht weiterhin den
-    // Standardwert `true` durch.
+    // ausgeblendeten Visualizer bleiben die Wellenformen leer, bis die
+    // Oszilloskope wieder sichtbar werden.
     public func resize(channelCount: Int, includeWaveforms: Bool = true) {
         vuLevels = [Float](repeating: 0, count: channelCount)
         if includeWaveforms {
@@ -44,14 +37,14 @@ public final class VisualizerState: ObservableObject {
 
     // Die letzten Scope-Bilder sind reine Anzeige-Caches. Sobald kein
     // Oszilloskop sichtbar ist, duerfen sie ihren Speicher freigeben; Spielzeit,
-    // Gesamtdauer und die billigen VU-Pegel bleiben davon unberuehrt.
+    // Gesamtdauer und die billigen VU-Pegel werden separat verwaltet.
     public func releaseWaveformBuffers() {
         if !channelWaveforms.isEmpty { channelWaveforms = [] }
         if !masterSamples.isEmpty { masterSamples = [] }
     }
 
     // Signalisiert den beobachtenden Subviews eine Änderung, die nicht über die
-    // 30-Hz-Puffer läuft (z.B. Mute/Solo-Umschalten im gestoppten Zustand, wenn der
+    // Visualizer-Puffer läuft (z.B. Mute/Solo-Umschalten im gestoppten Zustand, wenn der
     // VU-Timer nicht tickt) — sonst aktualisierte sich die Streifen-Optik erst beim
     // nächsten Play.
     public func nudge() {

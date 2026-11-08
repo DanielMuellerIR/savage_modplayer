@@ -111,6 +111,9 @@ struct NoteRainView: View {
             model.start(coordinator: coordinator)
         }
         .onDisappear { model.stop() }
+        .onChange(of: coordinator.visualizerFrameRate) { _ in model.setFrameRate(coordinator: coordinator) }
+        .onChange(of: coordinator.isPlaying) { _ in model.setFrameRate(coordinator: coordinator) }
+        .onChange(of: coordinator.isPaused) { _ in model.setFrameRate(coordinator: coordinator) }
         .onChange(of: zoomToSong) { _ in configureWindow() }
         .onChange(of: keyRange) { _ in configureWindow() }
         .onChange(of: fullKeyRange) { _ in configureWindow() }

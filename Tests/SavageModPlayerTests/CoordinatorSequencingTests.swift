@@ -1139,6 +1139,9 @@ final class CoordinatorSequencingTests: XCTestCase {
     /// Voreinstellung heraus erreichbar.
     func testVisualizerIntervalIsClampedToASensibleRange() {
         let interval = ModPlayerCoordinator.visualizerUpdateInterval
+        XCTAssertEqual(interval(60, true), 1.0 / 60, accuracy: 0.00001)
+        XCTAssertEqual(interval(15, true), 1.0 / 15, accuracy: 0.00001)
+        XCTAssertEqual(interval(.nan, true), 1.0 / 60, accuracy: 0.00001)
         XCTAssertEqual(interval(30, true), 1.0 / 30.0, accuracy: 0.00001)
         XCTAssertEqual(interval(10, true), 0.1, accuracy: 0.00001)
         XCTAssertEqual(interval(0, true), 1.0, accuracy: 0.00001, "0 Hz wird auf 1 Hz geklemmt")

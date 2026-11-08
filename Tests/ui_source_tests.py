@@ -89,7 +89,7 @@ class VisualizerFrameRateSourceTests(unittest.TestCase):
     def test_settings_window_offers_the_documented_steps(self):
         source = (ROOT / "Sources/SavageModPlayerApp/UI/SettingsView.swift").read_text(encoding="utf-8")
         self.assertIn(self.KEY, source)
-        self.assertIn("frameRates: [Double] = [30, 24, 15, 10]", source)
+        self.assertIn("frameRates: [Double] = [60, 30, 24, 15, 10]", source)
 
     # Die Klemmung auf 1…60 Hz prueft nicht dieser Quelltest, sondern
     # `CoordinatorSequencingTests.testVisualizerIntervalIsClampedToASensibleRange`

@@ -8,7 +8,8 @@ manuell. Jede Installation braucht eine Bestätigung. Systemprofiling ist aus.
 
 1.6.32 ist die erste Sparkle-Version. Ältere Installationen müssen sie einmal
 manuell per DMG installieren, bevor spätere Updates aus der App möglich sind.
-CLI, Linux, Quick Look und iPhone enthalten keinen Updater.
+CLI, Quick Look und iPhone enthalten keinen Updater. Linux verwendet seit
+1.6.58 einen eigenen [signierten GitHub-Updater](linux-gui.md#github-updates-und-fertige-linux-pakete).
 
 ## Einmalige Einrichtung
 
@@ -42,7 +43,8 @@ Update-Archiv und Feed. Beide sind erforderlich.
    notarisierte DMG nutzen. Die innere Signierreihenfolge lautet Sparkle-Helfer,
    Sparkle-Framework, Quick-Look-Extension, App. Nur die Extension ist sandboxed.
 3. Nach Freigabe mit `bash publish_github.sh --release` veröffentlichen.
-   Das Release muss genau ein fertiges DMG enthalten. Bei bestehendem Release
+   Das Release muss genau ein fertiges DMG sowie das mit `linux/package-gui.sh`
+   erzeugte Linux-GUI-Archiv samt Prüfsumme enthalten. Bei bestehendem Release
    wird der Feed anschließend manuell über **Actions → Publish Sparkle appcast →
    Run workflow** mit dem Tag aktualisiert; ein Asset-Upload löst `published`
    nicht erneut aus.
@@ -52,6 +54,9 @@ Update-Archiv und Feed. Beide sind erforderlich.
    einem einzelnen Schritt verwendet wird. `generate_appcast` erzeugt genau
    ein Vollupdate ohne Deltas. Feed und Archiv werden anschließend unabhängig
    gegen den öffentlichen Schlüssel aus dem ausgelieferten Bundle geprüft.
+   Derselbe Lauf erzeugt und signiert das Linux-Paketmanifest unter
+   `linux/stable.json` und veröffentlicht dessen Signatur als `stable.json.sig`.
+   Paketversion, Schlüssel und Linux-x86_64-Programme werden vorher geprüft.
 5. Workflow und öffentliche Feed-URL prüfen. Auf einem Test-Mac muss eine ältere,
    bereits Sparkle-fähige, notarisiert installierte Fassung das Update finden,
    installieren und mit der neuen Version starten. Gültiges XML und erfolgreiche

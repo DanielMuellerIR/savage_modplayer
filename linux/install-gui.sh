@@ -29,60 +29,15 @@ if [ "$UNINSTALL" -eq 1 ]; then
     echo 'GUI-Starteinträge entfernt. Versionierte Programme und Sammlungsdaten bleiben erhalten.'
     exit 0
 fi
-for tool in python3 sha256sum; do
-    command -v "$tool" >/dev/null || { echo "FEHLER: $tool fehlt." >&2; exit 2; }
-done
+command -v python3 >/dev/null || { echo 'FEHLER: python3 fehlt.' >&2; exit 2; }
+WORK="$(mktemp -d)"
+trap 'rm -rf -- "$WORK"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 for file in savage-mod-player savage-desktop-engine; do
     [ -x "$BUILD_DIR/$file" ] || { echo "FEHLER: $BUILD_DIR/$file fehlt. Zuerst ./build.sh ausführen." >&2; exit 2; }
+    install -m755 "$BUILD_DIR/$file" "$WORK/"
 done
-# Versionierte Ziele erlauben einen atomaren Starterwechsel ohne laufende Dateien zu ersetzen.
-VERSION="$(cat VERSION)"
-DIGEST="$(sha256sum "$BUILD_DIR/savage-mod-player" "$BUILD_DIR/savage-desktop-engine" | sha256sum | cut -c1-16)"
-INSTALL_DIR="$PREFIX/lib/savage-mod-player/$VERSION-$DIGEST"
-mkdir -p "$PREFIX/bin" "$APP_DIR" "$ICON_DIR" "$MIME_DIR" "$INSTALL_DIR"
-for target in "$PREFIX/bin/savage-mod-player" "$APP_DIR/savage-mod-player.desktop" "$APP_DIR/savage-cli.desktop"; do
-    if [[ -L "$target" || ( -e "$target" && ! -f "$target" ) ]]; then echo "FEHLER: Ziel ist keine reguläre Datei: $target" >&2; exit 2; fi
-done
-install -m 0755 "$BUILD_DIR/savage-mod-player" "$INSTALL_DIR/savage-mod-player"
-install -m 0755 "$BUILD_DIR/savage-desktop-engine" "$INSTALL_DIR/savage-desktop-engine"
-install -m 0644 src/AppIcon.png "$ICON_DIR/savage-mod-player.png"
-install -m 0644 linux/savage-collection.xml "$MIME_DIR/savage-collection.xml"
-INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
-LAUNCHER="$(mktemp "$PREFIX/bin/.savage-mod-player.XXXXXX")"
-DESKTOP_TEMP="$(mktemp "$APP_DIR/.savage-mod-player.XXXXXX")"
-trap 'rm -f -- "$LAUNCHER" "$DESKTOP_TEMP"' EXIT
-# Shell-Quoting erfolgt getrennt vom Desktop-Exec-Quoting.
-python3 - "$INSTALL_DIR/savage-mod-player" > "$LAUNCHER" <<'PY'
-import shlex, sys
-print('#!/bin/sh')
-print('exec '+shlex.quote(sys.argv[1])+' "$@"')
-PY
-chmod 0755 "$LAUNCHER"
-mv -f -- "$LAUNCHER" "$PREFIX/bin/savage-mod-player"
-EXEC_PATH="$(cd "$PREFIX/bin" && pwd -P)/savage-mod-player"
-EXEC_PATH="${EXEC_PATH//\\/\\\\\\\\}"
-EXEC_PATH="${EXEC_PATH//\"/\\\\\"}"
-EXEC_PATH="${EXEC_PATH//\$/\\\\\$}"
-EXEC_PATH="${EXEC_PATH//\`/\\\\\`}"
-EXEC_PATH="${EXEC_PATH//%/%%}"
-EXEC_PATH="${EXEC_PATH//$'\n'/\\n}"
-EXEC_PATH="${EXEC_PATH//$'\r'/\\r}"
-EXEC_PATH="${EXEC_PATH//$'\t'/\\t}"
-while IFS= read -r line; do
-    if [[ "$line" == Exec=* ]]; then
-        printf '%s' 'Exec=/bin/sh -c "exec \\"\\$@\\"" savage-mod-player '
-        printf '"%s" %%F\n' "$EXEC_PATH"
-    else printf '%s\n' "$line"; fi
-done < linux/savage-mod-player.desktop > "$DESKTOP_TEMP"
-chmod 0644 "$DESKTOP_TEMP"
-mv -f -- "$DESKTOP_TEMP" "$APP_DIR/savage-mod-player.desktop"
-# Bestehende Dateizuordnungen mit der alten Desktop-ID sollen ebenfalls die GUI öffnen.
-if [ -f "$APP_DIR/savage-cli.desktop" ] && [ ! -e "$APP_DIR/savage-cli.desktop.before-gui" ]; then
-    cp -p -- "$APP_DIR/savage-cli.desktop" "$APP_DIR/savage-cli.desktop.before-gui"
-fi
-if [ -f "$APP_DIR/savage-cli.desktop.before-gui" ]; then
-    cat "$APP_DIR/savage-mod-player.desktop" > "$APP_DIR/savage-cli.desktop"
-    printf '\nNoDisplay=true\n' >> "$APP_DIR/savage-cli.desktop"
-fi
-refresh
-printf 'INSTALL OK: %s/bin/savage-mod-player (%s)\n' "$PREFIX" "$VERSION"
+install -m644 VERSION LICENSE linux/licenses/Swift-LICENSE.txt linux/update.py linux/install.py linux/savage-mod-player.desktop linux/savage-collection.xml src/AppIcon.png "$WORK/"
+install -m644 config/sparkle-public-key.txt "$WORK/update-public-key.txt"
+python3 linux/install.py "$WORK" --prefix "$PREFIX"

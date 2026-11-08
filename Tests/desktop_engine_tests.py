@@ -29,6 +29,7 @@ class Engine:
         self.selector.register(self.process.stdout, selectors.EVENT_READ)
         self.buffer = b""
         self.events = []
+        self.visualizer_count = 0
         self.library = {}
         self.wait("ready")
 
@@ -54,6 +55,8 @@ class Engine:
                     message = json.loads(line)
                 except ValueError as error:
                     raise AssertionError("Nicht-JSON auf dem Desktop-Protokoll: "+repr(line[:200])) from error
+                if message.get("event") == "visualizer":
+                    self.visualizer_count += 1
                 if message.get("event") == "libraryBegin":
                     self.library = dict(message, tracks=[], visible=[])
                 elif message.get("event") == "libraryTracks":
@@ -66,7 +69,7 @@ class Engine:
                     continue
                 if message.get("event") == event and predicate(message):
                     return message
-                if message.get("event") != "state":
+                if message.get("event") not in ("state", "visualizer"):
                     self.events.append(message)
             assert len(self.buffer) < 32 * 1024 * 1024
         summary = [(v.get("event"), v.get("message", "")) for v in self.events if v.get("event") != "pattern"]
@@ -102,6 +105,64 @@ class DesktopEngineTests(unittest.TestCase):
         self.assertEqual(module["title"], "MPRIS silent 01")
         library = self.engine.wait("library", lambda v: bool(v.get("currentID")))
         return library["currentID"]
+
+    def test_visualizer_rate_live_changes_hidden_pause_and_restart(self):
+        self.engine.send("option", text="loop", setting="track")
+        self.open()
+        self.engine.wait("state", lambda v: v["playing"])
+
+        def rate():
+            self.engine.wait("visualizer", lambda v: bool(v["waves"]))
+            start = time.monotonic()
+            for _ in range(12):
+                frame = self.engine.wait("visualizer", lambda v: bool(v["waves"]))
+                self.assertEqual(len(frame["waves"]), 4)
+                self.assertNotIn("elapsed", frame)
+            return 12 / (time.monotonic() - start)
+
+        self.assertGreater(rate(), 40, "Vorgabe muss 60 statt 30 FPS sein")
+        self.engine.send("option", text="visualizerHz", setting=15)
+        self.engine.wait("preferences", lambda v: v.get("visualizerHz") == 15)
+        self.assertTrue(10 < rate() < 22, "Sparmodus muss während der Wiedergabe wirken")
+        self.engine.send("compact", enabled=True)
+        self.engine.wait("visualizer", lambda v: v.get("waves") == [])
+        # Die Bestätigung liegt nach allen vorherigen Bilddaten im selben Kanal.
+        count = self.engine.visualizer_count
+        for _ in range(3):
+            self.engine.wait("state", lambda v: v["playing"])
+        self.assertEqual(self.engine.visualizer_count, count)
+        self.engine.send("compact", enabled=False)
+        self.engine.wait("visualizer", lambda v: bool(v["waves"]))
+        self.engine.send("pause")
+        self.engine.wait("state", lambda v: v["paused"])
+        self.engine.wait("state", lambda v: v["paused"])
+        count = self.engine.visualizer_count
+        for _ in range(3):
+            self.engine.wait("state", lambda v: v["paused"])
+        self.assertEqual(self.engine.visualizer_count, count)
+        self.engine.close()
+        other = Engine(self.root, self.engine.data)
+        self.addCleanup(other.close)
+        other.send("open", paths=[str(self.track)])
+        other.wait("module")
+        other.wait("state", lambda v: v["playing"])
+        self.assertEqual(json.loads(other.data.joinpath("preferences.json").read_text())["visualizerHz"], 15)
+
+    def test_selection_starts_first_result_and_playlist_reindexes_after_restart(self):
+        source = self.open()
+        self.engine.send("pause")
+        self.engine.wait("state", lambda v: v["paused"])
+        self.engine.send("selection", ids=[source])
+        self.engine.wait("state", lambda v: v["playing"] and not v["paused"])
+        self.engine.send("playlistSave", text="Reindex fixture")
+        library = self.engine.wait("library", lambda v: bool(v["playlists"]))
+        playlist = library["playlists"][0]["id"]
+        self.engine.close()
+        other = Engine(self.root, self.engine.data)
+        self.addCleanup(other.close)
+        other.send("playlistOpen", text=playlist)
+        library = other.wait("library", lambda v: bool(v["tracks"]) and bool(v["tracks"][0].get("metadata")))
+        self.assertTrue(library["tracks"][0]["metadata"])
 
     def test_real_transport_and_read_only_inspection(self):
         self.assertIsNone(self.engine.process.poll())

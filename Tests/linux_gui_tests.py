@@ -1,6 +1,7 @@
 """Linux-GUI: Installation, Dateistart und MPRIS ohne Desktop-Fokus."""
 from pathlib import Path
 import configparser
+import json
 import os
 import re
 import shlex
@@ -27,10 +28,21 @@ class InstallationTests(unittest.TestCase):
             build = root / "build"
             build.mkdir()
             output = root / "arguments"
+            # Echter ELF-Stub: prüft Startargumente über die Desktopdatei,
+            # während der Installer seine Linux-/Startgrenzen beibehält.
+            stub = root / "stub.c"
+            stub.write_text(r'''#include <stdio.h>
+#include <string.h>
+int main(int argc,char **argv) {
+ if(argc==2 && !strcmp(argv[1],"--version")) { puts("Savage Mod Player VERSION"); return 0; }
+ if(argc==1) { puts("{\"event\":\"ready\"}"); return 0; }
+ for(int i=1;i+1<argc;i++) if(!strcmp(argv[i],"--screenshot")) { FILE *f=fopen(argv[i+1],"wb"); if(f)fclose(f); return 0; }
+ FILE *f=fopen(OUTPUT,"w"); if(!f)return 2;
+ for(int i=1;i<argc;i++)fprintf(f,"%s\n",argv[i]); fclose(f); return 0;
+}
+'''.replace('VERSION', (ROOT / 'VERSION').read_text().strip()).replace('OUTPUT', json.dumps(str(output))))
             for name in ("savage-mod-player", "savage-desktop-engine"):
-                binary = build / name
-                binary.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > '+shlex.quote(str(output))+'\n')
-                binary.chmod(0o755)
+                subprocess.run(["cc", str(stub), "-o", str(build / name)], check=True, capture_output=True)
             appdir = prefix / "share/applications"
             appdir.mkdir(parents=True)
             original = "[Desktop Entry]\nType=Application\nName=CLI\nExec=savage-desktop\nTerminal=true\n"

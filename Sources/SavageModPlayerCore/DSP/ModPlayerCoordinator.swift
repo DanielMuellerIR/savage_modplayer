@@ -91,65 +91,47 @@ public final class ModPlayerCoordinator: ObservableObject {
     // Die UI leitet daraus Grid-Spalten, VU-Meter und Scopes ab.
     @Published public var channelCount = 4
 
-    // Hochfrequenter (30 Hz) Visualisierungs-Zustand (VU, Oszilloskope, Spielzeit)
-    // in EIGENEM ObservableObject — damit die 30-Hz-Updates NICHT die ganze
-    // MainView.body neu evaluieren, sondern nur die beobachtenden Scope-/VU-/Zeit-
-    // Subviews. War die Haupt-CPU-Last (2026-07-09). `let`: stabile Referenz.
+    // Eigener Zustand: Bildaktualisierungen invalidieren nur die Scope-/VU-/Zeit-Views.
     public let visualizerState = VisualizerState()
     @Published public private(set) var notePreviewSource: NotePreviewSource?
 
-    // Sind die schweren Visualisierungen (Kanal-Oszis + Master-Oszi) gerade
-    // sichtbar? Setzt die View im responsiven Kompaktmodus: bei kleinem Fenster
-    // werden Grid/Oszis aus der Hierarchie entfernt. Der EIGENTLICHE CPU-Hebel ist
-    // dann NICHT das Weglassen der Views (SwiftUI-Rendering ist billig), sondern
-    // das Herunterschalten der Update-FREQUENZ: der 30-Hz-Tick schiebt sonst 30×/s
-    // @Published-Werte durch SwiftUI — DAS war die Hauptlast (gemessen ~9 % von
-    // ~15 %; Audio-DSP nur ~3-4 %). Ohne sichtbare Oszis reicht ~5 Hz für Uhr/VU.
+    // Im Kompaktmodus bleiben nur Transport und Uhr aktiv. Der Audiothread
+    // übernimmt die Änderung an der nächsten Blockgrenze.
     public var visualizersVisible = true {
         didSet {
+            visualizationExchange.isEnabled = visualizersVisible
             if !visualizersVisible {
                 visualizerState.releaseWaveformBuffers()
+                visualizerState.vuLevels = []
             }
-            // Läuft der VU-Timer, bei einem Sichtbarkeitswechsel mit der passenden
-            // Frequenz neu aufsetzen (30 Hz sichtbar ↔ 5 Hz kompakt).
             guard oldValue != visualizersVisible, hasVUUpdates else { return }
             startVUUpdates()
         }
     }
 
-    // Bildrate der Visualisierungen im Vollmodus, in Hz. 30 ist die Vorgabe und
-    // damit die volle Optik; wer lieber CPU spart, stellt sie herunter.
-    //
-    // Der Hebel ist gross: gemessen am 2026-08-23 auf einem Mac mit M5-Chip, mit demselben
-    // 4-Kanal-MOD, gleicher Fenstergroesse und stummer Ausgabe (verbrauchte
-    // CPU-Zeit ueber je 30 s) — 30 Hz: 22 %, 24 Hz: 20 %, 15 Hz: 18 %,
-    // 10 Hz: 14 % eines Kerns. Nicht der Audio-DSP, sondern das Durchreichen
-    // der Werte durch SwiftUI macht den Unterschied.
-    //
-    // Geklemmt auf 1…60 Hz: 0 wuerde einen Timer mit Intervall unendlich
-    // ergeben, ein sehr grosser Wert einen Timer, der den MainActor flutet.
-    @Published public var visualizerFrameRate: Double = 30 {
+    @Published public var visualizerFrameRate: Double = {
+        #if os(iOS)
+        return 30
+        #else
+        return 60
+        #endif
+    }() {
         didSet {
             guard oldValue != visualizerFrameRate, hasVUUpdates else { return }
             startVUUpdates()
         }
     }
 
-    // Update-Frequenz des VU-/Oszi-/Zeit-Ticks: im Vollmodus die eingestellte
-    // Bildrate, im Kompaktmodus fest ~5 Hz (kein Oszi sichtbar) — das senkt die
-    // SwiftUI-Last stark und ist dort auch nicht sichtbar.
     private var vuUpdateInterval: TimeInterval {
         Self.visualizerUpdateInterval(
             frameRate: visualizerFrameRate, visualizersVisible: visualizersVisible)
     }
 
-    // Als eigene Funktion, damit sich die Klemmung ohne laufende Audio-Engine
-    // pruefen laesst.
     nonisolated static func visualizerUpdateInterval(
         frameRate: Double, visualizersVisible: Bool
     ) -> TimeInterval {
         guard visualizersVisible else { return 0.2 }
-        return 1.0 / min(60.0, max(1.0, frameRate))
+        return 1.0 / min(60.0, max(1.0, frameRate.isFinite ? frameRate : 60))
     }
 
     // New parameters for user controls
@@ -422,6 +404,11 @@ public final class ModPlayerCoordinator: ObservableObject {
         }
         #else
         let output = DesktopPCMOutput()
+        output.onFailure = { [weak self] message in
+            guard let self else { return }
+            self.playbackError = message
+            self.stop()
+        }
         linuxOutput = output
         let sampleRate = output.sampleRate
         #endif
@@ -832,7 +819,7 @@ public final class ModPlayerCoordinator: ObservableObject {
 
     // Fuer einen zweiten relativen Sprung im selben Audiopuffer gilt bereits
     // das erste Seek-Ziel; danach der letzte vollstaendig veroeffentlichte
-    // Renderstand. Die 30-/5-Hz-UI-Spiegel sind dafuer zu alt.
+    // Renderstand. Die UI-Spiegel sind dafuer zu alt.
     func seekTransport(for state: RealtimePlaybackState)
         -> RealtimePlaybackState.TransportSnapshot {
         if let sequence = pendingSeekSequence,
@@ -958,23 +945,17 @@ public final class ModPlayerCoordinator: ObservableObject {
         // Steuerungsbefehle auch bei geschlossenem Notenfenster behalten. Ein
         // spaeter geoeffneter Visualizer kann die laufende Wiedergabe nachbilden.
         notePreviewSource?.collectCommands()
-        // Hochfrequente Puffer landen im getrennten visualizerState (nicht mehr auf
-        // self), damit dieser 30-Hz-Tick nur die Scope-/VU-/Zeit-Subviews neu rendert.
         let vis = self.visualizerState
-        let count = min(channelCount, RenderEngine.maxChannels)
-        var rawPeaks = [Float](repeating: 0, count: count)
-        var newWaves = visualizersVisible
-            ? (0..<count).map { _ in [Float](repeating: 0.0, count: 32) }
-            : []
-        var newMasterOsc = visualizersVisible
-            ? [Float](repeating: 0.0, count: 128)
-            : []
-        let hasFreshSnapshot = visualizationExchange.withLatestSnapshot(channelCount: count) {
-            peaks, waves, master in
-            for channel in 0..<count {
-                rawPeaks[channel] = peaks[channel]
-            }
-            if visualizersVisible {
+        if visualizersVisible {
+            let count = min(channelCount, RenderEngine.maxChannels)
+            var rawPeaks = [Float](repeating: 0, count: count)
+            var newWaves = (0..<count).map { _ in [Float](repeating: 0.0, count: 32) }
+            var newMasterOsc = [Float](repeating: 0.0, count: 128)
+            let hasFreshSnapshot = visualizationExchange.withLatestSnapshot(channelCount: count) {
+                peaks, waves, master in
+                for channel in 0..<count {
+                    rawPeaks[channel] = peaks[channel]
+                }
                 for channel in 0..<count {
                     for sample in 0..<32 {
                         newWaves[channel][sample] = waves[channel * 32 + sample]
@@ -984,32 +965,26 @@ public final class ModPlayerCoordinator: ObservableObject {
                     newMasterOsc[sample] = master[sample]
                 }
             }
-        }
-        // Wellenformen duerfen bis zum naechsten Audioblock stehenbleiben. Ein
-        // Peak ist dagegen ein Ereignis dieses Blocks: Den gleichen Snapshot
-        // mehrfach als neue Attacke anzuwenden verfälscht den VU-Ausschlag.
-        if !hasFreshSnapshot {
-            rawPeaks = [Float](repeating: 0, count: count)
-        }
+            // Wellenformen duerfen bis zum naechsten Audioblock stehenbleiben. Ein
+            // Peak ist dagegen ein Ereignis dieses Blocks: Den gleichen Snapshot
+            // mehrfach als neue Attacke anzuwenden verfälscht den VU-Ausschlag.
+            if !hasFreshSnapshot {
+                rawPeaks = [Float](repeating: 0, count: count)
+            }
 
-        var newLevels = [Float](repeating: 0, count: count)
-        for i in 0..<count {
-            let rawPeak = rawPeaks[i]
-            let prev = i < vis.vuLevels.count ? vis.vuLevels[i] : 0
-            let attack: Float = 0.35
-            let release: Float = 0.08
+            var newLevels = [Float](repeating: 0, count: count)
+            // Gleiche zeitliche Glättung bei 15 und 60 FPS wie zuvor bei 30.
+            let attack = Float(1 - pow(1 - 0.35, vuUpdateInterval * 30))
+            let release = Float(1 - pow(1 - 0.08, vuUpdateInterval * 30))
+            for i in 0..<count {
+                let rawPeak = rawPeaks[i]
+                let prev = i < vis.vuLevels.count ? vis.vuLevels[i] : 0
 
-            let factor = rawPeak > prev ? attack : release
-            newLevels[i] = prev + (rawPeak - prev) * factor
-        }
-        vis.vuLevels = newLevels
+                let factor = rawPeak > prev ? attack : release
+                newLevels[i] = prev + (rawPeak - prev) * factor
+            }
+            vis.vuLevels = newLevels
 
-        // Level-2-Sparen (Kompaktmodus): Die teure Wellen-/Master-Oszi-Berechnung
-        // (count×32 + 128 Kopien pro Tick, je eine Allokation) NUR ausführen, wenn
-        // die Oszilloskope überhaupt sichtbar sind. Bei kleinem Fenster sind sie aus
-        // der View-Hierarchie entfernt — dann sparen wir diesen CPU-Posten komplett.
-        // VU-Pegel (oben, billig), Spielzeit und Songende laufen weiter.
-        if visualizersVisible {
             vis.channelWaveforms = newWaves
             vis.masterSamples = newMasterOsc
         }
@@ -1081,15 +1056,19 @@ public final class ModPlayerCoordinator: ObservableObject {
         vuUpdateTask?.cancel()
         let interval = vuUpdateInterval
         vuUpdateTask = Task { [weak self] in
+            let clock = ContinuousClock()
+            var deadline = clock.now
             while !Task.isCancelled {
                 self?.updateVULevelsTick()
-                do { try await Task.sleep(for: .seconds(interval)) } catch { return }
+                deadline += .seconds(interval)
+                if deadline < clock.now { deadline = clock.now + .seconds(interval) }
+                do { try await clock.sleep(until: deadline) } catch { return }
             }
         }
         #else
         // Evtl. laufenden Timer ersetzen (z. B. bei Frequenzwechsel Full↔Compact).
         vuUpdateTimer?.invalidate()
-        // 30 Hz für flüssige Oszilloskope; im Kompaktmodus 5 Hz (vuUpdateInterval).
+        // Sichtbar gilt die gewählte Bildrate, kompakt nur der 5-Hz-Transporttakt.
         // Jeder Tick schiebt @Published-Werte durch SwiftUI — die Frequenz ist der
         // dominante UI-CPU-Faktor (nicht das Zeichnen), darum im Compact gedrosselt.
         let timer = Timer(timeInterval: vuUpdateInterval, repeats: true) { [weak self] _ in
@@ -1224,6 +1203,10 @@ public final class ModPlayerCoordinator: ObservableObject {
 
         #else
         let output = DesktopPCMOutput()
+        output.onFailure = { [weak self] message in
+            self?.playbackError = message
+            self?.stopPreview()
+        }
         let sampleRate = output.sampleRate
         #endif
         // sampleSpeed aus der Periode ableiten — dieselbe Formel wie in

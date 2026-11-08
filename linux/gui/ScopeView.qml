@@ -53,6 +53,7 @@ Canvas {
             c.stroke();
         }
     }
-    onSamplesChanged: requestPaint()
+    onSamplesChanged: if (visible) requestPaint()
+    onVisibleChanged: if (visible) requestPaint()
     onWidthChanged: requestPaint()
 }

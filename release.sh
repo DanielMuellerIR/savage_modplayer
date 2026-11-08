@@ -23,6 +23,17 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+if [ "$(uname -s)" = Linux ]; then
+    if [ "$#" -gt 0 ]; then
+        if [ "$#" -eq 1 ] && { [ "$1" = -h ] || [ "$1" = --help ]; }; then
+            echo 'Usage: ./release.sh (build and package Linux GUI)'; exit 0
+        fi
+        echo 'Linux-Release kennt keine Optionen.' >&2; exit 2
+    fi
+    bash linux/build-gui.sh
+    exec bash linux/package-gui.sh
+fi
+
 usage() {
     cat <<EOF
 Usage: ./release.sh [--no-finder-layout]

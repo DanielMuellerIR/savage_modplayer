@@ -27,6 +27,7 @@
 #include <memory>
 #include "VideoRenderer.h"
 #include "MediaControls.h"
+#include "UpdateController.h"
 
 static volatile std::sig_atomic_t terminateRequested = 0;
 static void requestTermination(int) { terminateRequested = 1; }
@@ -34,12 +35,14 @@ static void requestTermination(int) { terminateRequested = 1; }
 class DesktopBridge final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QVariantMap state MEMBER state NOTIFY stateChanged)
+    Q_PROPERTY(QVariantMap visualizer MEMBER visualizer NOTIFY visualizerChanged)
     Q_PROPERTY(QVariantMap module MEMBER module NOTIFY moduleChanged)
     Q_PROPERTY(QVariantMap library MEMBER library NOTIFY libraryChanged)
     Q_PROPERTY(QVariantMap preferences MEMBER preferences NOTIFY preferencesChanged)
     Q_PROPERTY(QVariantMap pattern MEMBER pattern NOTIFY patternChanged)
     Q_PROPERTY(QVariantMap notes MEMBER notes NOTIFY notesChanged)
 public:
+    QVariantMap visualizer;
     QVariantMap state, module, library, preferences, pattern, notes;
     QVariantMap pendingLibrary;
     QVariantList pendingTracks, pendingVisible;
@@ -60,7 +63,8 @@ public:
                 if (!document.isObject()) continue;
                 auto values = document.object().toVariantMap();
                 auto event = values.value("event").toString();
-                if (event == "state") { state = values; emit stateChanged(); }
+                if (event == "state") { if (state != values) { state = values; emit stateChanged(); } }
+                else if (event == "visualizer") { visualizer = values; emit visualizerChanged(); continue; }
                 else if (event == "module") { module = values; emit moduleChanged(); }
                 else if (event == "libraryBegin") { pendingLibrary = values; pendingTracks.clear(); pendingVisible.clear(); }
                 else if (event == "libraryTracks") pendingTracks += values.value("tracks").toList();
@@ -131,6 +135,7 @@ public:
         if (!process.waitForFinished(3000)) { process.terminate(); if (!process.waitForFinished(1000)) { process.kill(); process.waitForFinished(); } }
     }
 signals:
+    void visualizerChanged();
     void stateChanged(); void moduleChanged(); void libraryChanged(); void preferencesChanged();
     void patternChanged(); void notesChanged();
     void message(const QString &event, const QVariantMap &values);
@@ -184,6 +189,7 @@ int main(int argc, char **argv) {
     bridge.captureStopped = parser.isSet("screenshot") && parser.value("review-view") != "signals";
     MediaControls media([&bridge](const QString &command, const QVariantMap &values) { bridge.command(command, values); });
     QObject::connect(&bridge, &DesktopBridge::message, &media, &MediaControls::update);
+    UpdateController updates(dataPath);
     QQmlApplicationEngine interface;
     QStringList interfaceErrors;
     QObject::connect(&interface,&QQmlEngine::warnings,&interface,[&](const QList<QQmlError> &errors) {
@@ -191,6 +197,7 @@ int main(int argc, char **argv) {
     });
     interface.rootContext()->setContextProperty("desktop", &bridge);
     interface.rootContext()->setContextProperty("desktopVersion", app.applicationVersion());
+    interface.rootContext()->setContextProperty("desktopUpdates", &updates);
     interface.load(QUrl("qrc:/Main.qml"));
     if (interface.rootObjects().isEmpty()) {
         if (!parser.isSet("screenshot")) QMessageBox::critical(nullptr,"Savage Mod Player",

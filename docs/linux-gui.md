@@ -38,12 +38,65 @@ funktionieren. `./install.sh --uninstall` entfernt GUI-Starteinträge und stellt
 alten CLI-Eintrag wieder her. Sammlungsdaten und versionierte Programme bleiben
 erhalten.
 
+## GitHub-Updates und fertige Linux-Pakete
+
+Ab 1.6.58 enthält jedes Release `savage-mod-player-<Version>-linux-x86_64.tar.gz`
+und die zugehörige SHA-256-Datei. Dieses Archiv enthält die Qt-App, die statische
+Swift-Engine und den Installer; es benötigt weder Docker noch Swift zum Installieren.
+Das CLI-AppImage ist eine gesonderte Ausgabe und besitzt keinen GUI-Updater.
+
+Auf Ubuntu 24.04 werden folgende Laufzeitpakete benötigt:
+
+```bash
+sudo apt install python3 openssl libasound2t64 libdbus-1-3 libqt6widgets6t64 \
+  qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts \
+  qml6-module-qtquick-window qml6-module-qtmultimedia \
+  qml6-module-qtqml-workerscript qml6-module-qtquick-templates
+```
+
+Archiv und Prüfsumme von derselben GitHub-Release-Seite herunterladen, die
+Prüfsumme mit `sha256sum -c <Archivname>.sha256` prüfen und das Archiv entpacken.
+Im entpackten Verzeichnis `savage-mod-player-linux` dann `bash install.sh`
+ausführen. `--prefix <Pfad>` wählt optional eine andere Benutzerinstallation.
+Vorhandene Sammlungen und die bisherige Version bleiben erhalten. Die
+Startfähigkeitsprüfung bricht bei fehlenden Bibliotheken ab, bevor sie die
+aktive Version ersetzt. Bereits laufende Player können ihre Wiedergabe fortsetzen.
+
+Der Player prüft beim Start und während des Betriebs höchstens einmal täglich
+auf Updates. **Einstellungen → Automatisch nach Updates suchen** schaltet die
+Hintergrundprüfung aus. **Hilfe → Nach Updates suchen…** und derselbe Button in
+den Einstellungen prüfen manuell. Neue Versionen werden angezeigt und erst nach
+Bestätigung geladen und installiert. Die neue Version gilt ab dem nächsten
+Start. Der Player startet nach der Installation nicht selbst neu.
+
+Der Feed liegt unter
+`https://danielmuellerir.github.io/savage_modplayer/linux/stable.json`.
+Ed25519-Signaturen verwenden denselben öffentlichen Schlüssel wie der Mac-
+Updater. OpenSSL 3 prüft die Signatur der unveränderten Manifestbytes. Das Paket
+muss zu Produkt, Architektur und höherer Version passen und die signierte Größe
+sowie SHA-256-Prüfsumme erfüllen. Umleitungen bleiben auf GitHub-HTTPS-Endpunkte
+beschränkt. Unsichere Archivpfade, Links und spezielle Dateien werden abgewiesen.
+Der bereits installierte Installer prüft und aktiviert das Paket; parallele
+Installationen, Abbruch und Fehler erhalten die alte aktive Version.
+
+**Einmaliger Umstieg:** 1.6.57 und ältere Linux-Versionen besitzen diesen Updater
+noch nicht. Die erste Installation von 1.6.58 erfolgt deshalb manuell aus dem
+Archiv oder mit dem vorhandenen Quellbau. Anschließend sind Updates aus dem
+Player möglich. Nicht aktive Quell-/Testbauten dürfen keine bestehende
+Benutzerinstallation aktualisieren. Automatische Prüfungen kontaktieren GitHub
+Pages, bestätigte Downloads GitHub Releases. Musik- und Bibliotheksdaten werden
+nicht übertragen.
+
 ## Bedienung und Funktionsumfang
 
 Die Hauptansicht folgt dem macOS-Fenster bei gleichem Inhalt und gleicher Größe:
 260-Pixel-Sidebar, Kopfzeile, Positionsleiste, Kanalpegel/-oszilloskope, Tracker,
 Master-Oszilloskop und Transport. Schmale Fenster verwenden die Kompaktansicht.
-Hell/Dunkel, Schriftzoom und Sidebarbreite sind einstellbar.
+Hell/Dunkel, Schriftzoom und Sidebarbreite sind einstellbar. Visualizer laufen
+standardmäßig mit 60 Bildern/s; die Einstellungen bieten 15 Bilder/s als
+Sparmodus. Ein kompaktes, ausgeblendetes oder minimiertes Hauptfenster stoppt
+die Scope-/Pegelerfassung und die Übertragung der Visualizer-Bilder. Transport
+und Spielzeit bleiben aktiv. Der separate Notenregen folgt der gewählten Bildrate.
 
 Dateien, rekursive Ordner und Archive lassen sich öffnen oder hineinziehen.
 Weitere Aufrufe liefern ihre Dateien an die laufende Instanz. Die Bibliothek
@@ -75,7 +128,7 @@ Position, Seek, Lautstärke, Wiederholung und Zufallsfolge.
 | Ausgabe | ALSA statt AVAudioEngine. Der externe 3,2-kHz-LED-Ausgabefilter wird als zweipoliger Tiefpass berechnet; Apples interne EQ-Implementierung steht nicht zur Verfügung. Der gemeinsame Tracker-DSP bleibt identisch. |
 | Sammlungssync | CloudKit benötigt Apples Framework, Accountzugriff und signierte Apple-App. Unter Linux steht der geprüfte Dateiaustausch zur Verfügung; es gibt keine CloudKit-Nachbildung. |
 | Dateivorschau | Quick Look und Finder-Integration sind macOS-Dienste. Linux registriert Dateitypen und öffnet sie in der GUI; eine Dateimanager-Vorschauextension ist nicht enthalten. |
-| Updates | Sparkle ist macOS-spezifisch. Linux wird durch erneutes Bauen/Installieren aktualisiert; es besteht kein signierter Linux-Updatefeed. |
+| Updates | Linux verwendet einen signierten GitHub-Feed und atomare Benutzerinstallationen; macOS behält Sparkle. Download und Installation benötigen auf beiden Plattformen eine Bestätigung. |
 | Video | FFmpeg übernimmt H.264/Float32-MOV statt AVFoundation. Audio und Video verwenden dieselbe ganzzahlige 48-kHz-Sampleuhr; das letzte Bild endet am Audioende. |
 
 Die GUI wird gegen synthetische Module ohne mitgelieferte Musik geprüft.

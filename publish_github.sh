@@ -146,7 +146,17 @@ if [[ "$DO_RELEASE" == "1" ]]; then
 fi
 
 if [[ "$DO_RELEASE" == "1" ]]; then
-    ASSETS=("$DMG_PATH" "savage-mod-player.html")
+    LINUX_ARCHIVE="build/savage-mod-player-${VERSION}-linux-x86_64.tar.gz"
+    [[ -f "$LINUX_ARCHIVE" && -f "$LINUX_ARCHIVE.sha256" ]] || {
+        echo "ABBRUCH: Linux-GUI-Paket und Prüfsumme fehlen. Zuerst linux/package-gui.sh ausführen." >&2; exit 1;
+    }
+    (cd build && shasum -a 256 -c "$(basename "$LINUX_ARCHIVE").sha256")
+    MANIFEST_CHECK="$(mktemp)"
+    if ! python3 scripts/linux-update-manifest.py "$LINUX_ARCHIVE" "$MANIFEST_CHECK"; then
+        rm -f "$MANIFEST_CHECK"; exit 1
+    fi
+    rm -f "$MANIFEST_CHECK"
+    ASSETS=("$DMG_PATH" "savage-mod-player.html" "$LINUX_ARCHIVE" "$LINUX_ARCHIVE.sha256")
     APPIMAGE="build/Savage-Mod-Player-${VERSION}-x86_64.AppImage"
     if [[ -f "$APPIMAGE" ]]; then
         [[ -f "$APPIMAGE.sha256" ]] || { echo "AppImage-Prüfsumme fehlt." >&2; exit 1; }

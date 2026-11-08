@@ -65,10 +65,10 @@ struct MainView: View {
     // im Einstellungs-Fenster (SettingsView, gleicher Schluessel).
     @AppStorage("savage.autoplayFolder") var autoplayFolderPath: String = ""
 
-    // Bildrate der Visualisierungen im Vollmodus (Hz). Vorgabe 30 = volle
+    // Bildrate der Visualisierungen im Vollmodus (Hz). Vorgabe 60 = volle
     // Optik; heruntergestellt spart sie spuerbar CPU. Gleicher Schluessel wie
     // im Einstellungs-Fenster.
-    @AppStorage("savage.visualizerHz") var visualizerHz: Double = 30
+    @AppStorage("savage.visualizerHz") var visualizerHz: Double = 60
 
     // Breite der Playlist-Sidebar (ziehbar per Trenn-Handle). Persistiert, damit
     // lange Dateinamen dauerhaft sichtbar bleiben (LIDA-XM-Problem: 260 pt fix war
@@ -191,7 +191,7 @@ struct MainView: View {
 
     // Responsiver Kompaktmodus (Punkt 10): bei kleinem Hauptbereich werden die
     // schweren Visualisierungen (Grid, Kanal-/Master-Oszis, Marker-Map) aus der
-    // View-Hierarchie ENTFERNT (nicht .hidden()) — das hängt ihre 30-Hz-Observer
+    // View-Hierarchie ENTFERNT (nicht .hidden()) — das hängt ihre Visualizer-Observer
     // ab und senkt die CPU-Last spürbar. Rein automatisch über die Fenstergröße.
     @State var isCompact = false
 
@@ -369,7 +369,7 @@ struct MainView: View {
                         Divider()
                             .background(theme == .workbench ? Color.lightTextPrimary : Color.spaceAccent.opacity(0.2))
 
-                        // Master Oscilloscope & Separation Sliders — SCHWER (30-Hz-Canvas).
+                        // Master Oscilloscope & Separation Sliders — SCHWER (Visualizer-Canvas).
                         masterOscilloscopeView
                             .padding(.horizontal)
                             .padding(.vertical, 8)
@@ -653,7 +653,7 @@ struct MainView: View {
         // ZStack füllt den vom GeometryReader angebotenen Raum.
         .frame(width: geo.size.width, height: geo.size.height)
         // Kompaktmodus-Umschaltung: bei Größenänderung isCompact + das Coordinator-
-        // Flag (steuert die Timer-Drossel 30↔5 Hz) synchron setzen.
+        // Flag (steuert die Timer-Drossel Bildrate↔5 Hz) synchron setzen.
         .onChange(of: compact) { newValue in
             isCompact = newValue
             coordinator.visualizersVisible = !newValue

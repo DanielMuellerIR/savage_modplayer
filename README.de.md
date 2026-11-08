@@ -236,12 +236,22 @@ werden vor der entsprechenden Pufferallokation abgelehnt.
 
 Die App befüllt die Playlist beim Start aus dem Autoplay-Ordner, der im Einstellungs-Fenster (Cmd+,) konfiguriert ist. Ist keiner gesetzt, sucht sie nach einem `audio/`-Verzeichnis neben der Anwendung und lädt dort gefundene `.mod`-/`.s3m`-/`.xm`-/`.it`-Dateien (oder `mod.*`-Dateien) automatisch in die Playlist. Diese Dateien sind nur lokale Testdaten und gehören nicht ins Git-Repository.
 
-Im selben Fenster steht die Bildrate der Visualisierungen: 30 Hz (Vorgabe, volle
-Optik), 24, 15 oder 10 Hz. Daran hängt nicht der Klang, sondern die Rechenlast
-der Oberfläche — auf einem Mac mit M5-Chip kostete dieselbe Wiedergabe bei 30 Hz rund 22 %
-eines Kerns und bei 10 Hz rund 14 %. Die Änderung wirkt sofort; im kompakten
-Fenster bleibt es unabhängig davon bei 5 Hz, weil dort keine Oszilloskope zu
-sehen sind.
+Die Linux-Desktop-App prüft beim Start und während des Betriebs höchstens einmal
+täglich auf signierte GitHub-Updates. Automatische Prüfungen lassen sich in den
+Einstellungen abschalten; **Hilfe → Nach Updates suchen…** prüft manuell.
+Download und Installation benötigen eine Bestätigung. Die Wiedergabe läuft
+weiter, die neue Version wird beim nächsten Start verwendet. Version 1.6.58
+enthält den ersten Linux-Updater: Ältere Installationen müssen einmal manuell
+aus dem Linux-GUI-Archiv aktualisiert werden. Siehe
+[Linux-Installation und Updates](docs/linux-gui.md).
+
+Auf macOS und Linux laufen die Visualizer standardmäßig mit 60 Bildern pro
+Sekunde. Die Einstellungen bieten außerdem 15 Bilder/s (Sparmodus) sowie 30,
+24 und 10 Bilder/s. Änderungen wirken sofort; vorhandene Bildraten-Einstellungen
+bleiben erhalten. Ein kleineres Fenster schaltet in die Kompaktansicht und
+beendet die Erfassung und Darstellung von Oszilloskopen und Pegeln vollständig.
+Unter Linux entfällt auch die Übertragung der Wellenformen. Transport und
+Spielzeit werden weiter mit 5 Hz aktualisiert; die Audioausgabe bleibt unverändert.
 
 Für Release-Builds signiert `build_app.sh` automatisch mit der Developer-ID
 `Developer ID Application: Daniel Mueller (9QSWKSR4NQ)`, sofern sie im

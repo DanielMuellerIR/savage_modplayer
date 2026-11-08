@@ -71,6 +71,17 @@ jobs:
             > "${dmgs[0]%.dmg}.md"
           bash scripts/verify-sparkle-release.sh "${dmgs[0]}" "$RELEASE_TAG"
 
+      - name: Prepare Linux update manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(cat VERSION)" == "${RELEASE_TAG#v}" ]] || exit 1
+          archive="savage-mod-player-${RELEASE_TAG#v}-linux-x86_64.tar.gz"
+          mkdir -p linux-update
+          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --pattern "$archive" --dir linux-update
+          gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --json body --jq .body > linux-update/notes.txt
+          python3 scripts/linux-update-manifest.py "linux-update/$archive" site/linux/stable.json --notes linux-update/notes.txt
+
       # Paketmanifeste und Compiler laufen ohne den privaten Update-Schlüssel.
       - name: Prepare pinned Sparkle tools
         shell: bash
@@ -98,7 +109,13 @@ jobs:
             -o "$PWD/site/appcast.xml" "$PWD/update"
           printf '%s' "$private_key" | "$signer" --ed-key-file - \
             --disable-signing-warning site/appcast.xml
+          printf '%s' "$private_key" | "$signer" --ed-key-file - -p site/linux/stable.json > site/linux/stable.json.sig
           unset private_key
+          brew list --versions openssl@3 >/dev/null || brew install openssl@3
+          export PATH="$(brew --prefix openssl@3)/bin:$PATH"
+          python3 scripts/linux-update-manifest.py \
+            "linux-update/savage-mod-player-${RELEASE_TAG#v}-linux-x86_64.tar.gz" site/linux/stable.json \
+            --notes linux-update/notes.txt --verify
           xmllint --noout site/appcast.xml
           dmg=(update/*.dmg)
           .build/verify-sparkle-feed site/appcast.xml .build/sparkle-release/Info.plist "${dmg[0]}"

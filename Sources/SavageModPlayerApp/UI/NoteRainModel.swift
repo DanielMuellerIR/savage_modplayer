@@ -21,7 +21,15 @@ final class NoteRainModel: ObservableObject {
     func start(coordinator: ModPlayerCoordinator) {
         stop()
         tick(coordinator: coordinator, horizon: horizon)
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self, weak coordinator] _ in
+        setFrameRate(coordinator: coordinator)
+    }
+
+    func setFrameRate(coordinator: ModPlayerCoordinator) {
+        timer?.invalidate()
+        let rate = coordinator.visualizerFrameRate
+        let interval = coordinator.isPlaying && !coordinator.isPaused
+            ? 1 / min(60, max(1, rate.isFinite ? rate : 60)) : 0.2
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self, weak coordinator] _ in
             MainActor.assumeIsolated {
                 guard let self, let coordinator else { return }
                 self.tick(coordinator: coordinator, horizon: self.horizon)

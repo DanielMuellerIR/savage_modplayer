@@ -115,15 +115,16 @@ ColumnLayout {
             text: "Position"
         }
         PlayerSlider {
+            objectName: "samplePositionSlider"
             Layout.fillWidth: true
             dark: view.dark
             enabled: sample.end - sample.start < sample.frames
             from: 0
             to: 1
-            value: position
+            value: view.position
 
             onMoved: {
-                position = value;
+                view.position = value;
                 view.request();
             }
         }

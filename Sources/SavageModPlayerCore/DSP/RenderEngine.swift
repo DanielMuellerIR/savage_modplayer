@@ -573,6 +573,12 @@ final class RealtimeVisualizationExchange: @unchecked Sendable {
     // 0 = kein Leser, sonst Slot + 1. Nur der MainActor beansprucht einen Slot.
     private let readerSlotStorage = LockFreeAtomicUInt64(0)
     private let consumedGenerationStorage = LockFreeAtomicUInt64(0)
+    private let enabledStorage = LockFreeAtomicUInt64(1)
+
+    var isEnabled: Bool {
+        get { enabledStorage.loadAcquire() != 0 }
+        set { enabledStorage.storeRelease(newValue ? 1 : 0) }
+    }
 
     init(channelCapacity: Int) {
         precondition(channelCapacity > 0)
@@ -1028,9 +1034,12 @@ public enum RenderEngine {
 
         return { (frameCount, left, right) in
             let safeFrameCount = Int(frameCount)
+            // Ein atomarer Sichtbarkeitstest pro Block; ausgeblendete Scopes
+            // verursachen weder Sample-Erfassung noch Snapshot-Kopien.
+            let collectVisualization = visualizationExchange?.isEnabled ?? true
             var appliedSeekSequence: UInt64?
 
-            if safeFrameCount > 0 {
+            if safeFrameCount > 0 && collectVisualization {
                 visualizationExchange?.beginRenderBlock(
                     channelCount: logicalChannelCount)
             }
@@ -1133,20 +1142,22 @@ public enum RenderEngine {
                 let captureFrameCapacity = capture?.frameCapacity ?? 0
 
                 // Roll the wave sample write index
-                state.waveWriteIndex = (state.waveWriteIndex + 1) % 32
+                if collectVisualization { state.waveWriteIndex = (state.waveWriteIndex + 1) % 32 }
                 let wIdx = state.waveWriteIndex
 
                 // Der sichtbare Kanalpuffer und die Capture-Stems gehören den
                 // logischen Kanälen, nicht den bis zu 256 physischen Stimmen.
-                for channel in 0..<logicalChannelCount {
-                    waveBuffer.channelWavesPointer[channel * 32 + wIdx] = 0.0
-                    if let captureStems {
-                        captureStems[channel * captureFrameCapacity + frame] = 0.0
-                    }
-                    if let stems = stereoStemCapture {
-                        let index = channel * stems.frameCapacity + frame
-                        stems.left[index] = 0.0
-                        stems.right[index] = 0.0
+                if collectVisualization || captureStems != nil || stereoStemCapture != nil {
+                    for channel in 0..<logicalChannelCount {
+                        if collectVisualization { waveBuffer.channelWavesPointer[channel * 32 + wIdx] = 0.0 }
+                        if let captureStems {
+                            captureStems[channel * captureFrameCapacity + frame] = 0.0
+                        }
+                        if let stems = stereoStemCapture {
+                            let index = channel * stems.frameCapacity + frame
+                            stems.left[index] = 0.0
+                            stems.right[index] = 0.0
+                        }
                     }
                 }
 
@@ -1188,7 +1199,7 @@ public enum RenderEngine {
                     }
 
                     // Alle Vorder-/Hintergrundstimmen eines Besitzers addieren.
-                    waveBuffer.channelWavesPointer[ownerIndex * 32 + wIdx] += outputSample
+                    if collectVisualization { waveBuffer.channelWavesPointer[ownerIndex * 32 + wIdx] += outputSample }
 
                     // Panning LRRL mit Separation (XM: inkl. Panning-Hüllkurve)
                     let p = parameters.panning
@@ -1219,10 +1230,12 @@ public enum RenderEngine {
 
                 }
 
-                for channel in 0..<logicalChannelCount {
-                    let absVal = abs(waveBuffer.channelWavesPointer[channel * 32 + wIdx])
-                    if absVal > vuBuffer.pointer[channel] {
-                        vuBuffer.pointer[channel] = absVal
+                if collectVisualization {
+                    for channel in 0..<logicalChannelCount {
+                        let absVal = abs(waveBuffer.channelWavesPointer[channel * 32 + wIdx])
+                        if absVal > vuBuffer.pointer[channel] {
+                            vuBuffer.pointer[channel] = absVal
+                        }
                     }
                 }
 
@@ -1244,10 +1257,12 @@ public enum RenderEngine {
                 // Master-Scope als echter, ueber Callbacks rollender Ringpuffer
                 // (wie waveWriteIndex oben), damit alle 128 Slots stetig gefuellt
                 // werden — kein stehender/ruckelnder Tail bei kleinen Buffern.
-                state.masterWaveWriteIndex = (state.masterWaveWriteIndex + 1) & 127
-                waveBuffer.masterWavesPointer[state.masterWaveWriteIndex] = (limitedL + limitedR) * 0.5
+                if collectVisualization {
+                    state.masterWaveWriteIndex = (state.masterWaveWriteIndex + 1) & 127
+                    waveBuffer.masterWavesPointer[state.masterWaveWriteIndex] = (limitedL + limitedR) * 0.5
+                }
             }
-            if safeFrameCount > 0 {
+            if safeFrameCount > 0 && collectVisualization {
                 visualizationExchange?.publish(
                     channelCount: logicalChannelCount)
             }

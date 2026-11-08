@@ -33,6 +33,7 @@ ApplicationWindow {
     property var prefs: desktop.preferences
     property color primary: dark ? "#eceef0" : "#13171d"
     property bool queryActive: !!((library.query || {}).search || (library.query || {}).favoritesOnly || (library.query || {}).format || (library.query || {}).minimumChannels || (library.query || {}).unheardOnly || (library.query || {}).addedWithinDays || (library.query || {}).reversed || ((library.query || {}).sort && library.query.sort !== "sourceOrder"))
+    property var visuals: desktop.visualizer
     property var s: desktop.state
     property var sample: ({})
     property int sampleInstrument: 0
@@ -120,6 +121,10 @@ ApplicationWindow {
         }
         if (name === "instruments") {
             sidebarTab = 1;
+            return;
+        }
+        if (name === "updates") {
+            desktopUpdates.check();
             return;
         }
         if (name === "settings")
@@ -234,11 +239,14 @@ ApplicationWindow {
         let next = compact ? !(window.width >= 900 && main.height >= 640) : window.width < 820 || main.height < 560;
         if (next !== compact) {
             compact = next;
-            send("compact", {
-                enabled: compact
-            });
         }
     }
+
+    function syncVisualizerVisibility() {
+        send("compact", { enabled: compact || !visible || visibility === Window.Minimized });
+    }
+    onCompactChanged: syncVisualizerVisibility()
+    onVisibilityChanged: syncVisualizerVisibility()
 
     color: backdrop
     font.family: "sans-serif"
@@ -415,6 +423,11 @@ ApplicationWindow {
                 onTriggered: keyboardDialog.open()
             }
             MenuItem {
+                text: "Nach Updates suchen…"
+                onTriggered: desktopUpdates.check()
+            }
+            MenuSeparator {}
+            MenuItem {
                 text: "Über Savage Mod Player"
 
                 onTriggered: aboutDialog.open()
@@ -429,7 +442,9 @@ ApplicationWindow {
 
     Connections {
         function onMessage(event, values) {
-            if (event === "loading" && values.active) {
+            if (event === "ready") {
+                syncVisualizerVisibility();
+            } else if (event === "loading" && values.active) {
                 expanded = {};
                 sidebarTab = 0;
             } else if (event === "state") {
@@ -1426,7 +1441,7 @@ ApplicationWindow {
                                                                 required property int index
                                                                 property real threshold: (11 - index) / 12
 
-                                                                color: ((s.vu || [])[parent.parent.parent.modelData] || 0) >= threshold ? (threshold > .85 ? "#ff3b30" : threshold > .65 ? "#ff9500" : threshold > .4 ? (dark ? "#9eb3c2" : accent) : (dark ? accent : Qt.alpha(accent, .65))) : (dark ? Qt.rgba(1, 1, 1, .04) : Qt.rgba(0, 0, 0, .07))
+                                                                color: ((visuals.vu || [])[parent.parent.parent.modelData] || 0) >= threshold ? (threshold > .85 ? "#ff3b30" : threshold > .65 ? "#ff9500" : threshold > .4 ? (dark ? "#9eb3c2" : accent) : (dark ? accent : Qt.alpha(accent, .65))) : (dark ? Qt.rgba(1, 1, 1, .04) : Qt.rgba(0, 0, 0, .07))
                                                                 height: 2
                                                                 radius: 1
                                                                 width: parent.parent.parent.vuWidth
@@ -1437,7 +1452,7 @@ ApplicationWindow {
                                                         accent: window.accent
                                                         dark: window.dark
                                                         height: 50
-                                                        samples: (s.waves || [])[parent.parent.modelData] || []
+                                                        samples: (visuals.waves || [])[parent.parent.modelData] || []
                                                         width: parent.parent.width - parent.parent.vuWidth - 4
                                                     }
                                                 }
@@ -1656,7 +1671,7 @@ ApplicationWindow {
                                 accent: window.accent
                                 dark: window.dark
                                 master: true
-                                samples: s.master || []
+                                samples: visuals.master || []
                             }
                             Text {
                                 color: secondary
@@ -1989,6 +2004,73 @@ ApplicationWindow {
             wrapMode: Text.Wrap
         }
     }
+    Connections {
+        target: desktopUpdates
+        function onShowDialog() { updateDialog.open(); }
+    }
+    Dialog {
+        id: updateDialog
+        objectName: "updateDialog"
+        anchors.centerIn: parent
+        modal: true
+        title: "Softwareupdate"
+        font.pixelSize: 13 * window.fontScale
+        width: Math.min(520, window.width - 40)
+        height: Math.min(implicitHeight, window.height - 40)
+        closePolicy: desktopUpdates.busy ? Popup.NoAutoClose : Popup.CloseOnEscape
+        ScrollView {
+            id: updateScroll
+            anchors.fill: parent
+            implicitHeight: updateContent.implicitHeight
+            contentWidth: availableWidth
+            clip: true
+            ColumnLayout {
+                id: updateContent
+                width: updateScroll.availableWidth
+                spacing: 14
+                Label {
+                    Layout.fillWidth: true
+                    text: desktopUpdates.status
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                }
+                ProgressBar {
+                    Layout.fillWidth: true
+                    visible: desktopUpdates.busy
+                    value: desktopUpdates.progress
+                    indeterminate: desktopUpdates.progress <= 0
+                }
+                Label {
+                    Layout.fillWidth: true
+                    visible: !!desktopUpdates.notes
+                    text: desktopUpdates.notes
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: "Updateprüfung: GitHub Pages · Download nach Bestätigung: GitHub Releases. Signatur, Größe und SHA-256 werden geprüft."
+                    color: secondary
+                    font.pixelSize: 11 * window.fontScale
+                    wrapMode: Text.Wrap
+                }
+            }
+        }
+        footer: DialogButtonBox {
+            FormButton {
+                objectName: "cancelUpdateButton"
+                text: desktopUpdates.busy ? "Abbrechen" : "Schließen"
+                onClicked: desktopUpdates.busy ? desktopUpdates.cancel() : updateDialog.close()
+            }
+            FormButton {
+                objectName: "installUpdateButton"
+                text: "Update installieren"
+                visible: !!desktopUpdates.offeredVersion && !desktopUpdates.installed
+                enabled: desktopUpdates.canInstall && !desktopUpdates.busy
+                onClicked: desktopUpdates.install()
+            }
+        }
+    }
     Dialog {
         id: settings
 
@@ -1998,106 +2080,122 @@ ApplicationWindow {
         standardButtons: Dialog.Close
         title: "Einstellungen"
         width: Math.min(460, window.width - 40)
+        height: Math.min(implicitHeight, window.height - 40)
+        objectName: "settingsDialog"
 
-        ColumnLayout {
+        ScrollView {
+            id: settingsScroll
+            objectName: "settingsScroll"
             anchors.fill: parent
-            spacing: 16
+            implicitHeight: settingsContent.implicitHeight
+            contentWidth: availableWidth
+            clip: true
 
-            GroupBox {
-                Layout.fillWidth: true
+            ColumnLayout {
+                id: settingsContent
+                width: settingsScroll.availableWidth
+                spacing: 16
 
-                ColumnLayout {
-                    spacing: 8
-                    width: parent.width
+                GroupBox {
+                    Layout.fillWidth: true
 
-                    Label {
-                        font.bold: true
-                        text: "Autoplay-Ordner:"
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        color: secondary
-                        text: prefs.autoplayFolder || "Nicht gesetzt"
-                        wrapMode: Text.Wrap
-                    }
-                    RowLayout {
-                        FormButton {
-                            text: "Auswählen…"
+                    ColumnLayout {
+                        spacing: 8
+                        width: parent.width
 
-                            onClicked: {
-                                let p = desktop.chooseFolder("Autoplay-Ordner wählen");
-                                if (p)
-                                    option("autoplayFolder", p);
+                        Label {
+                            font.bold: true
+                            text: "Autoplay-Ordner:"
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            color: secondary
+                            text: prefs.autoplayFolder || "Nicht gesetzt"
+                            wrapMode: Text.Wrap
+                        }
+                        RowLayout {
+                            FormButton {
+                                text: "Auswählen…"
+
+                                onClicked: {
+                                    let p = desktop.chooseFolder("Autoplay-Ordner wählen");
+                                    if (p)
+                                        option("autoplayFolder", p);
+                                }
+                            }
+                            FormButton {
+                                text: "Entfernen"
+                                visible: !!prefs.autoplayFolder
+
+                                onClicked: option("autoplayFolder", "")
                             }
                         }
-                        FormButton {
-                            text: "Entfernen"
-                            visible: !!prefs.autoplayFolder
-
-                            onClicked: option("autoplayFolder", "")
+                        Label {
+                            Layout.fillWidth: true
+                            color: secondary
+                            font.pixelSize: 11 * window.fontScale
+                            text: "Aus diesem Ordner (inklusive Unterordnern und Zip-/7z-Archiven) füllt der Player beim Start die Playlist und beginnt zu spielen. Änderungen wirken ab dem nächsten Start."
+                            wrapMode: Text.Wrap
                         }
                     }
-                    Label {
-                        Layout.fillWidth: true
-                        color: secondary
-                        font.pixelSize: 11 * window.fontScale
-                        text: "Aus diesem Ordner (inklusive Unterordnern und Zip-/7z-Archiven) füllt der Player beim Start die Playlist und beginnt zu spielen. Änderungen wirken ab dem nächsten Start."
-                        wrapMode: Text.Wrap
+                }
+                GroupBox {
+                    Layout.fillWidth: true
+
+                    ColumnLayout {
+                        spacing: 8
+                        width: parent.width
+
+                        Label {
+                            text: "Bildrate der Visualisierungen:"
+                        }
+                        FormCombo {
+                            Layout.fillWidth: true
+                            currentIndex: model.indexOf(prefs.visualizerHz || 60)
+                            displayText: currentValue === 60 ? "60 Bilder/s (Standard)" : currentValue === 15 ? "15 Bilder/s (Sparmodus)" : currentValue + " Bilder/s"
+                            model: [60, 30, 24, 15, 10]
+
+                            onActivated: option("visualizerHz", model[currentIndex])
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            color: secondary
+                            font.pixelSize: 11 * window.fontScale
+                            text: "60 Bilder pro Sekunde sorgen für flüssige Pegel und Oszilloskope; der Sparmodus verwendet 15 Bilder pro Sekunde. Die Änderung wirkt sofort. Verkleinere das Fenster, um die Visualizer ganz auszublenden: Erfassung, Übertragung und Zeichnen entfallen dann. Nur Transport und Spielzeit werden weiter aktualisiert. Der Klang bleibt unverändert."
+                            wrapMode: Text.Wrap
+                        }
                     }
                 }
-            }
-            GroupBox {
-                Layout.fillWidth: true
+                GroupBox {
+                    Layout.fillWidth: true
+                    title: "Updates"
 
-                ColumnLayout {
-                    spacing: 8
-                    width: parent.width
+                    ColumnLayout {
+                        spacing: 8
+                        width: parent.width
 
-                    Label {
-                        text: "Bildrate der Visualisierungen:"
-                    }
-                    FormCombo {
-                        Layout.fillWidth: true
-                        currentIndex: model.indexOf(prefs.visualizerHz || 30)
-                        displayText: currentValue === 30 ? "30 Hz (Standard)" : currentValue + " Hz"
-                        model: [30, 24, 15, 10]
-
-                        onActivated: option("visualizerHz", model[currentIndex])
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        color: secondary
-                        font.pixelSize: 11 * window.fontScale
-                        text: "Wie oft Pegel, Oszilloskope und Spielzeit neu gezeichnet werden. Die Änderung wirkt sofort; der Klang bleibt unverändert. Im kompakten Fenster sind es unabhängig davon 5 Hz."
-                        wrapMode: Text.Wrap
-                    }
-                }
-            }
-            GroupBox {
-                Layout.fillWidth: true
-                title: "Updates"
-
-                ColumnLayout {
-                    spacing: 8
-                    width: parent.width
-
-                    PlayerCheckBox {
-                        baseFontSize: 13
-                        dark: window.dark
-                        enabled: false
-                        text: "Automatisch nach Updates suchen"
-                        textScale: 1
-                    }
-                    FormButton {
-                        enabled: false
-                        text: "Nach Updates suchen…"
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        color: secondary
-                        font.pixelSize: 11 * window.fontScale
-                        text: "Die Linux-Ausgabe wird über ihre Installation aktualisiert. Sparkle setzt macOS voraus; für Linux besteht noch kein signierter Updatekanal."
-                        wrapMode: Text.Wrap
+                        PlayerCheckBox {
+                            baseFontSize: 13
+                            dark: window.dark
+                            objectName: "automaticUpdateChecks"
+                            checked: desktopUpdates.automaticallyChecks
+                            onClicked: desktopUpdates.automaticallyChecks = checked
+                            text: "Automatisch nach Updates suchen"
+                            textScale: 1
+                        }
+                        FormButton {
+                            objectName: "checkUpdatesButton"
+                            enabled: !desktopUpdates.busy
+                            onClicked: desktopUpdates.check()
+                            text: "Nach Updates suchen…"
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            color: secondary
+                            font.pixelSize: 11 * window.fontScale
+                            text: "Der Player prüft höchstens einmal täglich auf neue Versionen. Nach Bestätigung lädt er das signierte Paket von GitHub und installiert es für den nächsten Start. Die Wiedergabe läuft weiter. Es werden keine Musikdateien oder Bibliotheksdaten übertragen."
+                            wrapMode: Text.Wrap
+                        }
                     }
                 }
             }

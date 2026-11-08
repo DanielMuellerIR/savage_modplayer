@@ -205,7 +205,9 @@ int renderVideo(const QString &path) {
         auto executable=QStandardPaths::findExecutable("ffmpeg"); if (executable.isEmpty()) throw std::runtime_error("FFmpeg fehlt");
         QProcess encoder; encoder.setStandardOutputFile(QProcess::nullDevice()); encoder.setStandardErrorFile(QProcess::nullDevice());
         const double bits=options["quality"].toString()=="compact"?.08:.16;
-        encoder.start(executable, {"-v","error","-nostdin","-n","-f","rawvideo","-pixel_format","bgra","-video_size",QString("%1x%2").arg(width).arg(height),"-framerate",QString::number(fps),"-i","pipe:0","-i",manifest["audioPath"].toString(),"-map","0:v:0","-map","1:a:0","-c:v","libx264","-bf","0","-pix_fmt","yuv420p","-b:v",QString::number(std::clamp(int(width*height*fps*bits),600000,24000000)),"-enc_time_base:v","1:48000","-video_track_timescale","48000","-movie_timescale","48000","-c:a","pcm_f32le",manifest["outputPath"].toString()});
+        // FFmpeg darf für die hochauflösende Encoder-Zeitbasis keine Bilder
+        // duplizieren; der MOV-Abschluss erwartet genau ein Bild je Schritt.
+        encoder.start(executable, {"-v","error","-nostdin","-n","-f","rawvideo","-pixel_format","bgra","-video_size",QString("%1x%2").arg(width).arg(height),"-framerate",QString::number(fps),"-i","pipe:0","-i",manifest["audioPath"].toString(),"-map","0:v:0","-map","1:a:0","-c:v","libx264","-bf","0","-pix_fmt","yuv420p","-b:v",QString::number(std::clamp(int(width*height*fps*bits),600000,24000000)),"-fps_mode","passthrough","-enc_time_base:v","1:48000","-video_track_timescale","48000","-movie_timescale","48000","-c:a","pcm_f32le",manifest["outputPath"].toString()});
         if (!encoder.waitForStarted(5000)) throw std::runtime_error("FFmpeg startet nicht");
         const quint32 step=48000/fps, frames=quint32((audioFrames+step-1)/step);
         QImage image(width,height,QImage::Format_ARGB32); int loaded=-1; QJsonArray notes;

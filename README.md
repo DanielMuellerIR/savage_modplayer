@@ -238,11 +238,20 @@ next to the application and automatically loads any `.mod`/`.s3m`/`.xm`/`.it` fi
 `mod.*` files) found there. These files are local test data only and do not
 belong in the git repository.
 
-The same window holds the visualizer frame rate: 30 Hz (default, full look),
-24, 15 or 10 Hz. It does not affect the sound, only the interface's CPU load —
-on a Mac with an M5 chip the same playback cost about 22 % of a core at 30 Hz and about 14 % at
-10 Hz. The change takes effect immediately; the compact window stays at 5 Hz
-regardless, because no oscilloscopes are visible there.
+Linux desktop releases include a signed GitHub updater. It checks at startup
+and at most once a day while the app stays open; Settings can disable automatic
+checks. **Help → Check for Updates** checks manually. Download and installation
+require confirmation. Playback continues, and the new version takes effect on
+the next start. Version 1.6.58 is the first Linux updater release: older installs
+need a one-time manual installation from the Linux GUI archive. See
+[Linux installation and updates](docs/linux-gui.md).
+
+On macOS and Linux, visualizers default to 60 frames per second. Settings also
+offer 15 FPS (power saving), as well as 30, 24 and 10 FPS. Changes take effect
+immediately; existing frame-rate preferences are retained. Shrinking the window
+switches to compact mode and turns off scope/VU capture and drawing completely.
+Linux also stops transferring waveform data. Transport and elapsed time keep
+updating at 5 Hz; audio playback is unaffected.
 
 For release builds, `build_app.sh` automatically signs with the Developer ID
 `Developer ID Application: Daniel Mueller (9QSWKSR4NQ)` if it is available in

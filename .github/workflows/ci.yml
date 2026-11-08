@@ -37,6 +37,12 @@ jobs:
           python3 Tests/desktop_entry_tests.py
           python3 Tests/reference_compare_tests.py
 
+      - name: Linux update validation
+        run: |
+          brew list --versions openssl@3 >/dev/null || brew install openssl@3
+          export PATH="$(brew --prefix openssl@3)/bin:$PATH"
+          python3 Tests/linux_update_tests.py
+
       - name: Swift Version
         run: swift --version
 
@@ -128,3 +134,31 @@ jobs:
 
       - name: Swift tests (release)
         run: swift test -c release
+
+  linux-gui-test:
+    runs-on: ubuntu-24.04
+    container: swift:6.2.1-noble
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Linux GUI dependencies
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake g++ pkg-config libasound2-dev libdbus-1-dev zlib1g-dev python3 python3-gi openssl dbus-x11 desktop-file-utils ffmpeg qt6-base-dev qt6-declarative-dev qt6-multimedia-dev qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-window qml6-module-qtmultimedia qml6-module-qtqml-workerscript qml6-module-qtquick-templates
+      - name: Build GUI and static engine
+        run: |
+          cmake -S linux/gui -B .build/linux-gui -DCMAKE_BUILD_TYPE=Release
+          cmake --build .build/linux-gui --parallel 4
+          swift build -c release --static-swift-stdlib --product savage-desktop-engine --jobs 4
+          cp .build/release/savage-desktop-engine .build/linux-gui/
+      - name: Update and desktop contracts
+        run: |
+          python3 Tests/linux_update_tests.py
+          ctest --test-dir .build/linux-gui --output-on-failure
+          dbus-run-session -- python3 Tests/linux_update_integration.py
+          SAVAGE_DESKTOP_ENGINE="$PWD/.build/linux-gui/savage-desktop-engine" SAVAGE_VIDEO_RENDERER="$PWD/.build/linux-gui/savage-mod-player" python3 Tests/desktop_engine_tests.py
+          SAVAGE_DESKTOP_ENGINE="$PWD/.build/linux-gui/savage-desktop-engine" SAVAGE_GUI="$PWD/.build/linux-gui/savage-mod-player" dbus-run-session -- python3 Tests/linux_gui_tests.py
+          dbus-run-session -- /usr/lib/qt6/bin/qmltestrunner -input Tests/qml/tst_visualizer_visibility.qml
+      - name: Package Linux GUI
+        run: bash linux/package-gui.sh

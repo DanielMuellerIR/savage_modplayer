@@ -979,6 +979,7 @@ Nullsamples:
 
 ```bash
 bash linux/build-gui.sh
+QT_QPA_PLATFORM=offscreen \
 SAVAGE_DESKTOP_ENGINE="$PWD/.build/linux-gui/savage-desktop-engine" \
 SAVAGE_VIDEO_RENDERER="$PWD/.build/linux-gui/savage-mod-player" \
 python3 Tests/desktop_engine_tests.py
@@ -986,6 +987,20 @@ SAVAGE_DESKTOP_ENGINE="$PWD/.build/linux-gui/savage-desktop-engine" \
 SAVAGE_GUI="$PWD/.build/linux-gui/savage-mod-player" \
 dbus-run-session -- python3 Tests/linux_gui_tests.py
 ```
+
+Die Visualizer-Regression läuft zusätzlich mit Qt Quick Test:
+
+```bash
+QT_QPA_PLATFORM=offscreen dbus-run-session -- \
+  /usr/lib/qt6/bin/qmltestrunner -input Tests/qml/tst_visualizer_visibility.qml
+```
+
+Sie prüft echte Größen-/Sichtbarkeitswechsel einschließlich Minimieren und
+Wiederanzeigen. `desktop_engine_tests.py` misst den Bilddatenkanal bei 60 und
+15 Bildern/s, prüft die sofortige Umschaltung, ausbleibende Bilder bei
+Kompaktansicht/Pause und die gespeicherte Bildrate nach Neustart.
+`VisualizerActivityTests` prüft unveränderte PCM-Samples sowie ausbleibende
+Erfassung und Veröffentlichung im ausgeblendeten Audiopfad.
 
 Die zweite Suite benötigt `gdbus`, `desktop-file-validate` und die GIO-Anbindung
 für Python (`python3-gi` bzw. `python-gobject`). Ihr echter Desktop-Dateistart
@@ -1028,3 +1043,57 @@ Die vollständige Linux-Suite verwendet einen getrennten Scratch-Pfad
 (`swift test -c release --scratch-path .build/linux-tests`), damit statisch
 und dynamisch gebaute Swift-Laufzeiten keine Artefakte teilen. Die Desktop-
 Prozesssuite besteht mit 15, die Qt-/Desktop-Suite mit zwei Tests.
+
+Prüfstand 1.6.57 (2026-11-08): macOS 759 Swift-Tests (zwei Auslassungen),
+Linux 676 (zehn Auslassungen), jeweils ohne Fehler. App/Quick Look, 14 CLI-
+Verträge, acht CLI-Wiedergabefälle, 16 Desktop-Prozessfälle und zwei Qt-/Desktop-
+Fälle bestehen. Der gesonderte Qt-Test bestätigt Verkleinern, Ausblenden,
+Minimieren und Wiederanzeigen sowie erreichbare Einstellungen im kleinen
+Fenster bei großer Schrift. Beide Einstellungsstufen und die volle/kompakte
+Ansicht sind nativ beziehungsweise offscreen visuell geprüft. Der Mac-Lauf
+misst rund 60/15/0 Bildaktualisierungen pro Sekunde für Standard/Sparmodus/
+Kompaktansicht; Pause liefert ebenfalls keine Bildaktualisierungen. Die WAVs
+aller 22 lokalen MOD-Dateien (je zehn Sekunden) bleiben bytegleich zur Baseline
+vor der Änderung. Die iOS-Bildratenvorgabe bleibt unverändert.
+
+Die vollständige Desktop-Prozesssuite hat zusätzlich vier Fehler beim
+Videoexport mit FFmpeg 6.1.1. Derselbe Zeitbasisfehler ist mit dem unveränderten
+bisherigen Qt-Renderer und synthetischen Videodaten ohne Player eigenständig
+reproduziert; er ist im [Backlog](../tasks/backlog.md) festgehalten. Die 16
+übrigen Prozessfälle schließen die neue Visualizer-Abnahme ein. Die Prüfungen
+belegen keinen sichtbaren Linux-Desktoplauf oder eine Bildrate auf einem
+bestimmten Bildschirm; Hardware und Compositor können Bilder begrenzen.
+
+## Signierte Linux-Updates
+
+`python3 Tests/linux_update_tests.py` prüft echte Ed25519-Signaturen über
+OpenSSL 3, manipulierte Metadaten, Hash-/Größenfehler, fremde Quellen, unsichere
+Archivtypen, Sperren und Rollback bis nach dem Versionszeigerwechsel. Es werden
+nur eigene temporäre Präfixe und Testschlüssel verwendet.
+
+```bash
+ctest --test-dir .build/linux-gui --output-on-failure
+dbus-run-session -- python3 Tests/linux_update_integration.py
+```
+
+Die Integration baut eine eigene Folgeversion, signiert ihr Paket mit einem
+Testschlüssel und ersetzt ausschließlich den Downloadtransport durch lokale
+Fixture-Dateien. Der echte Qt-Koordinator und Python-Helfer prüfen, entpacken,
+starten und installieren das Paket. Dabei läuft ein eigener Player mit
+synthetischer, stummer Audioquelle weiter; MPRIS bestätigt die laufende
+Wiedergabe vor und nach dem Versionswechsel. Die bisherige Version und fremde
+Sammlungsdateien bleiben unverändert. Die neuen Programme müssen vor dem
+Aktivieren ihre Startprüfung bestehen.
+
+Prüfstand 1.6.58 (2026-11-08): macOS 759 Swift-Tests mit zwei Auslassungen,
+iOS 124 mit drei Auslassungen, Linux sowohl mit Swift 6.0.3 als auch 6.2.1 jeweils
+676 mit zehn Auslassungen; kein Fehler. Alle 17 Desktop-Prozessfälle einschließlich
+der vier FFmpeg-Video-Bildraten sowie die beiden Qt-/Desktopfälle bestehen.
+Signiertes Folgeupdate, Erhalt der laufenden Wiedergabe und Archiv-Alias-
+Regression sind zusätzlich ohne Root-Rechte geprüft. Der zuvor erfasste
+Alias-ZIP-Fehler ist in diesen aktuellen Läufen nicht mehr reproduzierbar;
+sein Regressionstest bleibt aktiv. Der Videoexport behält mit FFmpeg 6.1.1
+nun die ursprünglichen Bildzeitpunkte bei. UI-Prüfungen umfassen Angebot,
+Bestätigung, Fortschritt, Abbruch und nächsten Programmstart sowie kleine
+Fenster mit großer Schrift. Diese Fixture-Prüfung ersetzt nicht die Kontrolle
+des tatsächlich veröffentlichten GitHub-Feeds und seiner Release-Assets.

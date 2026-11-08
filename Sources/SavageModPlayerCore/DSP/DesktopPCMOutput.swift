@@ -5,8 +5,15 @@ import Foundation
 final class DesktopPCMOutput {
     let sampleRate = PCMSinkFactory.preferredFormat().sampleRate
     private var sink: PCMSink?
+    private let makeSink: (PCMFormat) -> PCMSink
+
+    init(makeSink: @escaping (PCMFormat) -> PCMSink = PCMSinkFactory.makeDefault) {
+        self.makeSink = makeSink
+    }
     private var adapter: DesktopPCMAdapter?
     private var started = false
+    private var generation = UUID()
+    var onFailure: (@MainActor (String) -> Void)?
 
     func start(block: @escaping ModuleRenderBlock, sleepTimer: SleepTimerSignal,
                volume: Float, ledFilter: Bool, initiallyPaused: Bool) throws {
@@ -14,7 +21,7 @@ final class DesktopPCMOutput {
         let adapter = DesktopPCMAdapter(block: block, sampleRate: sampleRate, sleepTimer: sleepTimer)
         adapter.setOptions(volume: volume, ledFilter: ledFilter)
         self.adapter = adapter
-        sink = PCMSinkFactory.makeDefault(format: format)
+        sink = makeSink(format)
         if !initiallyPaused { try resume() }
     }
 
@@ -23,9 +30,18 @@ final class DesktopPCMOutput {
     func resume() throws {
         guard let sink, let adapter else { return }
         if started { try sink.resume() }
-        else { try sink.start(render: adapter.render); started = true }
+        else {
+            try sink.start(render: adapter.render); started = true
+            let generation = generation
+            Task { [weak self] in
+                let reason = await Task.detached { sink.waitUntilFinished() }.value
+                guard let self, self.generation == generation else { return }
+                if case .failed(let message) = reason { self.onFailure?(message) }
+            }
+        }
     }
     func stop() {
+        generation = UUID()
         sink?.stop()
         if started { _ = sink?.waitUntilFinished() }
         sink = nil

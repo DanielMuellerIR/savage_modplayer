@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tarfile
+import io
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +27,21 @@ class PublishContractTests(unittest.TestCase):
                 if checksum:
                     asset.with_suffix(asset.suffix + ".sha256").write_text(
                         hashlib.sha256(asset.read_bytes()).hexdigest() + "  " + asset.name + "\n")
+            for folder in ['scripts','linux','config']:
+                (root/folder).mkdir()
+            for file in ['scripts/linux-update-manifest.py','linux/update.py','linux/install.py','config/sparkle-public-key.txt']:
+                shutil.copyfile(ROOT/file,root/file)
+            archive=root/'build/savage-mod-player-1.2.3-linux-x86_64.tar.gz'
+            with tarfile.open(archive,'w:gz') as tar:
+                files=['savage-mod-player','savage-desktop-engine','VERSION','update-public-key.txt',
+                       'update.py','install.py','AppIcon.png','savage-mod-player.desktop','savage-collection.xml','LICENSE','Swift-LICENSE.txt']
+                for name in files:
+                    data=b'fixture'
+                    if name in ('savage-mod-player','savage-desktop-engine'): data=b'\x7fELF\x02\x01'+bytes(12)+b'\x3e\x00'
+                    if name=='VERSION': data=b'1.2.3\n'
+                    if name=='update-public-key.txt': data=(ROOT/'config/sparkle-public-key.txt').read_bytes()
+                    member=tarfile.TarInfo('savage-mod-player-linux/'+name);member.size=len(data);tar.addfile(member,io.BytesIO(data))
+            archive.with_suffix('.gz.sha256').write_text(hashlib.sha256(archive.read_bytes()).hexdigest()+'  '+archive.name+'\n')
             (root / "VERSION").write_text("1.2.3\n")
             (root / "build.py").write_text("")
             (root / "RELEASE_NOTES.md").write_text("Test release")
