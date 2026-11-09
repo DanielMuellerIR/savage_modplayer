@@ -140,7 +140,13 @@ private final class DesktopEngine {
             player.visualizerFrameRate = number("visualizerHz", default: 60)
             applySound()
         } catch { writable = false; emit("error", ["message": "Gespeicherte Daten sind geschützt: \(error.localizedDescription)"]) }
+        #if DEBUG
+        var ready: [String: Any] = ["preferences": preferences, "writable": writable, "protocolVersion": 2]
+        if ProcessInfo.processInfo.environment["SAVAGE_DESKTOP_TEST_SCAN_GATE"] != nil { ready["testScanGate"] = true }
+        emit("ready", ready)
+        #else
         emit("ready", ["preferences": preferences, "writable": writable, "protocolVersion": 2])
+        #endif
         sendLibrary()
         ticker = Task { [weak self] in
             let clock = ContinuousClock()
@@ -255,7 +261,7 @@ private final class DesktopEngine {
                 preferences["query"] = json(query); try savePreferences(); sendLibrary()
             case "selection":
                 selection = v["ids"] as? [String]; sendLibrary()
-                if let first = selection?.first { try await load(id: first, play: true) }
+                if let first = selection?.first { cancelPendingLoads(); try await load(id: first, play: true) }
             case "clear": cancelPendingLoads(); player.stop(); entries = []; selection = nil; resumeSource = nil; sendLibrary()
             case "demo":
                 player.sleepTimer.prepareForManualPlayback(); player.setMod(ModParser.generateDemoMod())
@@ -490,6 +496,19 @@ private final class DesktopEngine {
         let folder = temporary.appendingPathComponent(UUID().uuidString)
         emit("loading", ["active": true])
         let found = await Task.detached { PlaylistScanner.collectEntries(from: urls, tempDir: folder) }.value
+        #if DEBUG
+        // Nur Prozessregressionen: das fertige Scanergebnis vor der Übernahme anhalten.
+        let gate = ProcessInfo.processInfo.environment["SAVAGE_DESKTOP_TEST_SCAN_GATE"].map { URL(fileURLWithPath: $0) }
+        let gated = gate.map { urls == [$0.appendingPathComponent("source.mod")] } ?? false
+        if gated, let gate {
+            emit("testScanWaiting", [:])
+            let deadline = ContinuousClock.now + .seconds(15)
+            while !FileManager.default.fileExists(atPath: gate.appendingPathComponent("release").path), ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        defer { if gated { emit("testScanReturned", [:]) } }
+        #endif
         guard scanGeneration == generation else { return }
         entries = found; remember(found); selection = nil; sendLibrary()
         if writable {

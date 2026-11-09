@@ -31,7 +31,7 @@ class Engine:
         self.events = []
         self.visualizer_count = 0
         self.library = {}
-        self.wait("ready")
+        self.ready = self.wait("ready")
 
     def send(self, command, **values):
         self.process.stdin.write((json.dumps(dict(command=command, **values)) + "\n").encode())
@@ -406,6 +406,9 @@ class DesktopEngineTests(unittest.TestCase):
                 for stream in streams:
                     self.assertEqual(stream["time_base"], "1/48000")
                     self.assertEqual(int(stream["duration_ts"]), 5040, stream)
+        # wait() hält nicht abgeholte Ereignisse vor. Fortschritt der bereits
+        # abgeschlossenen Exporte darf den Start des neuen Exports nicht quittieren.
+        self.engine.events = [message for message in self.engine.events if message.get("event") != "progress"]
         output = self.root / "cancelled.mov"
         self.engine.send("videoExport", path=str(output), width=1920, height=1080, fps=60, seconds=600)
         self.engine.wait("progress", timeout=30)
@@ -428,6 +431,9 @@ class DesktopEngineTests(unittest.TestCase):
         self.assertFalse(output.exists())
 
 
+
+# Auch im bestehenden Prozess-Gate ausführen; separat startbar für den Red/Green-Nachweis.
+from desktop_load_race_tests import DesktopLoadRaceTests
 
 if __name__ == "__main__":
     unittest.main()
