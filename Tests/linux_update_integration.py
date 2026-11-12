@@ -82,7 +82,7 @@ Updater.download=fixture_download
         env=dict(os.environ,QT_QPA_PLATFORM='offscreen',ALSA_CONFIG_PATH=str(config),SAVAGE_DESKTOP_DATA=str(data))
         process=subprocess.Popen([str(current/'savage-mod-player'),str(fixture)],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         def status():
-            return subprocess.run(['gdbus','call','--session','--dest',f'org.mpris.MediaPlayer2.savage.desktop{process.pid}',
+            return subprocess.run(['gdbus','call','--session','--dest','org.mpris.MediaPlayer2.savage',
                 '--object-path',PATH,'--method',PROPS+'.Get',PLAYER,'PlaybackStatus'],capture_output=True,text=True,timeout=3).stdout
         try:
             deadline=time.monotonic()+10

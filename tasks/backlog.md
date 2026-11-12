@@ -13,6 +13,9 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
    über ein reales Ausgabegerät. Diese Prüfung braucht Zustimmung für GUI-Fokus.
    Die [Plattformgrenzen](../docs/linux-gui.md#konkrete-plattformunterschiede)
    sind ausdrücklich dokumentiert.
+   Für 1.6.60 zusätzlich physische Medientasten unter KDE Plasma und Cinnamon
+   bei fokussiertem und minimiertem Fenster prüfen, einschließlich Zielwahl
+   bei mehreren Playern. D-Bus-Prüfungen ersetzen diesen Zustellweg nicht.
 
 0. **Zeitgrenze der 20.000-Titel-Einrichtung auf geteilten CI-Runnern prüfen.**
    Mit 1.6.52 benötigten GitHub-Runner etwa 54–77 Sekunden bei einer

@@ -1008,6 +1008,19 @@ verwendet ein Testprogramm ohne Fenster. MPRIS und Instanzweiterleitung laufen
 unter `QT_QPA_PLATFORM=offscreen` auf einem isolierten Sitzungsbus. Videoverträge
 benötigen FFmpeg/ffprobe. Ein Skip ersetzt keinen dieser Linux-Belege.
 
+Die Medientasten-Regressionen prüfen den stabilen MPRIS-Namen, Fähigkeiten vor
+und nach dem ersten Titel sowie die zugehörigen `PropertiesChanged`-Signale.
+Play/Pause, wiederholtes Play/Pause als getrennte Befehle, Stopp und Titelwechsel
+bei Pause/Stopp laufen über echte D-Bus-Aufrufe. Eine zweite Sammlung muss unter
+eigenem Busnamen unabhängig steuerbar bleiben; ohne Sitzungsbus muss die App
+weiter starten. Physische Tasten unter KDE/Cinnamon bleiben eine Desktop-Prüfung.
+
+Prüfstand 1.6.60 (2026-11-12): Linux x86-64 mit Swift 6.2.1 und Qt 6.4.2;
+vollständiger Linux-GUI-Bau, sechs GUI-/MPRIS-Fälle, 17 Desktop-Prozessfälle und
+signierter Update-Rundlauf bestehen. Ein zusätzlicher Scanbarrieren-Fall ist im
+Release-Build ausgelassen, weil er Debug-Instrumentierung voraussetzt. Web-Bau
+und Pattern-Bounds-Prüfung bestehen; der HTML-Diff enthält nur die neue Version.
+
 `desktop_engine_tests.py` prüft Play/Pause/Stopp und Seek, Mute, Timer,
 Inspektion, Neustart/Persistenz, explizite Songstellen und A/B, Warteschlange
 nach Bibliothekswechsel, Titelklangregler, Playlistbearbeitung, geschützte

@@ -4,6 +4,7 @@ import configparser
 import json
 import os
 import re
+import select
 import shlex
 import shutil
 import subprocess
@@ -88,10 +89,10 @@ class DesktopTests(unittest.TestCase):
         config.write_text("pcm.!default { type null }\n")
         self.env = dict(os.environ, QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software",
                         SAVAGE_DESKTOP_DATA=str(self.root / "data"), ALSA_CONFIG_PATH=str(config))
-        self.process = subprocess.Popen([str(GUI), "--engine", str(ENGINE), str(self.root / "01.mod")],
+        self.process = subprocess.Popen([str(GUI), "--engine", str(ENGINE), str(self.root)],
                                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=self.env)
         self.addCleanup(self.close)
-        self.name = f"org.mpris.MediaPlayer2.savage.desktop{self.process.pid}"
+        self.name = "org.mpris.MediaPlayer2.savage"
         self.wait_status("Playing")
 
     def close(self):
@@ -153,6 +154,108 @@ class DesktopTests(unittest.TestCase):
         self.assertIn("0.25", volume)
         self.call("Quit", interface="org.mpris.MediaPlayer2")
         self.assertEqual(self.process.wait(timeout=5), 0)
+
+    def test_media_keys_pause_resume_stop_and_track_changes(self):
+        for prop in ("CanPlay", "CanPause", "CanGoNext", "CanGoPrevious", "CanSeek"):
+            self.assertIn("true", self.get(prop))
+        time.sleep(.2)
+        position = int(re.search(r"int64 (\d+)", self.get("Position"))[1])
+        self.call("Play")
+        self.call("Play")
+        self.wait_status("Playing")
+        self.assertGreaterEqual(int(re.search(r"int64 (\d+)", self.get("Position"))[1]), position)
+        self.call("PlayPause")
+        self.wait_status("Paused")
+        self.call("Pause")
+        self.call("Pause")
+        time.sleep(.1)
+        position = self.get("Position")
+        time.sleep(.15)
+        self.assertEqual(self.get("Position"), position)
+        self.call("Next")
+        self.wait_metadata("02.mod")
+        self.wait_status("Paused")
+        self.call("Previous")
+        self.wait_metadata("01.mod")
+        self.wait_status("Paused")
+        self.call("PlayPause")
+        self.wait_status("Playing")
+        self.call("Stop")
+        self.wait_status("Stopped")
+        self.call("Stop")
+        self.wait_status("Stopped")
+        self.call("Next")
+        self.wait_metadata("02.mod")
+        self.wait_status("Stopped")
+        self.call("PlayPause")
+        self.wait_status("Playing")
+
+    def wait_metadata(self, filename):
+        deadline = time.monotonic()+5
+        while time.monotonic()<deadline:
+            metadata = self.get("Metadata")
+            if filename in metadata:
+                return
+            time.sleep(.05)
+        self.fail(f"Titel fehlt: {filename}: {metadata}")
+
+    def test_initial_capabilities_and_notifications_on_first_track(self):
+        self.close()
+        self.env["SAVAGE_DESKTOP_DATA"] = str(self.root / "empty-data")
+        self.process = subprocess.Popen([str(GUI), "--engine", str(ENGINE)], env=self.env,
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        self.wait_status("Stopped")
+        properties = self.call("GetAll", PLAYER, interface=PROPS).stdout
+        for prop in ("CanPlay", "CanPause", "CanGoNext", "CanGoPrevious", "CanSeek"):
+            self.assertIn(f"'{prop}': <false>", properties)
+        monitor = subprocess.Popen(
+            ["gdbus", "monitor", "--session", "--dest", self.name, "--object-path", PATH],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            # Die erste Monitorzeile bestätigt das aktive Signal-Abonnement.
+            self.assertTrue(select.select([monitor.stdout], [], [], 5)[0], "MPRIS-Monitor startet nicht")
+            self.assertIn("Monitoring", monitor.stdout.readline())
+            self.call("OpenUri", (self.root / "01.mod").as_uri())
+            self.wait_status("Playing")
+            self.call("PlayPause")
+            self.wait_status("Paused")
+        finally:
+            monitor.terminate()
+            output, errors = monitor.communicate(timeout=3)
+        self.assertEqual(errors, "")
+        for prop in ("CanPlay", "CanPause", "CanGoNext", "CanGoPrevious", "CanSeek"):
+            self.assertIn(f"'{prop}': <true>", output)
+        self.assertIn("PlaybackStatus", output)
+        self.assertIn("Metadata", output)
+
+    def test_independent_instance_registration(self):
+        environment = dict(self.env, SAVAGE_DESKTOP_DATA=str(self.root / "other-data"))
+        other = subprocess.Popen([str(GUI), "--engine", str(ENGINE), str(self.root / "02.mod")],
+                                 env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        try:
+            original_name = self.name
+            self.name = f"org.mpris.MediaPlayer2.savage.desktop{other.pid}"
+            self.wait_status("Playing")
+            self.call("PlayPause")
+            self.wait_status("Paused")
+            self.name = original_name
+            self.wait_status("Playing")
+        finally:
+            self.name = original_name
+            other.terminate()
+            other.communicate(timeout=5)
+
+    def test_unavailable_bus_preserves_normal_start(self):
+        screenshot = self.root / "without-bus.png"
+        environment = dict(self.env, SAVAGE_DESKTOP_DATA=str(self.root / "no-bus-data"),
+                           DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent/savage-test-bus")
+        result = subprocess.run(
+            [str(GUI), "--engine", str(ENGINE), "--screenshot", str(screenshot),
+             "--capture-delay", "200", str(self.root / "01.mod")], env=environment,
+            capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+        self.assertTrue(screenshot.is_file())
+        self.assertIn("MPRIS-Registrierung fehlgeschlagen", result.stderr.decode(errors="replace"))
 
 
 if __name__ == "__main__":

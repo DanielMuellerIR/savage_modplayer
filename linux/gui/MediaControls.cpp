@@ -6,6 +6,7 @@
 #include <QDBusObjectPath>
 #include <QUrl>
 #include <QCryptographicHash>
+#include <QDebug>
 #include <cmath>
 
 class MediaRoot final : public QDBusAbstractAdaptor {
@@ -88,12 +89,29 @@ public slots:
 MediaControls::MediaControls(std::function<void(QString,QVariantMap)> command, QObject *parent) : QObject(parent), command(std::move(command)) {
     new MediaRoot(this); new MediaPlayer(this);
     auto bus=QDBusConnection::sessionBus();
-    if (bus.isConnected()) {
-        bus.registerService("org.mpris.MediaPlayer2.savage.desktop"+QString::number(QCoreApplication::applicationPid()));
-        bus.registerObject("/org/mpris/MediaPlayer2",this,QDBusConnection::ExportAdaptors);
+    if (!bus.isConnected() || !bus.registerObject("/org/mpris/MediaPlayer2",this,QDBusConnection::ExportAdaptors)) {
+        qWarning() << "MPRIS-Registrierung fehlgeschlagen; Desktop-Mediensteuerung ist nicht verfügbar.";
+        return;
+    }
+    serviceName = "org.mpris.MediaPlayer2.savage";
+    if (!bus.registerService(serviceName)) {
+        serviceName += ".desktop"+QString::number(QCoreApplication::applicationPid());
+        if (!bus.registerService(serviceName)) {
+            serviceName.clear();
+            bus.unregisterObject("/org/mpris/MediaPlayer2");
+            qWarning() << "MPRIS-Registrierung fehlgeschlagen; Desktop-Mediensteuerung ist nicht verfügbar.";
+        }
     }
 }
+MediaControls::~MediaControls() {
+    if (serviceName.isEmpty()) return;
+    auto bus = QDBusConnection::sessionBus();
+    bus.unregisterService(serviceName);
+    bus.unregisterObject("/org/mpris/MediaPlayer2");
+}
 void MediaControls::update(const QString &event,const QVariantMap &values) {
+    auto player=findChild<MediaPlayer *>();
+    const bool previousHasTrack = player->hasTrack();
     const double previousDuration = state.value("duration").toDouble();
     QString previousStatus=state.value("playing").toBool()?(state.value("paused").toBool()?"Paused":"Playing"):"Stopped";
     if (event=="state") state=values;
@@ -101,11 +119,15 @@ void MediaControls::update(const QString &event,const QVariantMap &values) {
     else if (event=="preferences") preferences=values;
     else if (event=="ready") preferences=values.value("preferences").toMap();
     else return;
-    auto player=findChild<MediaPlayer *>(); QVariantMap changed;
+    QVariantMap changed;
     if (event=="module" || previousDuration != state.value("duration").toDouble()) changed["Metadata"]=player->metadata();
     if (event=="preferences" || event=="ready") { changed["Volume"]=player->volume(); changed["LoopStatus"]=player->loop(); changed["Shuffle"]=player->shuffle(); }
     if (previousStatus!=player->status()) changed["PlaybackStatus"]=player->status();
-    if (!changed.isEmpty()) {
+    if (previousHasTrack != player->hasTrack()) {
+        for (const auto &name : {"CanPlay", "CanPause", "CanGoNext", "CanGoPrevious", "CanSeek"})
+            changed[name] = player->hasTrack();
+    }
+    if (!serviceName.isEmpty() && !changed.isEmpty()) {
         auto signal=QDBusMessage::createSignal("/org/mpris/MediaPlayer2","org.freedesktop.DBus.Properties","PropertiesChanged");
         signal << QString("org.mpris.MediaPlayer2.Player") << changed << QStringList{};
         QDBusConnection::sessionBus().send(signal);

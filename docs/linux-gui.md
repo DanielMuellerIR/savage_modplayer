@@ -120,6 +120,39 @@ Ctrl-Tastenkürzel die Command-Tastenkürzel: Ctrl+O, Ctrl+F, Ctrl+, sowie
 Ctrl+Shift+N für Notenregen. Die Mediensteuerung nutzt MPRIS2 einschließlich
 Position, Seek, Lautstärke, Wiederholung und Zufallsfolge.
 
+### Medientasten
+
+Ab 1.6.60 meldet sich die laufende App unter dem stabilen Sitzungsbusnamen
+`org.mpris.MediaPlayer2.savage`. KDE Plasma und Cinnamon können ihr so
+Play/Pause, Play, Pause, Stopp und nächster/vorheriger Titel zustellen, auch
+bei minimiertem Fenster. Zuerst einen Titel laden. Pause hält die Position;
+erneutes Play setzt fort. Nach Stopp beginnt Play am Titelanfang.
+Wiederholtes Play oder Pause schaltet den Zustand nicht um.
+
+Bei mehreren Playern wählt der Desktop das Ziel. In Plasma das Medienwidget,
+in Cinnamon die Tastatur-Kurzbefehle für Ton/Medien prüfen. Die Taste muss ein
+Medienereignis senden; eine normale F-Taste oder Leertaste genügt nicht.
+Keine zusätzliche globale Belegung einrichten, wenn der Desktop dieselbe Taste
+bereits zustellt. Lautstärke-/Stummtasten steuern den Systemausgang; MPRIS
+`Volume` steuert die App-Lautstärke. Eine beendete App wird durch die Taste
+nicht gestartet.
+
+Ohne Tastatur lässt sich die Zustellung in einem Terminal derselben grafischen
+Benutzersitzung prüfen:
+
+```bash
+gdbus call --session --dest org.mpris.MediaPlayer2.savage \
+  --object-path /org/mpris/MediaPlayer2 \
+  --method org.mpris.MediaPlayer2.Player.PlayPause
+```
+
+Mit installiertem `playerctl` geht auch `playerctl --player=savage play-pause`.
+Zusätzliche Instanzen mit eigener Sammlung erhalten bei belegtem Namen den
+Suffix `.desktop<PID>`. Ein fehlender Sitzungsbus oder Registrierungsfehler
+wird auf stderr gemeldet; die normale Wiedergabe bleibt verfügbar.
+Ein D-Bus-Test belegt die App-Steuerung. Die physische Tastenzustellung unter
+KDE und Cinnamon bleibt eine gesonderte Desktop-Abnahme.
+
 ## Konkrete Plattformunterschiede
 
 | Bereich | Linux-Verhalten und technischer Grund |
