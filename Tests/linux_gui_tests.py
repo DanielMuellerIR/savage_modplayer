@@ -89,7 +89,8 @@ class DesktopTests(unittest.TestCase):
         config.write_text("pcm.!default { type null }\n")
         self.env = dict(os.environ, QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software",
                         SAVAGE_DESKTOP_DATA=str(self.root / "data"), ALSA_CONFIG_PATH=str(config))
-        self.process = subprocess.Popen([str(GUI), "--engine", str(ENGINE), str(self.root)],
+        self.process = subprocess.Popen([str(GUI), "--engine", str(ENGINE),
+                                         str(self.root / "01.mod"), str(self.root / "02.mod")],
                                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=self.env)
         self.addCleanup(self.close)
         self.name = "org.mpris.MediaPlayer2.savage"
