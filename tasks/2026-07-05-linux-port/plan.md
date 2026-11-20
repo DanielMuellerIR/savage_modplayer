@@ -320,7 +320,7 @@ pactl unload-module $SINK          # aufräumen nicht vergessen
 
 ### Phase 3 — Desktop-Integration (teilweise erledigt 2026-08-23, 1.6.10)
 
-**Erledigt und auf dem Fleet-Linux-Host belegt:**
+**Auf Linux geprüft:**
 
 - `linux/savage-cli.desktop` meldet den Player für MOD, S3M, XM und IT an.
   `desktop-file-validate` sagt gültig; `Tests/desktop_entry_tests.py` hält
@@ -342,33 +342,13 @@ pactl unload-module $SINK          # aufräumen nicht vergessen
   Play/Pause, Stop/Neustart, pausierter Titelwechsel, Statussignale, Fehler und
   mehrere Instanzen sind auf einem echten Desktopbus geprüft.
   `Tests/mpris_contract_tests.py` nutzt lautlose synthetische Module.
-- Ein natives Linux-GUI bleibt ausgeschlossen.
+- Seit 1.6.55 gibt es zusätzlich die [Qt-Desktop-App](../../docs/linux-gui.md).
 
 ## Rahmenbedingungen
 
-- **Linux-Verifikation läuft** (seit 2026-07-15 freigeschaltet). Auf dem
-  macOS-Entwicklungsrechner gibt
-  es weder Docker noch Podman noch ein Linux-SDK; verifiziert wird auf dem
-  Fleet-Linux-Host im `swift:6.0`-Container:
-
-  ```bash
-  # Der Host traegt das Bare-Repo der Fleet — dort genuegt ein lokaler Klon
-  # des gepushten Stands, dann laeuft genau der geprueft, was gepusht wurde.
-  ssh <host> 'git clone -q --branch main ~/git/savage_modplayer.git ~/savage-linux-check/repo && \
-    cd ~/savage-linux-check/repo && \
-    docker run --rm -v "$PWD":/src -w /src swift:6.0 bash -c \
-    "apt-get update -qq && apt-get install -y -qq libasound2-dev libdbus-1-dev zlib1g-dev libarchive-tools; \
-     swift build -c release && swift test -c release"'
-  ```
-
-  Der Container laeuft als root und hinterlaesst ein root-eigenes `.build`, das
-  der naechste Lauf als normaler Nutzer nicht loeschen kann. Das Arbeitsverzeichnis
-  deshalb ebenfalls per Container aufraeumen (`docker run --rm -v "$HOME":/h
-  alpine rm -rf /h/savage-linux-check`).
-
-  Der Host ist zugleich Backup-Host — Testlast moderat halten (ein Build/Testlauf
-  am Stück, keine Dauerschleifen). Host-Details und die Etikette für GUI-/Audio-
-  Zugriffe stehen in der privaten Fleet-Doku, nicht hier.
+- **Linux-Verifikation** unter Ubuntu im `swift:6.0`-Container ausführen.
+  Die Abhängigkeiten und Befehle stehen im Linux-Job in
+  [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
 - CI: Ubuntu-Job in `.github/workflows/ci.yml`, erst wenn lokal grün. Push von
   `.github/workflows/*` nach GitHub nur auf Auftrag.
 - README.md/README.de.md: Linux-Abschnitt nach Phase 1; RELEASE_NOTES pflegen,

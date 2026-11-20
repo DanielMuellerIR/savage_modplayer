@@ -91,8 +91,16 @@ class Updater:
         deadline = time.monotonic() + 600
         with self.opener.open(request, timeout=20) as response, Path(destination).open("xb") as output:
             length = response.headers.get("Content-Length")
-            if length and int(length) > limit:
-                raise UpdateError("Update-Download ist zu groß.")
+            declared_size = None
+            if length is not None:
+                try:
+                    declared_size = int(length)
+                except ValueError as error:
+                    raise UpdateError("Ungültige Größenangabe (Content-Length) für den Update-Download.") from error
+                if declared_size < 0:
+                    raise UpdateError("Ungültige Größenangabe (Content-Length) für den Update-Download.")
+                if declared_size > limit:
+                    raise UpdateError("Update-Download ist zu groß.")
             while True:
                 self.check_cancelled()
                 if time.monotonic() > deadline:
@@ -104,7 +112,7 @@ class Updater:
                 if size > limit:
                     raise UpdateError("Update-Download ist zu groß.")
                 output.write(block)
-                self.progress(size, int(length) if length else limit)
+                self.progress(size, declared_size or limit)
         return size
 
     def verify_manifest(self, raw, signature):

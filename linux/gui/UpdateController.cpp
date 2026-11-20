@@ -12,7 +12,7 @@ UpdateController::UpdateController(const QString &dataPath, QObject *parent, con
       settings(dataPath + "/updates.ini", QSettings::IniFormat) {
     message = "Installiert: " + QCoreApplication::applicationVersion();
     connect(&worker, &QProcess::readyReadStandardOutput, this, &UpdateController::consumeOutput);
-    connect(&worker, &QProcess::readyReadStandardError, this, [this] { worker.readAllStandardError(); });
+    connect(&worker, &QProcess::readyReadStandardError, this, [this] { errorTail.read(worker); });
     connect(&worker, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
         if (error == QProcess::FailedToStart) {
             running = false;
@@ -21,8 +21,10 @@ UpdateController::UpdateController(const QString &dataPath, QObject *parent, con
         }
     });
     connect(&worker, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
-        [this](int, QProcess::ExitStatus) {
+        [this](int code, QProcess::ExitStatus status) {
             consumeOutput();
+            if (status == QProcess::CrashExit || code != 0 || !receivedResult)
+                errorTail.report(worker, "Update-Prozess:");
             running = false;
             if (!receivedResult) message = "Die Aktualisierung wurde abgebrochen oder konnte nicht abgeschlossen werden.";
             emit changed();
@@ -82,6 +84,7 @@ void UpdateController::start(const QString &action, bool isAutomatic) {
     automatic = isAutomatic;
     receivedResult = false;
     buffered.clear();
+    errorTail.clear();
     fraction = 0;
     running = true;
     if (action == "check") {

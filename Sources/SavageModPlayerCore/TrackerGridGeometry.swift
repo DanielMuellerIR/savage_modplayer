@@ -1,19 +1,7 @@
 import Foundation
 
-/// Rechenteil des Tracker-Rasters: welche Pattern-Zeilen ein Zeichenvorgang
-/// wirklich braucht.
-///
-/// Hintergrund (Profil vom 2026-08-23): Der Canvas mit den Kanalzellen ist der
-/// teuerste eigene View der Mac-App. Er ist so hoch wie das ganze Pattern —
-/// bei 64 Zeilen à 18 Punkten also 1152 Punkte —, sichtbar ist davon aber immer
-/// nur ein Ausschnitt. Eine Messung mit einer Sonde im Zeichenblock zeigte
-/// Ausschnitte von rund 519 Punkten Höhe, also 29 der 64 Zeilen. Die
-/// übrigen 35 Zeilen wurden vollständig gesetzt und gezeichnet, ohne je
-/// sichtbar zu werden.
-///
-/// Diese Berechnung liegt bewusst hier und nicht in der View: Das Testtarget
-/// hängt nur vom Core ab, und eine falsche Zeilengrenze wäre ein sichtbarer
-/// Fehler (fehlende Zeilen am Rand des Ausschnitts).
+/// Ermittelt die vom sichtbaren Ausschnitt berührten Tracker-Zeilen. Der Canvas
+/// umfasst das gesamte Pattern, der Zeichenlauf bearbeitet nur dessen Ausschnitt.
 public enum TrackerGridGeometry {
 
     /// Die Zeilen, die im gegebenen Ausschnitt liegen.

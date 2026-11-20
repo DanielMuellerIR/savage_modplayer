@@ -361,10 +361,7 @@ public final class ModPlayerCoordinator: ObservableObject {
         self.pendingStartPosition = nil
         self.pendingStartRow = nil
         self.pendingGlobalVolume = nil
-        // codereview-ok: by-design — neuer Song startet auf seinem Header-Tempo
-        // (MOD: ProTracker-Default 125/6, S3M: Initial Speed/Tempo) und setzt
-        // sein Tempo per Effekt selbst; mit dem didSet-Fix benigne, kein
-        // Datenverlust an laufender Wiedergabe (2026-07-01)
+        // Starttempo und Ticks pro Zeile gehören zum neuen Modul.
         self.bpm = mod.initialTempo
         self.speed = mod.initialSpeed
     }

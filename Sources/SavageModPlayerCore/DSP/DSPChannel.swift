@@ -190,7 +190,7 @@ public final class DSPChannel: Sendable {
     // leere Rows nicht versehentlich wie eine verzögerte Note auslösen.
     nonisolated(unsafe) public var delayNote: Int = -1
     // Arpeggio als Skalare statt [Int]? — eine Array-Allokation pro 0xy-Note lief
-    // sonst direkt im Echtzeit-Audio-Thread (verboten laut AGENTS.md).
+    // sonst direkt im Echtzeit-Renderblock.
     nonisolated(unsafe) public var arpActive: Bool = false
     nonisolated(unsafe) public var arpX: Int = 0
     nonisolated(unsafe) public var arpY: Int = 0

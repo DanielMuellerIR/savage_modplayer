@@ -1,33 +1,7 @@
 import Foundation
 
-// ============================================================================
-// PCMSink — die plattformneutrale Audio-Ausgabe-Abstraktion.
-//
-// WARUM es das gibt
-// -----------------
-// Herkunft: uebernommen aus vicious_sidplayer (Sources/ViciousSIDPlayerCore/
-// Audio/), wo diese Schicht zuerst entstanden und laufzeitgeprueft wurde. Bewusst
-// Copy statt gemeinsames Paket — erst wenn sie sich in BEIDEN Repos bewaehrt hat,
-// lohnt eine Extraktion. Aenderungen hier und dort im Blick behalten.
-//
-// Der Replayer (RenderEngine/ModuleRenderer) erzeugt reine Zahlen und weiss nichts
-// von Audio-Hardware. Wer diese Zahlen hoerbar macht, ist plattformabhaengig:
-// macOS nutzt AVAudioEngine, Linux ALSA (oder ein Rohr nach `aplay`). Damit der
-// Player-Code nicht an jeder Stelle `#if os(Linux)` streuen muss, gibt es hier
-// EINE kleine Schnittstelle, hinter der die Plattform verschwindet.
-//
-// Diese Datei ist bewusst frei von Format-Wissen: sie kennt nur Samples, Kanaele
-// und Samplerate — weder MOD/S3M/XM/IT noch Sequencer tauchen hier auf. Genau
-// deshalb liess sie sich unveraendert aus dem SID-Player uebernehmen.
-//
-// Das Pull-Modell (und warum)
-// ---------------------------
-// Audio-Ausgabe funktioniert ueberall nach dem gleichen Prinzip: die Soundkarte
-// meldet sich, wenn sie wieder Nachschub braucht, und holt ihn sich per
-// Callback ab. Man schiebt Samples also nicht hin, sondern wird gefragt
-// („Pull"). Dieses Muster bilden AVAudioSourceNode und ALSA gleichermassen ab —
-// deshalb ist es hier der gemeinsame Nenner.
-// ============================================================================
+// Die formatneutrale Audioausgabe arbeitet im Pull-Modell. Die Plattform
+// fordert interleavte PCM-Frames an, die Quelle rendert sie in den Zielpuffer.
 
 /// Beschreibt das Audio-Format, in dem ein Sink Samples entgegennimmt.
 public struct PCMFormat: Sendable, Equatable {

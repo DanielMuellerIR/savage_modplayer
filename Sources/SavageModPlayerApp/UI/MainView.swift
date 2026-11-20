@@ -73,8 +73,7 @@ struct MainView: View {
     @AppStorage("savage.visualizerHz") var visualizerHz: Double = 60
 
     // Breite der Playlist-Sidebar (ziehbar per Trenn-Handle). Persistiert, damit
-    // lange Dateinamen dauerhaft sichtbar bleiben (LIDA-XM-Problem: 260 pt fix war
-    // zu schmal, um das Datei-Ende je zu sehen). Geklemmt in sidebarWidthRange.
+    // lange Dateinamen dauerhaft sichtbar bleiben. Geklemmt in sidebarWidthRange.
     @AppStorage("savage.sidebarWidth") var sidebarWidth: Double = 260
 
     // Höhe der "ZULETZT GESPIELT"-Sektion unten in der Sidebar (ziehbar, persistiert).
@@ -229,7 +228,7 @@ struct MainView: View {
         // (+Trenner), mit Hysterese (computeCompact). Ein Top-Level-GeometryReader
         // liefert `geo.size` zuverlässig bei jeder Fenster-Größenänderung — die
         // frühere Messung per Background-GeometryReader+PreferenceKey lieferte 0×0
-        // und feuerte nur einmal (Bug 2026-07-12).
+        // und feuerte nur einmal.
         let compact = Self.computeCompact(
             CGSize(width: geo.size.width - effectiveSidebarWidth - dividerWidth, height: geo.size.height),
             current: isCompact
@@ -338,7 +337,6 @@ struct MainView: View {
                             // Defensiv gegen leere/korrupte Mods: length, patternTable und
                             // der daraus gelesene patternIndex werden vor dem Zugriff geprueft
                             // (sonst patternTable[-1] / patterns[ausserhalb] -> Crash).
-                            // codereview-ok: defensiv by-design — patternTable wird direkt danach indiziert; der isEmpty/length-Guard verhindert patternTable[-1]-Crash (2026-07-01)
                             if let mod = coordinator.activeMod,
                                mod.length > 0,
                                !mod.patternTable.isEmpty {

@@ -1,13 +1,8 @@
 """Headless-Regressionsprüfungen für SwiftUI-Bedienelemente (Mac und iOS).
 
-Das Swift-Testtarget hängt absichtlich nur vom plattformneutralen Core ab und
-kann MainView deshalb nicht instanziieren. Für die iPhone-App gibt es zwar ein
-eigenes Testtarget, aber auch dort lässt sich nicht prüfen, ob eine Ansicht
-einen bestimmten Modifier trägt — nur, was der Code dahinter tut.
-
-Diese Tests schützen deshalb genau die Stellen, an denen eine geprüfte Funktion
-mit der Oberfläche verbunden ist. Die Funktionen selbst prüfen die Swift-Tests;
-der signierte App-Build und der Simulator-Lauf bleiben die Layout-Gates.
+Die Prüfungen sichern die Anbindung einzelner Funktionen an die Oberfläche,
+etwa die sichtbaren Transportaktionen im Kompaktmodus. Verhalten und Layout
+prüfen die nativen Tests und die App-Läufe.
 """
 
 from pathlib import Path

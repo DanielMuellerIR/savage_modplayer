@@ -134,7 +134,7 @@ final class ModuleMetadataIndexTests: XCTestCase {
         XCTAssertNotNil(rebuilt.records[item.id]?.metadata)
         let blocker = work.appendingPathComponent("blocker")
         try Data("keep".utf8).write(to: blocker)
-        let service = try ModuleMetadataIndex(cacheURL: blocker.appendingPathComponent("cache.json"))
+        let service = ModuleMetadataIndex(cacheURL: blocker.appendingPathComponent("cache.json"))
         let result = await service.refresh([item])
         XCTAssertTrue(result.warnings.contains(.cacheWriteFailed))
         XCTAssertNotNil(result.records[item.id]?.metadata)
@@ -169,7 +169,7 @@ final class ModuleMetadataIndexTests: XCTestCase {
         let source = try input("keep.mod")
         let alias = work.appendingPathComponent("cache.json")
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: source.url)
-        let service = try ModuleMetadataIndex(cacheURL: alias)
+        let service = ModuleMetadataIndex(cacheURL: alias)
         let result = await service.refresh([source])
         XCTAssertNotNil(result.records[source.id]?.metadata)
         XCTAssertTrue(result.warnings.contains(.cacheWriteFailed))
@@ -204,11 +204,7 @@ private enum IndexFixtures {
         data[offset] = UInt8(value & 255); data[offset + 1] = UInt8((value >> 8) & 255)
     }
     static func mod() -> Data {
-        var d = Data(repeating: 0, count: 1084 + 1024 + 4)
-        d.replaceSubrange(0..<9, with: Data("Index MOD".utf8))
-        d[43] = 2; d[45] = 64; d[950] = 1
-        d.replaceSubrange(1080..<1084, with: Data("M.K.".utf8))
-        return d
+        ModuleTestFixtures.proTracker(title: "Index MOD")
     }
     static func s3m() -> Data {
         var d = Data(repeating: 0, count: 0x70 + 66)

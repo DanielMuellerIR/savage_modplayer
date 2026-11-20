@@ -78,8 +78,15 @@ public actor ModuleMetadataIndex {
 
     public enum ConfigurationError: Error { case invalidDurationLimit }
 
-    public init(cacheURL: URL, durationLimit: Double = 600) throws {
-        guard durationLimit.isFinite, durationLimit > 0, durationLimit <= 600 else {
+    private static let maximumDuration: Double = 600
+
+    public init(cacheURL: URL) {
+        self.cacheURL = cacheURL
+        durationLimit = Self.maximumDuration
+    }
+
+    public init(cacheURL: URL, durationLimit: Double) throws {
+        guard durationLimit.isFinite, durationLimit > 0, durationLimit <= Self.maximumDuration else {
             throw ConfigurationError.invalidDurationLimit
         }
         self.cacheURL = cacheURL

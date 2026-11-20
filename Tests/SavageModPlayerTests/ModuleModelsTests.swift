@@ -2,7 +2,6 @@ import XCTest
 @testable import SavageModPlayerCore
 
 /// Sichert die reinen Datenmodelle für Tracker-Format und Wiedergaberegeln ab.
-/// Parser, Loader und DSP werden in diesem Meilenstein bewusst noch nicht verdrahtet.
 final class ModuleModelsTests: XCTestCase {
 
     func testModuleFormatRawValuesAndDisplayNames() {

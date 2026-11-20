@@ -10,7 +10,7 @@ import AVFoundation
 // ============================================================================
 // AVAudioEnginePCMSink — Echtzeit-Ausgabe auf Apple-Plattformen.
 //
-// Herkunft: uebernommen aus vicious_sidplayer (siehe PCMSink.swift). Das Muster
+// Das Muster
 // ist dasselbe wie im ModPlayerCoordinator: AVAudioEngine + AVAudioSourceNode am
 // Haupt-Mixer. Der Unterschied ist nur, WOHER die Samples kommen: der Coordinator
 // baut sich seinen Renderblock selbst und versorgt nebenbei VU-Meter und

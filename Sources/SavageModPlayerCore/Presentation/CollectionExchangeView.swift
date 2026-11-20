@@ -373,17 +373,16 @@ struct CollectionExchangeTrackChooser: View {
             .task(id: query) {
                 let all = model.state?.sources ?? [], query = query
                 let limit = CollectionExchangeModel.maximumVisibleRows
-                do {
-                    if !query.isEmpty { try await Task.sleep(for: .milliseconds(120)) }
-                    let result = await Task.detached(priority: .userInitiated) {
-                        let rows = all.map { ($0, CollectionExchangeView.localSourceDescription($0.reference)) }
-                            .filter { query.isEmpty || ($0.0.reference.displayName + " " + $0.1).localizedCaseInsensitiveContains(query) }
-                            .sorted { $0.1 < $1.1 }
-                        return (rows.count, Array(rows.prefix(limit).map(\.0)))
-                    }.value
-                    guard !Task.isCancelled else { return }
-                    total = result.0; sources = result.1
-                } catch { }
+                if !query.isEmpty { try? await Task.sleep(for: .milliseconds(120)) }
+                guard !Task.isCancelled else { return }
+                let result = await Task.detached(priority: .userInitiated) {
+                    let rows = all.map { ($0, CollectionExchangeView.localSourceDescription($0.reference)) }
+                        .filter { query.isEmpty || ($0.0.reference.displayName + " " + $0.1).localizedCaseInsensitiveContains(query) }
+                        .sorted { $0.1 < $1.1 }
+                    return (rows.count, Array(rows.prefix(limit).map(\.0)))
+                }.value
+                guard !Task.isCancelled else { return }
+                total = result.0; sources = result.1
             }
     }
     private var footerLayout: AnyLayout {

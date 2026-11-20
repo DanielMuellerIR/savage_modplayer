@@ -4,6 +4,7 @@
 #include <QTemporaryDir>
 #include <QSettings>
 #include <QDateTime>
+#include <QRegularExpression>
 #include "UpdateController.h"
 
 class UpdateTests : public QObject {
@@ -56,6 +57,23 @@ private slots:
         QVERIFY(controller.installed());
         QVERIFY(!controller.canInstall());
         QVERIFY(controller.status().contains("nächsten Start"));
+    }
+    void reportsBoundedDiagnosticsOnWorkerFailure() {
+        QTemporaryDir temp;
+        const auto bundle = prepare(temp);
+        QFile script(bundle + "/update.py");
+        QVERIFY(script.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        script.write("import sys\n"
+                     "sys.stderr.write('discard this prefix' + 'x'*5000 + ':diagnostic')\n"
+                     "sys.exit(1)\n");
+        script.close();
+
+        UpdateController controller(temp.path(), nullptr, bundle);
+        controller.setAutomaticallyChecks(false);
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression("^Update-Prozess: x{4085}:diagnostic$"));
+        controller.check();
+        QTRY_VERIFY_WITH_TIMEOUT(!controller.busy(), 5000);
+        QVERIFY(controller.status().contains("abgebrochen"));
     }
     void authenticatedPackageInstall() {
         const auto bundle = qEnvironmentVariable("SAVAGE_UPDATE_FIXTURE_BUNDLE");

@@ -406,8 +406,9 @@ below audibility.
 ### Bonus HTML5 player
 
 ```bash
+npm ci --ignore-scripts
 python3 build.py                  # → savage-mod-player.html (under 60 KB)
-python3 build.py --no-min         # without minification
+python3 build.py --debug          # separate WebKit smoke-test bundle
 ```
 
 The generated single-file variant `savage-mod-player.html` is part of

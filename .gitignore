@@ -1,6 +1,8 @@
 .DS_Store
 .commit-lock
 .build/
+/node_modules/
+/.codeqa/
 .swiftpm/
 __pycache__/
 xcuserdata/

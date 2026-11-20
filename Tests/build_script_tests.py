@@ -432,17 +432,24 @@ class ApplicationsFolderTests(unittest.TestCase):
 
 
 class JavaScriptMinifierTests(unittest.TestCase):
-    """Der Minifizierer darf sichtbare Texte nicht umschreiben."""
+    """Der Minifizierer erhält String- und Regex-Verhalten."""
 
-    def test_punctuation_inside_strings_is_preserved(self):
+    def test_punctuation_in_strings_and_regex_classes_is_preserved(self):
         source = (
-            "throw new Error(`Leeres MOD (Songlänge 0): ${label}`); "
-            "const choice = ok ? left : right;")
+            'const label = "fixture"; '
+            'console.log(`Leeres MOD (Songlänge 0): ${label}`); '
+            'console.log(/[/*]/.test("/"), /[/*]/.test("*"), /[/*]/.test("."));'
+        )
 
-        result = BUILD_MODULE.minify_js(source)
+        result = subprocess.run(
+            ["node"], input=BUILD_MODULE.minify_js(source), text=True,
+            capture_output=True, check=True,
+        )
 
-        self.assertIn("`Leeres MOD (Songlänge 0): ${label}`", result)
-        self.assertIn("const choice=ok?left:right;", result)
+        self.assertEqual(result.stdout.splitlines(), [
+            "Leeres MOD (Songlänge 0): fixture",
+            "true true false",
+        ])
 
 
 class IOSSimulatorScriptTests(unittest.TestCase):

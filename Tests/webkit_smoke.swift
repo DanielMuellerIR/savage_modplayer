@@ -17,8 +17,12 @@ final class Runner: NSObject, WKNavigationDelegate {
             tick += 1
             if tick > 50 { print("TIMEOUT"); timer.invalidate(); exit(1) }
             web.evaluateJavaScript("document.getElementById('drop-autoplay-test-result')?.textContent") { value, error in
-                if let string = value as? String, string.contains("\"ok\": true") {
+                if let string = value as? String, let data = string.data(using: .utf8),
+                   let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let ok = result["ok"] as? Bool {
+                    timer.invalidate()
                     print(string)
+                    guard ok else { exit(1) }
                     self.web.evaluateJavaScript("document.getElementById('play-btn')?.click(); window.__savageDebug.getState()") { state, error in
                         guard error == nil, let state = state as? [String: Any],
                               state["playerPlaying"] as? Bool == false else {

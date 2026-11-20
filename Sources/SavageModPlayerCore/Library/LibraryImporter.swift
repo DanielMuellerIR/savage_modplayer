@@ -767,7 +767,7 @@ public final class LibraryImporter: @unchecked Sendable {
         // hier nur `canImport(Compression)`, fiel ein unter Linux abgebrochener
         // ZIP-Import nicht durch den Abbruchpfad, sondern wurde als
         // Archivfehler gemeldet — der Importvertrag wich zwischen Apple und
-        // Linux ab (Review-Fund 2026-08-25).
+        // Linux ab.
         #if canImport(Compression) || canImport(CZlib)
         if case ZipArchiveError.cancelled = error { return true }
         #endif

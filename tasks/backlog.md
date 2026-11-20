@@ -53,8 +53,7 @@ Release Notes, abgeschlossenen Tasks und `archive/`.
    HAL-Zeitstempel; die GitHub-CI deckte diesen zusätzlichen Randfall auf. Zu prüfen
    war die erste Initialisierung der Vibratotabelle im Echtzeitpfad: im Debug-
    Build bestätigt, seit 1.6.24 beim Kanalaufbau vorbereitet. Der Release-
-   Compiler las bereits direkt aus konstanten Daten. Belege stehen in der
-   [Audio-Gegenprobe](../docs/reviews/2026-10-07-audio-checks.md).
+   Compiler las bereits direkt aus konstanten Daten. Die Ergebnisse sind in den Release Notes der genannten Versionen festgehalten.
    Für den iPhone-Gerätetest zusätzlich Unterbrechung → Kopfhörer entfernen →
    Ende der Unterbrechung prüfen; der Simulator belegt den Zustandswechsel,
    nicht das reale Audio-Routing.
@@ -138,7 +137,7 @@ Die [Abgleich-Anbindung](../docs/collection-sync.md) ist seit 1.6.51 auf Mac und
   Sinussignal; Browser-Timing und hörbares A/B bleiben vor einer Umsetzung
   erforderlich. Anti-Click glättet Sprünge, kann aber kurze Anschläge stark
   schwächen; kein konkreter störender Titelübergang bestätigt. Deshalb kein
-  Klangdefault geändert. [Versuch und Grenzen](../docs/reviews/2026-10-07-audio-ideas.md).
+  Klangdefault geändert.
 - **PCMSink-Extraktion:** Die Ausgabeschicht liegt als bewusste Kopie in
   savage_modplayer und vicious_sidplayer. Erst wenn sie sich in beiden bewährt
   hat, lohnt ein gemeinsames Paket — bis dahin Änderungen beidseitig abgleichen.
@@ -163,8 +162,7 @@ Die [Abgleich-Anbindung](../docs/collection-sync.md) ist seit 1.6.51 auf Mac und
 
 ## Nicht offen
 
-Das [vollständige Quellcode-Review vom 2026-10-07](../docs/reviews/2026-10-07-full-code-review.md)
-ist mit Version 1.6.28 umgesetzt; bestätigte Funde und Prüfgrenzen sind dort dokumentiert.
+Die Korrekturen aus der Code-Prüfung vom 2026-10-07 sind in den Release Notes zu 1.6.28 festgehalten.
 
 Das Finder-Layout des DMG ist seit 1.6.16 korrigiert: gespeicherte
 Fenstergröße 600 × 600 Punkte und Icons in den vorgesehenen Plätzen.

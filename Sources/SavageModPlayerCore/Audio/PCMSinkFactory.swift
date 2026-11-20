@@ -1,13 +1,7 @@
 import Foundation
 
-// ============================================================================
-// PCMSinkFactory — waehlt die passende Audio-Ausgabe fuer die Plattform.
-//
-// Das ist die EINZIGE Stelle im Projekt, an der entschieden wird „macOS oder
-// Linux?". Alles andere redet nur noch mit dem `PCMSink`-Protokoll.
-//
-// Herkunft: uebernommen aus vicious_sidplayer — siehe PCMSink.swift.
-// ============================================================================
+// Wählt die PCM-Ausgabe des Hosts. Die Quelle kann vor dem Rendern das
+// bevorzugte Geräteformat erfragen und damit unnötiges Resampling vermeiden.
 public enum PCMSinkFactory {
 
     /// Das Format, mit dem die Quelle auf dieser Plattform am besten faehrt.

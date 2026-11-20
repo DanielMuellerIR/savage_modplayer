@@ -1,37 +1,5 @@
-// ============================================================================
-// ALSAPCMSink — die Linux-Audioausgabe hinter dem PCMSink-Protokoll.
-//
-// Die GANZE Datei steckt in `#if os(Linux)`, denn ALSA gibt es nur dort. Auf dem
-// Mac faellt sie damit ersatzlos weg; der Compiler sieht hier schlicht nichts.
-//
-// Herkunft: wortgleich uebernommen aus vicious_sidplayer (siehe PCMSink.swift).
-// Kein Format-Wissen in dieser Datei — sie kennt nur Samples, Kanaele und
-// Samplerate.
-//
-// Was ist ALSA?
-// -------------
-// ALSA (Advanced Linux Sound Architecture) ist die Audio-Schicht des
-// Linux-Kernels plus die Nutzerbibliothek `libasound`. Man oeffnet ein
-// "PCM-Geraet", stellt Format/Kanaele/Rate ein und schiebt dann Bloecke von
-// Samples hinein. Die Bibliothek haelt einen Ringpuffer vor, aus dem die
-// Soundkarte gleichmaessig liest.
-//
-// Die zwei Begriffe, die man verstanden haben muss:
-//
-// * **Interleaved**: bei Stereo liegen die Kanaele abwechselnd hintereinander
-//   (L, R, L, R, …) statt in zwei getrennten Bloecken. Ein "Frame" ist ein
-//   Satz aus allen Kanaelen, bei Stereo also zwei Int16-Werte. Genau dieses
-//   Layout liefert der PCMRenderBlock schon — es muss nichts umsortiert werden.
-//
-// * **Underrun** (auch "XRUN"): Der Ringpuffer laeuft leer, weil wir nicht
-//   schnell genug nachgeliefert haben. Die Soundkarte hat dann nichts zu
-//   spielen — das hoert man als Knackser. ALSA meldet danach bei JEDEM weiteren
-//   Schreibversuch den Fehler -EPIPE und nimmt erst wieder Daten an, wenn wir
-//   den Stream mit `snd_pcm_prepare` neu scharf machen. Ein Underrun ist also
-//   kein Grund abzubrechen, sondern ein Grund aufzuraeumen und weiterzumachen.
-//   Wer das nicht behandelt, bekommt einen Player, der nach dem ersten
-//   Lastspitzen-Hickser fuer immer stumm bleibt.
-// ============================================================================
+// ALSA übernimmt interleavte Frames. Ein Underrun meldet -EPIPE. Erst
+// snd_pcm_prepare macht den Stream wieder für Schreibzugriffe bereit.
 
 #if os(Linux)
 import Foundation

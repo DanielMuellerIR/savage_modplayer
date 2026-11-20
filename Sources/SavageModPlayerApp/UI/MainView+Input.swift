@@ -26,7 +26,6 @@ extension MainView {
             // Nicht in Textfelder (Suche/Export) eingreifen. Der Feld-Editor eines
             // fokussierten SwiftUI-TextField IST eine NSText-Subklasse (NSTextView),
             // daher greift dieser Guard tatsaechlich — kein toter Code.
-            // codereview-ok: NSText-Guard ist funktional, kein toter Zweig (2026-07-02)
             if NSApp.keyWindow?.firstResponder is NSText { return event }
             switch event.keyCode {
             case 49: // Leertaste

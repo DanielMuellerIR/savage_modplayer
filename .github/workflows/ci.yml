@@ -14,7 +14,7 @@ jobs:
     # 'swift-tools-version: 6.0' in Package.swift.
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Kontext- und Doku-Regeln
         run: python3 Tests/context_hygiene_tests.py
@@ -27,6 +27,12 @@ jobs:
 
       # Schutzregeln im Quelltext und kontrollierte Skriptläufe mit temporären
       # Dateien prüfen; die Systeminstallation und Notarisierung bleiben unberührt.
+      - name: Shell-Syntax
+        run: git ls-files -z '*.sh' | xargs -0 -n1 bash -n
+
+      - name: Web-Build-Werkzeuge
+        run: npm ci --ignore-scripts
+
       - name: Build-, Release-, Start- und Referenztests
         run: |
           python3 Tests/build_script_tests.py
@@ -97,6 +103,7 @@ jobs:
       - name: Single-File-HTML ist aktuell (build.py)
         run: |
           python3 build.py
+          python3 Tests/web_bundle_tests.py
           if ! git diff --exit-code savage-mod-player.html; then
             echo "::error::savage-mod-player.html ist veraltet. 'python3 build.py' ausfuehren und committen."
             exit 1
@@ -109,7 +116,7 @@ jobs:
     # parallel laufen.
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Xcode Version
         run: xcodebuild -version
@@ -124,7 +131,7 @@ jobs:
     runs-on: ubuntu-latest
     container: swift:6.0
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Linux dependencies
         run: |

@@ -1,42 +1,16 @@
 #!/usr/bin/env python3
-"""
-build.py — bündelt alle Quellen zu einer einzigen, minifizierten savage-mod-player.html.
+"""Bündelt den Webplayer als eigenständige HTML-Datei.
 
-Quelldateien (alle im Repo, kein Build-Tool, keine Abhängigkeiten):
-
-    modplayer.js                Mod-Parser + ModPlayer-Wrapper (ES-Modul)
-    mod-player-worklet.js       AudioWorklet-Sample-Mixer
-    src/styles.css              UI-Styles
-    src/body.html               Body-Markup
-    src/app.js                  App-Logik (DOM-Wiring, Drag&Drop, …)
-
-Schritte:
-
-    1. Quelldateien einlesen.
-    2. ES-Modul-Keywords aus modplayer.js entfernen (Inline-Skript).
-    3. JS / CSS / HTML konservativ minifizieren (stdlib-only Implementierung).
-    4. Das AudioWorklet wird als String eingebettet und zur Laufzeit per
-       Blob-URL geladen — so funktioniert es auch aus file:// heraus.
-    5. Alles zu einer einzigen HTML-Datei zusammenfassen.
-
-Aufruf:
-
-    python3 build.py            # erzeugt savage-mod-player.html (minifiziert)
-    python3 build.py --no-min   # ohne Minifizierung (zum Debuggen)
-
-Minifizierung ist konservativ:
-    - JS: entfernt Kommentare, kollabiert Whitespace; bewahrt Zeilenumbrüche,
-      um Automatic-Semicolon-Insertion (ASI) nicht zu zerschießen.
-    - CSS: entfernt Kommentare und Whitespace, strafft `;:,{}`-Umgebungen.
-    - HTML: entfernt Kommentare und Whitespace zwischen Tags.
-
-Keine Regex-Literals im Quell-JS, daher reicht ein einfacher String-/Comment-
-Parser. Wer später Regexe verwendet, muss minify_js() erweitern.
+Minifizierte Ausgabe: npm ci --ignore-scripts, dann python3 build.py.
+Mit --debug entsteht unter .build/web eine separate Ausgabe für den Browser-Selbsttest.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -44,175 +18,14 @@ HERE = Path(__file__).parent
 SRC_DIR = HERE / 'src'
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Minifizierer
-# ─────────────────────────────────────────────────────────────────────────────
-
-def strip_js_comments(src: str) -> str:
-    """
-    Entfernt JavaScript-Kommentare, ohne Strings oder Template-Literale
-    zu zerschießen.
-
-    Behandelt:
-        - "..."   doppelte Anführungszeichen
-        - '...'   einfache Anführungszeichen
-        - `...`   Template-Literale (können mehrzeilig sein)
-        - // ...  Zeilenkommentar bis Zeilenende
-        - /* ... */  Block-Kommentar (kann mehrzeilig sein)
-
-    Voraussetzung: keine Regex-Literals im Code (z.B. /foo/g). Diese
-    würden hier fälschlich als Kommentar interpretiert. Aktueller
-    Quellcode kommt ohne Regex-Literale aus.
-    """
-    out = []
-    i = 0
-    n = len(src)
-    while i < n:
-        c = src[i]
-        nxt = src[i + 1] if i + 1 < n else ''
-
-        # String-Literale durchreichen (mit Escapes).
-        if c in ('"', "'", '`'):
-            quote = c
-            out.append(c)
-            i += 1
-            while i < n:
-                ch = src[i]
-                if ch == '\\' and i + 1 < n:
-                    out.append(ch)
-                    out.append(src[i + 1])
-                    i += 2
-                    continue
-                out.append(ch)
-                i += 1
-                if ch == quote:
-                    break
-            continue
-
-        # Zeilenkommentar: alles bis zum Newline schlucken (Newline behalten).
-        if c == '/' and nxt == '/':
-            i += 2
-            while i < n and src[i] != '\n':
-                i += 1
-            continue
-
-        # Block-Kommentar: alles bis zum nächsten "*/" schlucken.
-        if c == '/' and nxt == '*':
-            i += 2
-            while i < n - 1 and not (src[i] == '*' and src[i + 1] == '/'):
-                i += 1
-            i += 2  # über "*/" hinwegspringen
-            continue
-
-        out.append(c)
-        i += 1
-    return ''.join(out)
-
-
-def collapse_js_whitespace(src: str) -> str:
-    """
-    Kollabiert Whitespace im JavaScript, ohne Strings zu berühren und
-    ohne nötige Zeilenumbrüche zu entfernen (Schutz vor ASI-Bugs).
-
-    Strategie:
-        - In Strings: 1:1 durchreichen.
-        - Außerhalb: aufeinanderfolgende Whitespaces zu maximal einem
-          Newline (wenn mindestens einer dabei war) oder einem Space
-          (sonst) zusammenziehen.
-    """
-    out = []
-    i = 0
-    n = len(src)
-    while i < n:
-        c = src[i]
-
-        # Strings durchreichen.
-        if c in ('"', "'", '`'):
-            quote = c
-            out.append(c)
-            i += 1
-            while i < n:
-                ch = src[i]
-                if ch == '\\' and i + 1 < n:
-                    out.append(ch)
-                    out.append(src[i + 1])
-                    i += 2
-                    continue
-                out.append(ch)
-                i += 1
-                if ch == quote:
-                    break
-            continue
-
-        # Whitespace-Block zusammenfassen.
-        if c.isspace():
-            had_newline = False
-            while i < n and src[i].isspace():
-                if src[i] == '\n':
-                    had_newline = True
-                i += 1
-            out.append('\n' if had_newline else ' ')
-            continue
-
-        out.append(c)
-        i += 1
-    return ''.join(out)
-
-
-def tighten_js_punctuation(src: str) -> str:
-    """
-    Entfernt unnötige Spaces direkt vor/nach Satzzeichen, die in JS
-    immer ein Token-Ende markieren. Sehr konservativ — bewahrt
-    Zeilenumbrüche, denn die brauchen wir für ASI.
-    """
-    # Spaces (kein Newline) um diese Zeichen sind redundant.
-    # Achtung: NUR Spaces matchen, keine Newlines (\n).
-    # WICHTIG: + und - sind bewusst NICHT dabei. Wuerde man sie straffen, koennte
-    # aus "a + +b" faelschlich "a++b" (Post-Increment) oder aus "a - -b" "a--b"
-    # werden — eine Semantik-Aenderung. Spaces um +/- bleiben daher erhalten
-    # (winziger Groessen-Aufschlag, dafuer korrekt). Lookarounds helfen hier nicht,
-    # weil sie die Original-Nachbarn pruefen, nicht das Ergebnis nach dem Entfernen.
-    punct = r'[{}()\[\];,:?=<>*/%&|^!~]'
-
-    def tighten_code(code: str) -> str:
-        code = re.sub(rf' *({punct}) *', r'\1', code)
-        code = re.sub(r'\n{2,}', '\n', code)
-        code = re.sub(r'[ \t]+\n', '\n', code)
-        return re.sub(r'\n[ \t]+', '\n', code)
-
-    # Nur Code-Segmente straffen. Die vorherige Regex lief ueber den gesamten
-    # Quelltext und machte aus sichtbaren Meldungen etwa "MOD (…): Datei"
-    # faelschlich "MOD(…):Datei".
-    out = []
-    code_start = 0
-    i = 0
-    while i < len(src):
-        if src[i] not in ('"', "'", '`'):
-            i += 1
-            continue
-        out.append(tighten_code(src[code_start:i]))
-        quote = src[i]
-        string_start = i
-        i += 1
-        while i < len(src):
-            if src[i] == '\\' and i + 1 < len(src):
-                i += 2
-                continue
-            i += 1
-            if src[i - 1] == quote:
-                break
-        out.append(src[string_start:i])
-        code_start = i
-    out.append(tighten_code(src[code_start:]))
-    return ''.join(out).strip()
-
-
 def minify_js(src: str) -> str:
-    """JS minifizieren — Kommentare raus, Whitespace straffen."""
-    src = strip_js_comments(src)
-    src = collapse_js_whitespace(src)
-    src = tighten_js_punctuation(src)
-    return src
+    terser = HERE / "node_modules" / "terser" / "bin" / "terser"
+    if not terser.is_file():
+        raise SystemExit("Web-Build: zuerst npm ci --ignore-scripts ausführen.")
+    return subprocess.run(
+        ["node", str(terser), "--ecma", "2020", "--format", "inline_script=true"],
+        input=src, stdout=subprocess.PIPE, text=True, check=True,
+    ).stdout.strip()
 
 
 def minify_css(src: str) -> str:
@@ -256,19 +69,18 @@ def strip_module_keywords(src: str) -> str:
     Entfernt ES-Modul-Keywords aus modplayer.js, damit das Skript inline
     in einem <script>-Tag (ohne type=module) funktioniert.
     """
-    return (src
-            .replace('export class', 'class')
-            .replace('export async function', 'async function')
-            .replace('export function', 'function'))
+    return re.sub(r"^export (?=(?:async )?(?:class|function) )", "", src, flags=re.MULTILINE)
 
 
-def build(minify: bool = True) -> Path:
-    """Baut die finale modplayer.html und gibt den Pfad zurück."""
+def build(minify: bool = True, debug: bool = False) -> Path:
+    """Erstellt die HTML-Datei und gibt ihren Pfad zurück."""
     worklet_src = (HERE / 'mod-player-worklet.js').read_text()
     modplayer_src = (HERE / 'modplayer.js').read_text()
     css_src = (SRC_DIR / 'styles.css').read_text()
     body_src = (SRC_DIR / 'body.html').read_text()
     app_src = (SRC_DIR / 'app.js').read_text()
+    if debug:
+        app_src += "\n" + (SRC_DIR / 'debug.js').read_text()
     # Versions-String aus der VERSION-Datei lesen und in body.html einsetzen.
     # So gibt es genau eine Quelle für die Versionsnummer.
     version = (HERE / 'VERSION').read_text().strip()
@@ -278,11 +90,14 @@ def build(minify: bool = True) -> Path:
 
     if minify:
         worklet_src = minify_js(worklet_src)
-        modplayer_src = minify_js(modplayer_src)
-        app_src = minify_js(app_src)
         css_src = minify_css(css_src)
         body_src = minify_html(body_src)
 
+    inline_src = modplayer_src + "\n" + app_src
+    if minify:
+        inline_src = minify_js(inline_src)
+
+    worklet_literal = json.dumps(worklet_src).replace("<", r"<")
     html = (
         '<!doctype html>'
         '<html lang="de">'
@@ -297,23 +112,29 @@ def build(minify: bool = True) -> Path:
         '<script>'
         # Worklet-Quelltext als String → Blob-URL → audioWorklet.addModule()
         # akzeptiert das auch aus file://, ohne CORS-Stress.
-        f'const WORKLET_SOURCE={worklet_src!r};'
-        "const WORKLET_BLOB_URL=URL.createObjectURL(new Blob([WORKLET_SOURCE],{type:'application/javascript'}));"
-        f'{modplayer_src}\n'
-        f'{app_src}'
+        f'const WORKLET_SOURCE={worklet_literal};\n'
+        "const WORKLET_BLOB_URL=URL.createObjectURL(new Blob([WORKLET_SOURCE],{type:'application/javascript'}));\n"
+        f'{inline_src}'
         '</script>'
         '</body>'
         '</html>'
     )
 
     out = HERE / 'savage-mod-player.html'
-    out.write_text(html)
+    if debug:
+        out = HERE / ".build" / "web" / out.name
+        out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(html, encoding="utf-8")
     return out
 
 
 def main(argv: list[str]) -> int:
-    minify = '--no-min' not in argv and '--no-minify' not in argv
-    out = build(minify=minify)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--no-min", "--no-minify", action="store_true")
+    parser.add_argument("--debug", action="store_true")
+    options = parser.parse_args(argv)
+    minify = not options.no_min
+    out = build(minify=minify, debug=options.debug)
     size = out.stat().st_size
     mode = 'minifiziert' if minify else 'unminifiziert'
     print(f'Geschrieben: {out} ({size:,} Bytes, {mode})')

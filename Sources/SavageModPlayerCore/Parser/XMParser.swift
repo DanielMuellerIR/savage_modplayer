@@ -203,7 +203,7 @@ public class XMParser {
                 // Die deklarierten Pattern-Daten müssen VOLLSTÄNDIG in der Datei
                 // liegen. Ein `min(…, data.count)` würde das Fenster still am
                 // Dateiende kürzen und eine abgeschnittene Datei als gültig
-                // durchlassen (bestätigte Falle, siehe AGENTS.md).
+                // durchlassen.
                 let dataEnd = try checkedEnd(start: dataStart, length: patternDataSize)
                 var cursor = dataStart
                 var cell = 0

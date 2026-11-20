@@ -415,8 +415,9 @@ etwa 115 dB unter dem Signal und damit weit unter der Hörschwelle.
 ### HTML5-Bonusplayer
 
 ```bash
+npm ci --ignore-scripts
 python3 build.py                  # → savage-mod-player.html (unter 60 KB)
-python3 build.py --no-min         # ohne Minifizierung
+python3 build.py --debug          # separates Bundle für WebKit-Smoke
 ```
 
 Die erzeugte Single-File-Variante `savage-mod-player.html` ist Teil des

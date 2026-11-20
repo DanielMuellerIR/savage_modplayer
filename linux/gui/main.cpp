@@ -28,6 +28,7 @@
 #include "VideoRenderer.h"
 #include "MediaControls.h"
 #include "UpdateController.h"
+#include "ProcessErrorTail.h"
 
 static volatile std::sig_atomic_t terminateRequested = 0;
 static void requestTermination(int) { terminateRequested = 1; }
@@ -48,6 +49,7 @@ public:
     QVariantList pendingTracks, pendingVisible;
     QProcess process;
     QByteArray buffered;
+    ProcessErrorTail errorTail;
     QStringList startupPaths;
     bool captureStopped = false;
     QString confirmedOverwrite;
@@ -87,12 +89,17 @@ public:
         connect(&process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
             emit message("error", {{"message", "Die Wiedergabe-Engine konnte nicht gestartet werden: " + process.errorString()}});
         });
-        connect(&process, &QProcess::readyReadStandardError, this, [this] { process.readAllStandardError(); });
+        connect(&process, &QProcess::readyReadStandardError, this, [this] { errorTail.read(process); });
         connect(&process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, [this](int code, QProcess::ExitStatus status) {
+            if (status == QProcess::CrashExit || code != 0 || !closing)
+                errorTail.report(process, "Wiedergabe-Engine:");
             if (!closing) emit message("error", {{"message", QString("Die Wiedergabe-Engine wurde beendet (%1). Bitte die App neu starten.").arg(code)}, {"crash", status == QProcess::CrashExit}});
         });
     }
-    void start(const QString &executable) { process.start(executable, {}); }
+    void start(const QString &executable) {
+        errorTail.clear();
+        process.start(executable, {});
+    }
     Q_INVOKABLE void send(const QVariantMap &values) {
         if (!ready && values.value("command") == "open") { startupPaths = values.value("paths").toStringList(); return; }
         if (process.state() != QProcess::Running) return;

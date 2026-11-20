@@ -174,15 +174,10 @@ export function parseModBuffer(arrayBuffer, label = 'buffer') {
 
 // ─── ModPlayer ─────────────────────────────────────────────────────────────────
 
-// Tabelle: aus Period -> MIDI-Noten-Index (0..47), wird vom Worklet-Event
-// bei "watchNotes" gebraucht, damit Aufrufer die Notennummer bekommen.
-// An PERIODS[0] = 856 (C-1) verankert, damit die an watchNotes() gemeldeten
-// Indizes mit der Bildschirm-Notentabelle uebereinstimmen (vorher +12, eine
-// Oktave zu hoch). 856->0, 428->12, 214->24, 56->47.
-// codereview-ok: kein Crash, funktional harmlos — nur Speicherverschwendung, reine Micro-Optimierung, kein Bug (2026-07-01)
-const notePerPeriod = new Array(65536);
-for (let p = 0; p < 65536; p++) {
-  notePerPeriod[p] = p > 0 ? Math.round(12 * Math.log2(856 / p)) : null;
+// C-1 (Periode 856) entspricht Index 0 der Anzeige.
+function noteForPeriod(period) {
+  if (!Number.isInteger(period) || period < 0 || period > 65535) return undefined;
+  return period === 0 ? null : Math.round(12 * Math.log2(856 / period));
 }
 
 export class ModPlayer {
@@ -313,12 +308,13 @@ export class ModPlayer {
       this.stop();
       for (const cb of this.stopCallbacks) cb();
     } else if (data.type === 'note') {
+      const note = noteForPeriod(data.period);
       for (const cb of this.noteCallbacks) {
         cb({
           channel: data.channel,
           sample: data.sample,
           volume: data.volume,
-          note: notePerPeriod[data.period]
+          note
         });
       }
     } else if (data.type === 'levels') {

@@ -228,19 +228,20 @@ public final class CollectionExchangeModel: ObservableObject {
         if tracks.isEmpty { matchingTrackCount = 0; visibleTracks = []; isFiltering = false; return }
         isFiltering = true
         filterTask = Task { [weak self] in
-            do {
-                if !query.isEmpty { try await Task.sleep(for: .milliseconds(120)) }
-                let result = await Task.detached(priority: .userInitiated) {
-                    let filtered = tracks.filter {
-                        (!unresolved || (mapping[$0.id] == nil && !skipped.contains($0.id)))
-                            && (query.isEmpty || ($0.descriptor.fileName + " " + ($0.descriptor.relativePath ?? "")
-                                + " " + $0.descriptor.archiveMembers.joined(separator: " ")).localizedCaseInsensitiveContains(query))
-                    }
-                    return (filtered.count, Array(filtered.prefix(Self.maximumVisibleRows)))
-                }.value
-                guard let self, !Task.isCancelled, filterRequest == token else { return }
-                matchingTrackCount = result.0; visibleTracks = result.1; isFiltering = false
-            } catch { }
+            if !query.isEmpty { try? await Task.sleep(for: .milliseconds(120)) }
+            guard !Task.isCancelled else { return }
+            let result = await Task.detached(priority: .userInitiated) {
+                let filtered = tracks.filter {
+                    (!unresolved || (mapping[$0.id] == nil && !skipped.contains($0.id)))
+                        && (query.isEmpty || ($0.descriptor.fileName + " " + ($0.descriptor.relativePath ?? "")
+                            + " " + $0.descriptor.archiveMembers.joined(separator: " ")).localizedCaseInsensitiveContains(query))
+                }
+                return (filtered.count, Array(filtered.prefix(Self.maximumVisibleRows)))
+            }.value
+            guard let self, !Task.isCancelled, filterRequest == token else { return }
+            matchingTrackCount = result.0
+            visibleTracks = result.1
+            isFiltering = false
         }
     }
 }

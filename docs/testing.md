@@ -229,16 +229,17 @@ lassen, sonst prüfen sie stillschweigend das alte Binary.
 ## HTML5-Player
 
 - Nach Änderungen an `src/`, `modplayer.js`, `mod-player-worklet.js`, `VERSION`
-  oder am Bundler: `python3 build.py` und den Diff von
-  `savage-mod-player.html` semantisch prüfen.
+  oder am Bundler: `npm ci --ignore-scripts`, `python3 build.py` und
+  `python3 Tests/web_bundle_tests.py` ausführen. Den HTML-Diff semantisch prüfen.
 - Parser-Grenzen des Browserplayers mit
   `node Tests/js/pattern-bounds.mjs` prüfen.
 - DSP-Änderungen immer mit `node Tests/js/worklet-timing.mjs` gegen Swift prüfen.
-- Drop-Autoplay-Smoke: `python3 -m http.server 8765`, dann
+- Drop-Autoplay-Smoke: `python3 build.py --debug` und
+  `python3 -m http.server 8765 --bind 127.0.0.1 --directory .build/web`, dann
   `http://127.0.0.1:8765/savage-mod-player.html?testDropAutoplay=1` laden und
   prüfen, dass der simulierte Ordner-Drop `PLAYING` meldet.
 - Der Browserplayer bleibt absichtlich auf klassische 4-Kanal-MODs begrenzt;
-  Swift-only-Formate nicht aus Symmetriegründen in das 40-KB-Produkt ziehen.
+  Swift-only-Formate nicht aus Symmetriegründen in den für 4-Kanal-MODs ausgelegten Player ziehen.
 
 ## Native App und Quick Look
 
@@ -529,7 +530,8 @@ macOS-App mit steuerbaren Provider-Abschlüssen nach Stop, Timerablauf, neuer
 Dateiauswahl und einem neueren Drop. Die Übergabe aus Finder ist ein separater
 GUI-Test.
 
-Ein fokusfreier Browser-Smoke auf macOS ist mit WebKit möglich:
+Der Debug-Build aus dem HTML5-Abschnitt enthält ein synthetisches Testmodul
+und die Drop-Diagnose. Der fokusfreie Browser-Smoke auf macOS nutzt WebKit:
 `swift Tests/webkit_smoke.swift 'http://127.0.0.1:8765/savage-mod-player.html?testDropAutoplay=1' /tmp/savage-webkit.png`.
 Der Test setzt die Lautstärke auf null, lädt den echten AudioWorklet, prüft Drop-Autoplay
 und Stop und sichert einen Screenshot. Die WebKit-Testkonfiguration erlaubt Autoplay;
@@ -585,6 +587,11 @@ Die AppImage-Suite prüft echten FUSE-Start, Extraktionsfallback, relative
 Dateipfade mit Leerzeichen, identisches WAV-Rendering, Ressourcen/Lizenzen,
 Prüfsummen-Abbruch und Schutz des Eingabebinarys. Ein FUSE-Startfehler darf
 nicht als erfolgreicher nativer Start gezählt werden.
+
+Die Erstprüfung von Version 1.6.27 am 2026-10-07 nutzte Ubuntu 24.04 x86-64.
+Das damalige Binary referenzierte glibc-Symbole bis 2.38. Die vier
+AppImage- und vier MPRIS-Verträge liefen ohne Skip. Zwei Paketläufe mit
+gleichem `SOURCE_DATE_EPOCH` waren byteidentisch.
 
 ## Gespeicherte Playlists und Warteschlange (macOS)
 

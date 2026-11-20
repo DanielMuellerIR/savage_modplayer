@@ -1,3 +1,5 @@
+Savage Mod Player 1.6.63 checks the JavaScript and embedded audio worklet in the built single-file player. The Linux app retains process diagnostics on failure and reports invalid download sizes more clearly. SwiftPM discovers ALSA and zlib only on Linux hosts.
+
 Savage Mod Player 1.6.62 separates Linux dialogs and the note-rain window from the main window. On macOS, playlist scans share one request controller and the WAV export owns its own dialog state. The desktop controls and file formats are unchanged.
 
 Savage Mod Player 1.6.61 applies Linux desktop commands in input order. Closing the command input preserves the final accepted setting and discards pending scans. A new selection can still replace a pending scan. macOS regression tests cover delayed file drops and returning to the playlist after queued tracks.

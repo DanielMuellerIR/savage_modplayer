@@ -1,9 +1,8 @@
 import Foundation
 
-// Strikter Parser für den strukturellen IT-Kern. M2 liest Header, Orders und
-// Patterns, aktiviert das Format aber noch nicht im öffentlichen ModuleLoader.
-// Instrumente, Samples und Wiedergabe werden intern meilensteinweise ergänzt;
-// der öffentliche ModuleLoader aktiviert das Format erst nach dem M10-Gate.
+// Liest Impulse-Tracker-Module für ModuleLoader. Header, Abschnittsoffsets
+// und Datenlängen werden geprüft, bevor Instrumente, Samples und Patterns
+// als Wiedergabemodell zusammengeführt werden.
 public enum ITParser {
     public enum ParserError: Error, LocalizedError, Equatable {
         case fileTooSmall

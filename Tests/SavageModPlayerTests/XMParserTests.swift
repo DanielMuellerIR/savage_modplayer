@@ -439,7 +439,7 @@ final class XMParserTests: XCTestCase {
 
     // Der Pattern-Kopf ist vollstaendig, seine deklarierten Daten reichen aber
     // ueber das Dateiende hinaus. Ein `min(…, data.count)` haette das Fenster
-    // still gekuerzt (bestaetigte Falle, siehe AGENTS.md).
+    // still am Dateiende gekürzt.
     func testPatternDataReachingBeyondEndOfFileIsRejected() {
         let full = makeXM()
         let patternStart = 0x3C + 276

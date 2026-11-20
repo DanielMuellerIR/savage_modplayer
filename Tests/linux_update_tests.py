@@ -65,6 +65,13 @@ class UpdateTests(unittest.TestCase):
             (self.bundle/'VERSION').write_text('2.0.0\n')
             self.assertIsNone(self.updater.check())
 
+    def test_malformed_content_length_has_a_specific_error(self):
+        response = io.BytesIO(b"fixture")
+        response.headers = {"Content-Length": "unknown"}
+        with patch.object(self.updater.opener, "open", return_value=response):
+            with self.assertRaisesRegex(update.UpdateError, "Ungültige Größenangabe"):
+                self.updater.download(self.data["url"], self.root / "download", limit=20)
+
     def archive(self, entries):
         file=self.root/'fixture.tar.gz'
         with tarfile.open(file,'w:gz') as tar:

@@ -1,0 +1,8 @@
+{
+  "name": "savage-mod-player-web-build",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "terser": "5.51.4"
+  }
+}

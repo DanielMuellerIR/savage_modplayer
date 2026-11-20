@@ -49,11 +49,13 @@ public struct ModuleInspectorView: View {
         .task {
             let source = module
             let worker = Task.detached(priority: .userInitiated) { try ModuleInspection(module: source) }
-            do {
-                let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
-                try Task.checkCancellation()
-                inspection = result
-            } catch { }
+            let result = try? await withTaskCancellationHandler {
+                try await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard !Task.isCancelled else { return }
+            inspection = result
         }
     }
 

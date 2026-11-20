@@ -216,6 +216,12 @@ transport.onMessage({data: {type: 'row', playRevision: oldRevision, songEnded: t
 assert.equal(delivered, 0, 'Altes Songende darf den neu gestarteten Titel nicht überspringen');
 transport.onMessage({data: {type: 'row', playRevision: transport.playRevision, songEnded: true}});
 assert.equal(delivered, 1, 'Aktuelles Songende wird weiterhin ausgeliefert');
+const notes = [];
+transport.watchNotes(({note}) => notes.push(note));
+for (const period of [856, 428, 214, 0, -1]) {
+  transport.onMessage({data: {type: 'note', period, playRevision: transport.playRevision}});
+}
+assert.deepEqual(notes, [0, 12, 24, null, undefined]);
 worklet.onmessage({data: {type: 'play', mod, sampleRate: 8000, playRevision: 77}});
 worklet.nextRow();
 assert.equal(worklet.messages.at(-1).playRevision, 77, 'Worklet muss die Startidentität zurückgeben');

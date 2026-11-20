@@ -138,7 +138,7 @@ private final class DesktopEngine {
                     recent = try JSONDecoder().decode([PlaylistTrackReference].self, from: JSONSerialization.data(withJSONObject: data))
                 }
             }
-            metadataIndex = try ModuleMetadataIndex(cacheURL: directory.appendingPathComponent("metadata.json"))
+            metadataIndex = ModuleMetadataIndex(cacheURL: directory.appendingPathComponent("metadata.json"))
             if let data = preferences["query"] as? [String: Any] {
                 query = try JSONDecoder().decode(LibraryQuery.self, from: JSONSerialization.data(withJSONObject: data))
             }

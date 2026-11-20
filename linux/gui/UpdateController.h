@@ -4,6 +4,7 @@
 #include <QProcess>
 #include <QSettings>
 #include <QTimer>
+#include "ProcessErrorTail.h"
 
 class UpdateController final : public QObject {
     Q_OBJECT
@@ -42,6 +43,7 @@ private:
     QProcess worker;
     QTimer daily;
     QByteArray buffered;
+    ProcessErrorTail errorTail;
     QJsonObject offer;
     bool running = false, activated = false, automatic = false, receivedResult = false;
     double fraction = 0;

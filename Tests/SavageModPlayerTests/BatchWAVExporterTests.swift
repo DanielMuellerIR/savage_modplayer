@@ -11,12 +11,9 @@ final class BatchWAVExporterTests: XCTestCase {
     }
 
     private func source(in root: URL, name: String = "Track.mod") throws -> BatchWAVExportItem {
-        var data = Data(repeating: 0, count: 1084 + 1024 + 4)
-        data.replaceSubrange(0..<9, with: Data("Batch MOD".utf8))
-        data[43] = 2; data[45] = 64; data[950] = 1
-        data.replaceSubrange(1080..<1084, with: Data("M.K.".utf8))
-        data[1084] = 1; data[1085] = 0xAC; data[1086] = 0x10
-        data[2108] = 64; data[2109] = 192; data[2110] = 64; data[2111] = 192
+        var data = ModuleTestFixtures.proTracker(title: "Batch MOD", sample: [64, 192, 64, 192])
+        let firstNote = ModuleTestFixtures.proTrackerPatternOffset
+        data.replaceSubrange(firstNote..<(firstNote + 4), with: [1, 0xAC, 0x10, 0])
         let url = root.appendingPathComponent(name)
         try data.write(to: url)
         return .init(source: url)

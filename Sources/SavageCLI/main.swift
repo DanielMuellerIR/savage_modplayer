@@ -137,7 +137,7 @@ func parseArgs(_ argv: [String]) throws -> Options {
         // Ablauf VOR ihnen, `savage-cli modul.mod --play --info` startete also
         // die Wiedergabe, statt die angeforderte Textausgabe zu liefern — eine
         // Automatisierung, die eine endliche Ausgabe erwartet, blieb daran
-        // haengen (Review-Fund 2026-08-25).
+        // hängen.
         if o.infoOnly { throw CLIError.incompatibleOptions("--play und --info") }
         if o.dumpPattern != nil { throw CLIError.incompatibleOptions("--play und --pattern") }
     }

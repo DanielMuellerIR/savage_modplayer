@@ -129,7 +129,7 @@ nicht reaktiviert werden.
 
 Nur [tasks/backlog.md](tasks/backlog.md) ist die aktive Projektliste, auch für
 offene Abnahmen (Gerätetest iPhone, DMG-Finder-Layout). Erledigtes liegt in
-Release Notes, Tasks und [docs/AGENTS-history-through-2026-07-12.md](docs/AGENTS-history-through-2026-07-12.md).
+Release Notes, Tasks und den belegten Prüfergebnissen in [docs/testing.md](docs/testing.md).
 
 - `README*` und `RELEASE_NOTES*`: Produkt, Bedienung und Release-Historie.
 - `docs/testing.md`: Test-/Build-Runbook; `docs/fallen.md`: bestätigte Fallen.

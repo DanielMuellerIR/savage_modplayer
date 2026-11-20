@@ -26,6 +26,7 @@ final class CollectionSyncModelTests: XCTestCase {
         var reads = 0, writes = 0, accounts = 0, zones = 0
         var holdWrite = false
         var continuation: CheckedContinuation<Void, Never>?
+        var didHoldWrite: (@Sendable () -> Void)?
         func currentAccountScope() -> String { accounts += 1; return scope }
         func fetch() throws -> CollectionSyncCloudAsset? {
             reads += 1
@@ -34,14 +35,23 @@ final class CollectionSyncModelTests: XCTestCase {
         }
         func save(_ data: Data, replacing tag: String?) async throws -> CollectionSyncCloudAsset {
             writes += 1
-            if holdWrite { await withCheckedContinuation { continuation = $0 } }
+            if holdWrite {
+                await withCheckedContinuation {
+                    continuation = $0
+                    didHoldWrite?()
+                    didHoldWrite = nil
+                }
+            }
             guard asset?.changeTag == tag else { throw CollectionSyncTransportError.conflict }
             let saved = CollectionSyncCloudAsset(data: data, changeTag: "revision-\(writes)")
             asset = saved; return saved
         }
         func createZone() { zones += 1 }
-        func configure(failure: CollectionSyncTransportError? = nil, hold: Bool = false) {
-            self.failure = failure; holdWrite = hold
+        func configure(failure: CollectionSyncTransportError? = nil, hold: Bool = false,
+                       didHoldWrite: (@Sendable () -> Void)? = nil) {
+            self.failure = failure
+            holdWrite = hold
+            self.didHoldWrite = didHoldWrite
         }
         func setScope(_ scope: String) { self.scope = scope }
         func release() { holdWrite = false; continuation?.resume(); continuation = nil }
@@ -208,9 +218,10 @@ final class CollectionSyncModelTests: XCTestCase {
     func testPublishedButUnappliedLocalEditCannotBeOverwrittenByLateReceipt() async throws {
         let f = try Fixture(), model = try await f.connect()
         try f.rename("Uploaded")
-        await f.backend.configure(hold: true)
+        let held = expectation(description: "Schreibvorgang angehalten")
+        await f.backend.configure(hold: true) { held.fulfill() }
         let sync = Task { await model.synchronize() }
-        for _ in 0..<1000 { if await f.backend.isHeld() { break }; try await Task.sleep(for: .milliseconds(2)) }
+        await fulfillment(of: [held], timeout: 5)
         checkTrue(await f.backend.isHeld())
         try f.rename("Newer local edit")
         await f.backend.release(); await sync.value
@@ -285,9 +296,10 @@ final class CollectionSyncModelTests: XCTestCase {
         try f.rename("Local"); try await f.remoteRename("Remote")
         await model.synchronize()
         for conflict in model.conflicts { model.resolve(conflict.id, with: .keepBoth(copyID: UUID())) }
-        await f.backend.configure(hold: true)
+        let held = expectation(description: "Schreibvorgang angehalten")
+        await f.backend.configure(hold: true) { held.fulfill() }
         let operation = Task { await model.confirm() }
-        for _ in 0..<1000 { if await f.backend.isHeld() { break }; try await Task.sleep(for: .milliseconds(2)) }
+        await fulfillment(of: [held], timeout: 5)
         checkTrue(await f.backend.isHeld())
         model.deactivate()
         await f.backend.release(); await operation.value
@@ -411,9 +423,10 @@ final class CollectionSyncModelTests: XCTestCase {
         try f.rename("Local"); try await f.remoteRename("Remote")
         await model.synchronize()
         for conflict in model.conflicts { model.resolve(conflict.id, with: .keepBoth(copyID: copy)) }
-        await f.backend.configure(hold: true)
+        let held = expectation(description: "Schreibvorgang angehalten")
+        await f.backend.configure(hold: true) { held.fulfill() }
         let confirmation = Task { await model.confirm() }
-        for _ in 0..<1000 { if await f.backend.isHeld() { break }; try await Task.sleep(for: .milliseconds(2)) }
+        await fulfillment(of: [held], timeout: 5)
         checkTrue(await f.backend.isHeld())
         model.deactivate(); await f.backend.release(); await confirmation.value
         let original = try f.state()

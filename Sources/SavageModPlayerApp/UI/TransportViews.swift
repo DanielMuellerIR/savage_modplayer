@@ -72,7 +72,7 @@ struct ResizableDivider: View {
                 // Raum wandert die Referenz mit dem Handle mit, während dieser
                 // beim Ziehen seine Position ändert — die `translation` koppelt
                 // dadurch zurück und der Trenner zittert mit hoher Frequenz hin
-                // und her (Bug 2026-07-12). Global gemessen ist der Bezug fix.
+                // und her. Global gemessen ist der Bezug fix.
                 //
                 // minimumDistance 0 nur horizontal: Der waagerechte Trenner
                 // grenzt an ScrollViews — greift die Geste erst nach 1 pt

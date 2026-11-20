@@ -20,11 +20,8 @@ final class LibraryCatalogModelTests: XCTestCase {
                             preferencesURL: work.appendingPathComponent("preferences.json"))
     }
     private func source(_ id: String, title: String) throws -> LibraryCatalogSource {
-        var data = Data(repeating: 0, count: 1084 + 1024 + 4)
-        let bytes = Data(title.utf8.prefix(20)); data.replaceSubrange(0..<bytes.count, with: bytes)
-        data[43] = 2; data[45] = 64; data[950] = 1
-        data.replaceSubrange(1080..<1084, with: Data("M.K.".utf8))
-        let file = work.appendingPathComponent(id + ".mod"); try data.write(to: file)
+        let file = work.appendingPathComponent(id + ".mod")
+        try ModuleTestFixtures.proTracker(title: title).write(to: file)
         return LibraryCatalogSource(id: id, url: file, displayName: id + ".mod", folderPath: "")
     }
     private func waitUntil(_ condition: () -> Bool) async throws {

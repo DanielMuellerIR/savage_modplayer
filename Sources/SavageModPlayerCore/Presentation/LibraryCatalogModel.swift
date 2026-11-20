@@ -59,7 +59,7 @@ public final class LibraryCatalogModel: ObservableObject {
     private var filterRequest = UUID()
 
     public init(metadataURL: URL, preferencesURL: URL) {
-        index = try! ModuleMetadataIndex(cacheURL: metadataURL, durationLimit: 600)
+        index = ModuleMetadataIndex(cacheURL: metadataURL)
         store = LibraryPreferencesStore(fileURL: preferencesURL)
         Task { [weak self, store] in
             do { self?.accept(try await store.snapshot()) }
@@ -174,22 +174,21 @@ public final class LibraryCatalogModel: ObservableObject {
         let sources = sources, records = records, preferences = preferences
         let knownPreferences = preferencesLoaded, favorites = favoriteIDs, query = query
         filterTask = Task.detached(priority: .userInitiated) { [weak self] in
-            do {
-                try await Task.sleep(for: .milliseconds(120))
-                let items = sources.map {
-                    LibraryQueryItem(id: $0.id, displayName: $0.displayName, folderPath: $0.folderPath,
-                                     metadata: records[$0.id]?.metadata,
-                                     addedAt: preferences.firstSeenAt[$0.id] ?? $0.addedAt,
-                                     isFavorite: favorites.contains($0.id),
-                                     wasPlayed: knownPreferences ? preferences.heardIDs.contains($0.id) : nil)
-                }
-                let ids = try query.selectIDs(from: items)
-                await MainActor.run { [weak self] in
-                    guard let self, self.filterRequest == request else { return }
-                    self.filteredIDs = ids
-                    self.isFiltering = false
-                }
-            } catch { }
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            let items = sources.map {
+                LibraryQueryItem(id: $0.id, displayName: $0.displayName, folderPath: $0.folderPath,
+                                 metadata: records[$0.id]?.metadata,
+                                 addedAt: preferences.firstSeenAt[$0.id] ?? $0.addedAt,
+                                 isFavorite: favorites.contains($0.id),
+                                 wasPlayed: knownPreferences ? preferences.heardIDs.contains($0.id) : nil)
+            }
+            guard let ids = try? query.selectIDs(from: items) else { return }
+            await MainActor.run { [weak self] in
+                guard let self, self.filterRequest == request else { return }
+                self.filteredIDs = ids
+                self.isFiltering = false
+            }
         }
     }
 
