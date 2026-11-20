@@ -248,7 +248,8 @@ public enum SavedPlaylistResolver {
 
     // Quellen einmal scannen, dann exakt die gespeicherten Mitglieder in ihrer
     // Reihenfolge waehlen. Neue Dateien im Quellarchiv erweitern die Liste nicht.
-    public static func resolve(_ tracks: [PlaylistTrackReference], tempDir: URL) -> Result {
+    public static func resolve(_ tracks: [PlaylistTrackReference], tempDir: URL,
+                               isCancelled: () -> Bool = { false }) -> Result {
         var seen = Set<URL>()
         let sources = tracks.filter { $0.source.isValid && $0.source.location.isFileURL }.map(\.source.location)
             .filter { seen.insert($0).inserted }
@@ -257,9 +258,11 @@ public enum SavedPlaylistResolver {
         var limitedSources = Set<URL>()
         var byID: [String: PlaylistScanner.Entry] = [:]
         for source in sources {
+            if isCancelled() { break }
             guard bytes > 0, count > 0 else { limitedSources.insert(source); continue }
             let result = PlaylistScanner.collectResult(from: [source], tempDir: tempDir,
-                archiveLimits: .init(maxUncompressedBytes: bytes, maxEntries: count), maxArchives: 128)
+                archiveLimits: .init(maxUncompressedBytes: bytes, maxEntries: count), maxArchives: 128,
+                isCancelled: isCancelled)
             bytes -= result.consumedBytes
             count -= result.consumedEntries
             if result.limitReached { limitedSources.insert(source) }

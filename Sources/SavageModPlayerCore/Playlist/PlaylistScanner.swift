@@ -159,8 +159,9 @@ public enum PlaylistScanner {
     // Kopiert alle Mod-Dateien aus den URLs (Dateien, Ordner rekursiv, Archive
     // entpackt) nach `tempDir` und liefert die Eintraege samt Ordner-Pfad.
     // Beruehrt keinen UI-State — laeuft sicher abseits des Main-Threads.
-    public static func collectEntries(from urls: [URL], tempDir: URL) -> [Entry] {
-        collectEntries(from: urls, tempDir: tempDir, archiveLimits: .default, maxArchives: 128)
+    public static func collectEntries(from urls: [URL], tempDir: URL, isCancelled: () -> Bool = { false }) -> [Entry] {
+        collectResult(from: urls, tempDir: tempDir, archiveLimits: .default, maxArchives: 128,
+                      isCancelled: isCancelled).entries
     }
 
     static func collectEntries(from urls: [URL], tempDir: URL,
@@ -177,7 +178,11 @@ public enum PlaylistScanner {
     }
 
     static func collectResult(from urls: [URL], tempDir: URL,
-                              archiveLimits: ArchiveUnpackLimits, maxArchives: Int) -> ScanResult {
+                              archiveLimits: ArchiveUnpackLimits, maxArchives: Int,
+                              isCancelled: () -> Bool = { false }) -> ScanResult {
+        guard !isCancelled() else {
+            return ScanResult(entries: [], consumedBytes: 0, consumedEntries: 0, limitReached: false)
+        }
         var limitReached = false
         var remainingBytes = archiveLimits.maxUncompressedBytes
         var remainingEntries = archiveLimits.maxEntries
@@ -227,7 +232,7 @@ public enum PlaylistScanner {
                 let limits = ArchiveUnpackLimits(maxUncompressedBytes: remainingBytes,
                                                 maxEntries: remainingEntries)
                 if let (extractedDir, result) = extractArchive(readableURL, tempDir: tempDir, limits: limits,
-                    onLimit: { limitReached = true }) {
+                    isCancelled: isCancelled, onLimit: { limitReached = true }) {
                     remainingBytes -= result.totalUncompressedBytes
                     remainingEntries -= result.entryCount
                     // Nach dem Scan bleiben nur die eigenständigen Modul-Kopien.
@@ -281,6 +286,7 @@ public enum PlaylistScanner {
                 options: insideExtractedArchive ? [] : [.skipsHiddenFiles]
             ) else { return }
             for child in children {
+                if isCancelled() { return }
                 // Das eigene Temp-Wurzelverzeichnis nie als Kind mitscannen —
                 // sonst wuerden frisch angelegte Kopien erneut eingesammelt,
                 // falls tempDir (wie in Tests) innerhalb der Scan-Wurzel liegt.
@@ -331,6 +337,7 @@ public enum PlaylistScanner {
         }
 
         for url in urls {
+            if isCancelled() { break }
             // Drag&Drop liefert ggf. security-scoped URLs (Sandbox) — Zugriff
             // pro Wurzel-URL oeffnen und wieder schliessen. Die API gibt es nur
             // auf Apple-Plattformen; unter Linux existiert weder die Sandbox noch
@@ -373,10 +380,11 @@ public enum PlaylistScanner {
     //   uebernimmt der eigene `ZipArchiveReader` (reines Swift); `.7z` bleibt
     //   dort unlesbar und wird sauber gemeldet statt still zu scheitern.
     private static func extractArchive(_ archive: URL, tempDir: URL,
-                                       limits: ArchiveUnpackLimits, onLimit: () -> Void) -> (URL, ArchiveUnpackResult)? {
+                                       limits: ArchiveUnpackLimits, isCancelled: () -> Bool,
+                                       onLimit: () -> Void) -> (URL, ArchiveUnpackResult)? {
         let dest = tempDir.appendingPathComponent("extracted-\(UUID().uuidString)", isDirectory: true)
         do {
-            let result = try unpackArchive(archive, into: dest, limits: limits, isCancelled: { false })
+            let result = try unpackArchive(archive, into: dest, limits: limits, isCancelled: isCancelled)
             return (dest, result)
         } catch {
             if let error = error as? ZipArchiveError {
@@ -385,7 +393,7 @@ public enum PlaylistScanner {
                 default: break
                 }
             } else if let error = error as? ArchiveError, case .archiveTooLarge = error { onLimit() }
-            print("Archiv-Entpacken fehlgeschlagen: \(error)")
+            if !isCancelled() { print("Archiv-Entpacken fehlgeschlagen: \(error)") }
             try? FileManager.default.removeItem(at: dest)
             return nil
         }

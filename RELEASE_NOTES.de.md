@@ -1,3 +1,5 @@
+Savage Mod Player 1.6.61 verarbeitet Linux-Desktop-Befehle in Eingabereihenfolge. Beim Schließen der Eingabe bleibt die letzte angenommene Einstellung gespeichert. Ausstehende Scanergebnisse werden verworfen. Eine neue Auswahl kann einen laufenden Scan weiterhin ablösen. macOS-Regressionstests decken verspätete Datei-Drops und die Rückkehr aus der Warteschlange ab.
+
 Savage Mod Player 1.6.60 verbessert die Medientasten-Anbindung des Linux-Desktops. MPRIS verwendet einen stabilen Playernamen, meldet verfügbare Transportaktionen beim Laden des ersten Titels und prüft Registrierungsfehler. Play/Pause, Play, Pause, Stopp und nächster/vorheriger Titel nutzen den bestehenden Wiedergabekoordinator; unabhängige Instanzen bleiben getrennt steuerbar.
 
 Savage Mod Player 1.6.59 erhält die Wiedergabe ausgewählter Linux-Suchergebnisse, wenn eine ältere Ordner- oder Archivsuche später fertig wird. Die Linux-GUI-CI installiert das QtTest-QML-Modul ausdrücklich und prüft einen verzögerten Suchabschluss während einer neuen Wiedergabeauswahl.

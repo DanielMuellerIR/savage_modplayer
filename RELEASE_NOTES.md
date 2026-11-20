@@ -1,3 +1,5 @@
+Savage Mod Player 1.6.61 applies Linux desktop commands in input order. Closing the command input preserves the final accepted setting and discards pending scans. A new selection can still replace a pending scan. macOS regression tests cover delayed file drops and returning to the playlist after queued tracks.
+
 Savage Mod Player 1.6.60 improves Linux desktop media-key integration. MPRIS uses a stable player name, reports available transport actions when the first track loads, and checks registration failures. Play/Pause, Play, Pause, Stop and next/previous track use the existing playback coordinator; independent instances remain separately controllable.
 
 Savage Mod Player 1.6.59 preserves playback of selected Linux search results when an older folder or archive scan finishes later. The Linux GUI CI explicitly installs the QtTest QML module and checks delayed scan completion against a new playback selection.

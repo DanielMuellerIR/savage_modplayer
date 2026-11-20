@@ -20,15 +20,20 @@ struct DesktopMain {
         guard descriptor >= 0, dup2(STDERR_FILENO, STDOUT_FILENO) >= 0 else { exit(2) }
         let engine = DesktopEngine(output: FileHandle(fileDescriptor: descriptor, closeOnDealloc: true))
         await engine.start()
-        await Task.detached {
+        let (requests, input) = AsyncStream<DesktopRequest>.makeStream()
+        Task.detached {
+            defer { input.finish() }
             while let line = readLine() {
                 guard line.utf8.count <= 32 * 1024 * 1024,
                       let data = line.data(using: .utf8),
                       let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-                let request = DesktopRequest(values: values)
-                Task { await engine.handle(request) }
+                input.yield(DesktopRequest(values: values))
             }
-        }.value
+        }
+        // EOF lässt alle angenommenen Befehle durchlaufen, bevor Hintergrundarbeit endet.
+        for await request in requests {
+            await engine.handle(request)
+        }
         await engine.shutdown()
     }
 }
@@ -63,6 +68,7 @@ private final class DesktopEngine {
     private var played = Set<String>()
     private var currentGeneration = UUID()
     private var scanGeneration = UUID()
+    private var scanTasks: [UUID: Task<Void, Never>] = [:]
     private var startupSuperseded = false
     private var isScanning = false
     private var moduleRevision = UUID()
@@ -173,9 +179,18 @@ private final class DesktopEngine {
     }
 
     func shutdown() async {
-        ticker?.cancel(); noteTask?.cancel(); indexTask?.cancel(); exportTask?.cancel()
-        await exportTask?.value
+        startupSuperseded = true
+        cancelPendingLoads()
+        scanGeneration = UUID()
+        ticker?.cancel()
+        noteTask?.cancel()
+        indexTask?.cancel()
+        exportTask?.cancel()
+        let scans = Array(scanTasks.values)
+        for scan in scans { scan.cancel() }
         player.stop()
+        for scan in scans { await scan.value }
+        await exportTask?.value
         try? FileManager.default.removeItem(at: temporary)
     }
 
@@ -191,13 +206,21 @@ private final class DesktopEngine {
             case "load": cancelPendingLoads(); try await load(id: text, play: true)
             case "recentLoad":
                 cancelPendingLoads()
-                if let reference = recent.first(where: { $0.id == text }) {
-                    if knownEntries[text] == nil {
-                        let folder = temporary.appendingPathComponent(UUID().uuidString)
-                        let result = await Task.detached { SavedPlaylistResolver.resolve([reference], tempDir: folder) }.value
-                        remember(result.entries)
-                    }
+                guard let reference = recent.first(where: { $0.id == text }) else { return }
+                if knownEntries[text] != nil {
                     try await load(id: text, play: true)
+                } else {
+                    let folder = temporary.appendingPathComponent(UUID().uuidString)
+                    startScan { generation in
+                        let result = await Self.scanOnWorker {
+                            SavedPlaylistResolver.resolve([reference], tempDir: folder) { Task.isCancelled }
+                        }
+                        guard self.scanGeneration == generation else { return }
+                        self.finishScanning()
+                        self.remember(result.entries)
+                        do { try await self.load(id: text, play: true) }
+                        catch { self.emit("error", ["message": error.localizedDescription, "command": command]) }
+                    }
                 }
             case "play":
                 cancelPendingLoads()
@@ -308,18 +331,21 @@ private final class DesktopEngine {
             case "playlistOpen":
                 cancelPendingLoads()
                 if let playlist = saved.playlists.first(where: { $0.id.uuidString == text }) {
-                    let generation = UUID(); scanGeneration = generation; isScanning = true
-                    emit("loading", ["active": true])
                     let folder = temporary.appendingPathComponent(UUID().uuidString)
-                    let result = await Task.detached { SavedPlaylistResolver.resolve(playlist.tracks, tempDir: folder) }.value
-                    guard scanGeneration == generation else { return }
-                    isScanning = false; emit("loading", ["active": false])
-                    entries = result.entries; selection = nil
-                    remember(result.entries)
-                    sendLibrary()
-                    refreshIndex(generation: generation)
-                    if !result.missing.isEmpty || !result.limited.isEmpty {
-                        emit("notice", ["message": "\(result.missing.count) fehlende und \(result.limited.count) begrenzte Quellen."])
+                    startScan { generation in
+                        let result = await Self.scanOnWorker {
+                            SavedPlaylistResolver.resolve(playlist.tracks, tempDir: folder) { Task.isCancelled }
+                        }
+                        guard self.scanGeneration == generation else { return }
+                        self.finishScanning()
+                        self.entries = result.entries
+                        self.selection = nil
+                        self.remember(result.entries)
+                        self.sendLibrary()
+                        self.refreshIndex(generation: generation)
+                        if !result.missing.isEmpty || !result.limited.isEmpty {
+                            self.emit("notice", ["message": "\(result.missing.count) fehlende und \(result.limited.count) begrenzte Quellen."])
+                        }
                     }
                 }
             case "preview":
@@ -466,7 +492,36 @@ private final class DesktopEngine {
     }
     private func cancelPendingLoads() {
         currentGeneration = UUID()
-        if isScanning { scanGeneration = UUID(); isScanning = false; emit("loading", ["active": false]) }
+        if isScanning {
+            scanGeneration = UUID()
+            finishScanning()
+        }
+    }
+    private func startScan(_ operation: @escaping @MainActor (UUID) async -> Void) {
+        let generation = UUID()
+        scanGeneration = generation
+        isScanning = true
+        emit("loading", ["active": true])
+        // Der Auftrag ist registriert, bevor weitere Befehle angenommen werden.
+        // Das Scanergebnis wird nur übernommen, solange seine Generation gültig ist.
+        scanTasks[generation] = Task {
+            defer { scanTasks[generation] = nil }
+            await operation(generation)
+        }
+    }
+    private nonisolated static func scanOnWorker<Result: Sendable>(
+        _ scan: @escaping @Sendable () async -> Result
+    ) async -> Result {
+        let worker = Task.detached(operation: scan)
+        return await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+    private func finishScanning() {
+        isScanning = false
+        emit("loading", ["active": false])
     }
     private var defaults: PlaybackOptions {
         .init(palClock: flag("palClock", default: true), stereoSeparation: number("stereoSeparation", default: 0.8),
@@ -490,24 +545,37 @@ private final class DesktopEngine {
         if audioPaths.isEmpty { await advancePendingCollection(); return }
         indexTask?.cancel()
         currentGeneration = UUID()
-        let generation = UUID(); scanGeneration = generation
-        isScanning = true
         let urls = audioPaths.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
-        let folder = temporary.appendingPathComponent(UUID().uuidString)
-        emit("loading", ["active": true])
-        let found = await Task.detached { PlaylistScanner.collectEntries(from: urls, tempDir: folder) }.value
-        #if DEBUG
-        // Nur Prozessregressionen: das fertige Scanergebnis vor der Übernahme anhalten.
-        let gate = ProcessInfo.processInfo.environment["SAVAGE_DESKTOP_TEST_SCAN_GATE"].map { URL(fileURLWithPath: $0) }
-        let gated = gate.map { urls == [$0.appendingPathComponent("source.mod")] } ?? false
-        if gated, let gate {
-            emit("testScanWaiting", [:])
-            let deadline = ContinuousClock.now + .seconds(15)
-            while !FileManager.default.fileExists(atPath: gate.appendingPathComponent("release").path), ContinuousClock.now < deadline {
-                try? await Task.sleep(for: .milliseconds(10))
-            }
+        startScan { generation in
+            await self.completeOpen(urls, generation: generation, autoPlay: autoPlay, restoreLast: restoreLast)
         }
-        defer { if gated { emit("testScanReturned", [:]) } }
+    }
+    private func completeOpen(_ urls: [URL], generation: UUID, autoPlay: Bool, restoreLast: Bool) async {
+        guard scanGeneration == generation else { return }
+        let folder = temporary.appendingPathComponent(UUID().uuidString)
+        #if DEBUG
+        let gate = ProcessInfo.processInfo.environment["SAVAGE_DESKTOP_TEST_SCAN_GATE"].map { URL(fileURLWithPath: $0) }
+            .flatMap { urls == [$0.appendingPathComponent("source.mod")] ? $0 : nil }
+        #endif
+        let found = await Self.scanOnWorker {
+            let result = PlaylistScanner.collectEntries(from: urls, tempDir: folder) { Task.isCancelled }
+            #if DEBUG
+            // Das fertige Ergebnis im Worker halten, bis die Prozessprüfung es freigibt.
+            if let gate, !Task.isCancelled {
+                await self.emit("testScanWaiting", [:])
+                let deadline = ContinuousClock.now + .seconds(15)
+                while !FileManager.default.fileExists(atPath: gate.appendingPathComponent("release").path),
+                      ContinuousClock.now < deadline {
+                    do { try await Task.sleep(for: .milliseconds(10)) }
+                    catch { break }
+                }
+            }
+            #endif
+            return result
+        }
+        guard !Task.isCancelled else { return }
+        #if DEBUG
+        defer { if gate != nil { emit("testScanReturned", [:]) } }
         #endif
         guard scanGeneration == generation else { return }
         entries = found; remember(found); selection = nil; sendLibrary()
@@ -516,12 +584,13 @@ private final class DesktopEngine {
             catch { emit("error", ["message": error.localizedDescription]) }
         }
         guard scanGeneration == generation else { return }
-        isScanning = false; emit("loading", ["active": false])
+        finishScanning()
         let initial = restoreLast ? found.first { $0.source.id == preferences["lastPlayedSourceID"] as? String } ?? found.first : found.first
         if let first = initial {
             do { try await load(id: first.source.id, play: autoPlay) }
             catch { emit("error", ["message": error.localizedDescription]) }
         } else { emit("notice", ["message": "Keine unterstützten Tracker-Dateien gefunden."]) }
+        guard scanGeneration == generation else { return }
         refreshIndex(generation: generation)
         await advancePendingCollection()
     }

@@ -432,8 +432,5 @@ class DesktopEngineTests(unittest.TestCase):
 
 
 
-# Auch im bestehenden Prozess-Gate ausführen; separat startbar für den Red/Green-Nachweis.
-from desktop_load_race_tests import DesktopLoadRaceTests
-
 if __name__ == "__main__":
     unittest.main()

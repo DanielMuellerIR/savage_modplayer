@@ -524,10 +524,10 @@ Prüfliste am Gerät:
 Web-Ladezustand und Songende: `node Tests/js/playback-state.mjs` prüft Titelwechsel,
 Stop während Audio-Vorbereitung, endliche Pattern-Loops und kombinierte Sprungbefehle.
 
-Native Drop-Aufträge: `python3 Tests/drop_request_tests.py` führt die tatsächlichen
-Drop-/Revisionsfunktionen mit steuerbaren Provider-Callbacks aus. Das prüft Stop,
-neuere Auswahl und die Identität bis zum Hintergrundscan; ein echter Finder-Provider
-ist dabei nicht beteiligt.
+`swift test --filter MacDropRequestTests` prüft die Drop-Auftragslogik der
+macOS-App mit steuerbaren Provider-Abschlüssen nach Stop, Timerablauf, neuer
+Dateiauswahl und einem neueren Drop. Die Übergabe aus Finder ist ein separater
+GUI-Test.
 
 Ein fokusfreier Browser-Smoke auf macOS ist mit WebKit möglich:
 `swift Tests/webkit_smoke.swift 'http://127.0.0.1:8765/savage-mod-player.html?testDropAutoplay=1' /tmp/savage-webkit.png`.
@@ -708,7 +708,12 @@ Die Leiste folgt der Abspielliste, nicht einer vorausberechneten Zeitachse.
 Start-Smoke setzt ihn ebenfalls. Simulatorläufe wählen konkrete IDs und laufen
 ohne parallele Tests; fremde Simulatorgeräte/Prozesse bleiben unangetastet.
 
-Queue-Navigation auf macOS: `python3 Tests/playlist_queue_navigation_tests.py` prüft den unveränderten nativen Navigationscode mit einer externen Queue-Quelle, Listenrückkehr, Stopzustand und gescheiterten Ladeversuchen. `python3 Tests/drop_request_tests.py` prüft verzögerte Drop-Callbacks und Transportabbrüche. `PlaylistScannerTests` deckt gespeicherte Listen mit 129 Archiven und getrennte Sicherheitslimit-Meldungen ab; iOS `SavedCollectionTests` unterbricht tatsächliche asynchrone Ladevorgänge und ergänzt einen Queue-Titel während eines Fehlversuchs.
+`swift test --filter MacPlaylistNavigationTests` prüft externe Queue-Quellen,
+Vorwärts- und Rückwärtsrückkehr zur ursprünglichen Playlist sowie den Erhalt
+von Queue-Eintrag und Rückkehranker bei Ladefehlern. `PlaylistScannerTests` deckt
+gespeicherte Listen mit 129 Archiven und getrennte Sicherheitslimit-Meldungen
+ab. iOS `SavedCollectionTests` unterbricht asynchrone Ladevorgänge und ergänzt
+einen Queue-Titel während eines Fehlversuchs.
 
 ## Zustandskorrekte A/B-Wiedergabe
 
@@ -1007,6 +1012,12 @@ für Python (`python3-gi` bzw. `python-gobject`). Ihr echter Desktop-Dateistart
 verwendet ein Testprogramm ohne Fenster. MPRIS und Instanzweiterleitung laufen
 unter `QT_QPA_PLATFORM=offscreen` auf einem isolierten Sitzungsbus. Videoverträge
 benötigen FFmpeg/ffprobe. Ein Skip ersetzt keinen dieser Linux-Belege.
+
+`python3 Tests/desktop_load_race_tests.py` benötigt den Debug-Build der Engine.
+Der Prozess quittiert einen Einstellungs-Burst in Eingabereihenfolge und
+behält den letzten Wert nach EOF und Neustart. EOF verarbeitet noch
+eingelesene Befehle und verwirft ausstehende Scanergebnisse. Eine neuere
+Auswahl muss bereits vor Freigabe eines überholten Scans wirksam werden.
 
 Die Medientasten-Regressionen prüfen den stabilen MPRIS-Namen, Fähigkeiten vor
 und nach dem ersten Titel sowie die zugehörigen `PropertiesChanged`-Signale.

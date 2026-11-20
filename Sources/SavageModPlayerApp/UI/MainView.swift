@@ -4,17 +4,6 @@ import UniformTypeIdentifiers
 import UserNotifications
 import MediaPlayer
 
-final class DropURLsContainer: @unchecked Sendable {
-    let lock = NSLock()
-    var urls: [URL] = []
-
-    func append(_ url: URL) {
-        lock.lock()
-        urls.append(url)
-        lock.unlock()
-    }
-}
-
 enum LoopMode: String, CaseIterable, Identifiable {
     case playlist = "Wiederhole Playlist"
     case track = "Wiederhole Song"
@@ -98,20 +87,26 @@ struct MainView: View {
     @State var pendingCollectionURLs: [URL] = []
     struct PendingAudioRequest { let urls: [URL]; let autoPlay: Bool; let epoch: UUID }
     @State var pendingAudioRequest: PendingAudioRequest?
-    @State var dropRequestID = UUID()
     @State var collectingPlaylistRequest: UUID?
     var isCollectingPlaylist: Bool { collectingPlaylistRequest == playlistRequestID }
     @State var playlistNotice: String?
     @State var playbackSelection: [URL]?
-    @State var trackQueue = TrackQueue()
-    @State var queueResumeURL: URL?
-    @State var showQueue = false
-    var playlistRequestID: UUID {
-        get { playbackActions.fileRequestID }
-        nonmutating set { playbackActions.fileRequestID = newValue }
+    @State var playlistPlayback = PlaylistPlaybackNavigation()
+    var trackQueue: TrackQueue {
+        get { playlistPlayback.queue }
+        nonmutating set { playlistPlayback.queue = newValue }
     }
+    var queueResumeURL: URL? {
+        get { playlistPlayback.resumeURL }
+        nonmutating set { playlistPlayback.resumeURL = newValue }
+    }
+    @State var showQueue = false
+    var playlistRequestID: UUID { playbackActions.fileRequestID }
     @State var loadedModuleID = UUID()
-    @State var currentPlaylistIndex: Int = -1
+    var currentPlaylistIndex: Int {
+        get { playlistPlayback.currentIndex }
+        nonmutating set { playlistPlayback.currentIndex = newValue }
+    }
     // Hierarchische Anzeige: Ordner-/Archiv-Baum der aktuellen Playlist,
     // Menge der aufgeklappten Ordner-Pfade und Ordner-Pfad je Datei
     // (fuers Auto-Aufklappen des gerade laufenden Titels).
@@ -409,39 +404,15 @@ struct MainView: View {
                 }
             }
             .onDrop(of: [UTType.fileURL], isTargeted: $dragOver) { providers in
-                // WICHTIG: `loadObject(ofClass: URL.self)` dekodiert die Datei-URL
-                // korrekt. Der frühere Weg (loadItem + Data manuell parsen) baute
-                // die URL mit `URL(fileURLWithPath:)` aus einem "file:///…"-STRING
-                // — das interpretiert den String als PFAD, nicht als URL, sodass
-                // die Datei nie gefunden wurde (Drop tat scheinbar nichts). macOS
-                // liefert `public.file-url` heute als URL-String-Data, nicht mehr
-                // als Plist mit rohem Pfad wie früher.
                 playbackActions.observeSleepTimer(coordinator: coordinator)
-                let requestID = UUID()
-                dropRequestID = requestID
-                let startingPlaylistRequest = playlistRequestID
-                let container = DropURLsContainer()
-                let dispatchGroup = DispatchGroup()
-
-                for provider in providers {
-                    guard provider.canLoadObject(ofClass: URL.self) else { continue }
-                    dispatchGroup.enter()
-                    _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                        if let url, url.isFileURL { container.append(url) }
-                        dispatchGroup.leave()
+                let loaders: [PlaybackActions.DropLoader] = providers.compactMap { provider in
+                    guard provider.canLoadObject(ofClass: URL.self) else { return nil }
+                    return { completion in
+                        _ = provider.loadObject(ofClass: URL.self) { url, _ in completion(url) }
                     }
                 }
-
-                dispatchGroup.notify(queue: .main) {
-                    guard dropRequestID == requestID else { return }
-                    let urls = container.urls
-                    if urls.contains(where: { $0.pathExtension.lowercased() != CollectionExchangeCodec.fileExtension }),
-                       playlistRequestID != startingPlaylistRequest { return }
-                    if !urls.isEmpty {
-                        // Musik per Drop startet die Wiedergabe sofort — der
-                        // Nutzer hat die Datei/den Ordner bewusst reingezogen.
-                        handleDroppedURLs(urls, autoPlay: true)
-                    }
+                playbackActions.collectDrop(loaders) { urls in
+                    if let urls { handleDroppedURLs(urls, autoPlay: true) }
                 }
                 return true
             }

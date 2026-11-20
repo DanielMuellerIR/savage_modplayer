@@ -23,6 +23,11 @@ let appTargets: [Target] = [
             .linkedFramework("AVKit"),
             .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Frameworks"])
         ]
+    ),
+    .testTarget(
+        name: "SavageModPlayerAppTests",
+        dependencies: ["SavageModPlayerApp", "SavageModPlayerCore"],
+        path: "Tests/SavageModPlayerAppTests"
     )
 ]
 #else

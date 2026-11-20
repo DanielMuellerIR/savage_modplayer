@@ -62,6 +62,16 @@ final class PlaylistScannerTests: XCTestCase {
         return body
     }
 
+    func testCancellationStopsBeforeCopyingAnotherSource() throws {
+        let first = try makeFile("first.mod")
+        let second = try makeFile("second.mod")
+        let entries = PlaylistScanner.collectEntries(from: [first, second], tempDir: tempDir) {
+            let copies = try? FileManager.default.contentsOfDirectory(atPath: self.tempDir.path)
+            return copies?.isEmpty == false
+        }
+        XCTAssertEqual(entries.map(\.source.location), [first.resolvingSymlinksInPath()])
+    }
+
     func testNestedArchivesShareBudgetsAndReleaseExtractionTrees() throws {
         let innerA = storedZip([("a.mod", Data(repeating: 1, count: 32))])
         let innerB = storedZip([("b.mod", Data(repeating: 2, count: 32))])

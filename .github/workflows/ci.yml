@@ -76,6 +76,11 @@ jobs:
       - name: Swift tests
         run: swift test -c release
 
+      - name: Desktop-Befehlsreihenfolge und Scan-Ablösung
+        run: |
+          swift build --product savage-desktop-engine
+          python3 Tests/desktop_load_race_tests.py
+
       - name: JS Syntax-Check
         run: |
           node --check modplayer.js

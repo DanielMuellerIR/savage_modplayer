@@ -17,61 +17,40 @@ extension MainView {
         playbackActions.stopPlayback(coordinator: coordinator)
     }
 
-    var eligiblePlaylistIndices: [Int] {
-        guard let selection = playbackSelection else { return Array(playlist.indices) }
-        var indices: [URL: Int] = [:]
-        for (index, url) in playlist.enumerated() where indices[url] == nil { indices[url] = index }
-        return selection.compactMap { indices[$0] }
+    var navigationPlaylist: PlaylistPlaybackNavigation.Playlist {
+        .init(urls: playlist, selection: playbackSelection, wrap: loopMode == .playlist, shuffle: shuffleEnabled)
     }
+
+    var eligiblePlaylistIndices: [Int] { navigationPlaylist.eligibleIndices }
 
     @discardableResult
     func nextTrack(automatic: Bool = false) -> Bool {
         if automatic && !coordinator.sleepTimer.allowsPlayback() { return false }
         let wasPlaying = coordinator.isPlaying && !coordinator.isPaused
-        if let queued = trackQueue.items.first {
-            guard let url = TrackQueue.playbackURL(for: queued.track,
-                playlist: playlist, references: trackReferences) else {
-                errorMessage = "Der nächste Titel ist nicht mehr erreichbar: \(queued.track.displayName)"
-                return false
-            }
-            let anchor = queueResumeURL
+        var navigation = playlistPlayback
+        let advanced = navigation.next(in: navigationPlaylist, references: trackReferences) { url in
+            loadPlaylistSelection(url, autoPlay: wasPlaying, manualPlayback: !automatic)
+        } loadQueued: { url in
             if wasPlaying && !automatic { playbackActions.prepareManualPlayback(coordinator: coordinator) }
-            if anchor == nil, playlist.indices.contains(currentPlaylistIndex) {
-                queueResumeURL = playlist[currentPlaylistIndex]
-            }
-            guard loadModFile(from: url) else {
-                queueResumeURL = anchor
-                return false
-            }
-            currentPlaylistIndex = playlist.firstIndex(of: url) ?? -1
-            if wasPlaying {
-                coordinator.play()
-                guard coordinator.isPlaying else {
-                    queueResumeURL = anchor
-                    return false
-                }
-            }
-            trackQueue.remove(id: queued.id)
-            return true
+            return loadModFile(from: url)
+        } startQueuedPlayback: {
+            guard wasPlaying else { return true }
+            coordinator.play()
+            return coordinator.isPlaying
+        } missing: { track in
+            errorMessage = "Der nächste Titel ist nicht mehr erreichbar: \(track.displayName)"
         }
-        let current = shuffleEnabled ? currentPlaylistIndex
-            : queueResumeURL.flatMap { playlist.firstIndex(of: $0) } ?? currentPlaylistIndex
-        guard let index = PlaylistNavigation.adjacentIndex(current: current, eligible: eligiblePlaylistIndices,
-            backwards: false, wrap: loopMode == .playlist, shuffle: shuffleEnabled) else { return false }
-        return selectPlaylistSong(at: index, autoPlay: wasPlaying, manualPlayback: !automatic)
+        playlistPlayback = navigation
+        return advanced
     }
 
     func prevTrack() {
         let wasPlaying = coordinator.isPlaying && !coordinator.isPaused
-        if let queueResumeURL, let index = playlist.firstIndex(of: queueResumeURL) {
-            selectPlaylistSong(at: index, autoPlay: wasPlaying)
-            return
+        var navigation = playlistPlayback
+        _ = navigation.previous(in: navigationPlaylist) { url in
+            loadPlaylistSelection(url, autoPlay: wasPlaying, manualPlayback: true)
         }
-        if let index = PlaylistNavigation.adjacentIndex(current: currentPlaylistIndex,
-            eligible: eligiblePlaylistIndices, backwards: true,
-            wrap: loopMode == .playlist, shuffle: shuffleEnabled) {
-            selectPlaylistSong(at: index, autoPlay: wasPlaying)
-        }
+        playlistPlayback = navigation
     }
 
     // Wird ausgeloest, wenn der Renderblock das Songende erreicht (Wrap auf 0).

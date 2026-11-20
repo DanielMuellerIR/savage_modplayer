@@ -29,8 +29,7 @@ extension MainView {
             guard playlistRequestID == pendingRequestID else { return }
             requestID = pendingRequestID
         } else {
-            requestID = UUID()
-            playlistRequestID = requestID
+            requestID = playbackActions.beginFileRequest()
         }
         self.errorMessage = nil
         self.compatibilityMessage = nil
@@ -138,27 +137,26 @@ extension MainView {
     }
 
     @discardableResult
-    func selectPlaylistSong(at index: Int, autoPlay: Bool = true, preservingQueueResume: Bool = false,
-                            manualPlayback: Bool = true) -> Bool {
-        guard index >= 0 && index < playlist.count else { return false }
-        if autoPlay && manualPlayback { playbackActions.prepareManualPlayback(coordinator: coordinator) }
-        let songUrl = playlist[index]
-        expandAncestors(of: songUrl)
-        if loadModFile(from: songUrl) {
-            if !preservingQueueResume { queueResumeURL = nil }
-            self.currentPlaylistIndex = index
-            // Nur abspielen, wenn gewuenscht — sonst startet z.B. Weiterblaettern
-            // im pausierten Zustand ungewollt die Wiedergabe.
-            if autoPlay { coordinator.play() }
-            return true
+    func selectPlaylistSong(at index: Int, autoPlay: Bool = true, manualPlayback: Bool = true) -> Bool {
+        var navigation = playlistPlayback
+        let selected = navigation.select(index, in: playlist) { url in
+            loadPlaylistSelection(url, autoPlay: autoPlay, manualPlayback: manualPlayback)
         }
-        return false
-        // "Zuletzt gespielt" wird zentral in loadModFile gepflegt (alle Ladepfade).
+        playlistPlayback = navigation
+        return selected
     }
-    
+
+    func loadPlaylistSelection(_ url: URL, autoPlay: Bool, manualPlayback: Bool) -> Bool {
+        if autoPlay && manualPlayback { playbackActions.prepareManualPlayback(coordinator: coordinator) }
+        expandAncestors(of: url)
+        guard loadModFile(from: url) else { return false }
+        if autoPlay { coordinator.play() }
+        return true
+    }
+
     @discardableResult
     func loadModFile(from url: URL) -> Bool {
-        playlistRequestID = UUID()
+        playbackActions.beginFileRequest()
         self.errorMessage = nil
         self.compatibilityMessage = nil
         let accessed = url.startAccessingSecurityScopedResource()
@@ -242,7 +240,7 @@ extension MainView {
     func triggerDemoPlay() {
         playbackActions.prepareManualPlayback(coordinator: coordinator)
         activeTrackSourceID = nil
-        playlistRequestID = UUID()
+        playbackActions.beginFileRequest()
         loadedModuleID = UUID()
         let demoMod = ModParser.generateDemoMod()
         coordinator.setMod(demoMod)

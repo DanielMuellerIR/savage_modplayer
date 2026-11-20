@@ -75,8 +75,7 @@ extension MainView {
 
     func openSavedPlaylist(_ saved: SavedPlaylist) {
         playbackActions.observeSleepTimer(coordinator: coordinator)
-        let requestID = UUID()
-        playlistRequestID = requestID
+        let requestID = playbackActions.beginFileRequest()
         collectingPlaylistRequest = requestID
         let wasPlaying = coordinator.isPlaying && !coordinator.isPaused
         let tempDir = Self.newDropTempDir()
