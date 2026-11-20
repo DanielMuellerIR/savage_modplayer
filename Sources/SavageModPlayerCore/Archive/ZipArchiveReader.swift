@@ -504,52 +504,7 @@ public enum ZipArchiveReader {
         archiveName: String,
         maxEntryCount: Int
     ) throws -> [CentralRecord] {
-        let fileSize = Int64(try handle.seekToEnd())
-        guard fileSize >= 22 else { throw ZipArchiveError.notAZipArchive }
-
-        // Rueckwaerts im letzten Fenster nach der EOCD-Signatur suchen. Ein
-        // Archivkommentar darf bis zu 64 KB lang sein und steht dahinter.
-        let windowSize = Int(min(Int64(eocdSearchWindow), fileSize))
-        let windowStart = fileSize - Int64(windowSize)
-        let window = try readExactly(handle: handle, at: UInt64(windowStart), count: windowSize)
-
-        var eocdIndex: Int?
-        var scan = windowSize - 22
-        while scan >= 0 {
-            if readUInt32(window, scan) == signatureEOCD {
-                // Der Kommentar hinter dem EOCD muss exakt bis zum Dateiende
-                // reichen — sonst hat der Bytemustertreffer nichts zu bedeuten.
-                let commentLength = Int(readUInt16(window, scan + 20))
-                if scan + 22 + commentLength == windowSize {
-                    eocdIndex = scan
-                    break
-                }
-            }
-            scan -= 1
-        }
-        guard let eocd = eocdIndex else { throw ZipArchiveError.notAZipArchive }
-
-        let entryCount = readUInt16(window, eocd + 10)
-        let directorySize = readUInt32(window, eocd + 12)
-        let directoryOffset = readUInt32(window, eocd + 16)
-
-        // ZIP64 erkennen und ablehnen, statt mit den Platzhalterwerten
-        // 0xFFFF/0xFFFFFFFF an eine falsche Stelle zu springen.
-        if entryCount == 0xFFFF || directorySize == 0xFFFF_FFFF || directoryOffset == 0xFFFF_FFFF {
-            throw ZipArchiveError.unsupportedZip64
-        }
-        // Direkt vor dem EOCD liegt bei ZIP64 der Locator.
-        if eocd >= 20, readUInt32(window, eocd - 20) == signatureZip64Locator {
-            throw ZipArchiveError.unsupportedZip64
-        }
-
-        guard Int64(directorySize) <= Int64(maxCentralDirectoryBytes) else {
-            throw ZipArchiveError.corruptArchive("Inhaltsverzeichnis unplausibel groß")
-        }
-        guard Int64(directoryOffset) + Int64(directorySize) <= fileSize else {
-            throw ZipArchiveError.corruptArchive("Inhaltsverzeichnis liegt außerhalb der Datei")
-        }
-
+        let (directoryOffset, directorySize, entryCount) = try centralDirectoryLocation(handle: handle)
         let directory = try readExactly(
             handle: handle,
             at: UInt64(directoryOffset),
@@ -645,6 +600,55 @@ public enum ZipArchiveReader {
                 "Inhaltsverzeichnis von \(archiveName) enthält \(records.count) statt \(entryCount) Einträge")
         }
         return records
+    }
+
+    private static func centralDirectoryLocation(handle: FileHandle) throws -> (UInt32, UInt32, UInt16) {
+        let fileSize = Int64(try handle.seekToEnd())
+        guard fileSize >= 22 else { throw ZipArchiveError.notAZipArchive }
+
+        // Rueckwaerts im letzten Fenster nach der EOCD-Signatur suchen. Ein
+        // Archivkommentar darf bis zu 64 KB lang sein und steht dahinter.
+        let windowSize = Int(min(Int64(eocdSearchWindow), fileSize))
+        let windowStart = fileSize - Int64(windowSize)
+        let window = try readExactly(handle: handle, at: UInt64(windowStart), count: windowSize)
+
+        var eocdIndex: Int?
+        var scan = windowSize - 22
+        while scan >= 0 {
+            if readUInt32(window, scan) == signatureEOCD {
+                // Der Kommentar hinter dem EOCD muss exakt bis zum Dateiende
+                // reichen — sonst hat der Bytemustertreffer nichts zu bedeuten.
+                let commentLength = Int(readUInt16(window, scan + 20))
+                if scan + 22 + commentLength == windowSize {
+                    eocdIndex = scan
+                    break
+                }
+            }
+            scan -= 1
+        }
+        guard let eocd = eocdIndex else { throw ZipArchiveError.notAZipArchive }
+
+        let entryCount = readUInt16(window, eocd + 10)
+        let directorySize = readUInt32(window, eocd + 12)
+        let directoryOffset = readUInt32(window, eocd + 16)
+
+        // ZIP64 erkennen und ablehnen, statt mit den Platzhalterwerten
+        // 0xFFFF/0xFFFFFFFF an eine falsche Stelle zu springen.
+        if entryCount == 0xFFFF || directorySize == 0xFFFF_FFFF || directoryOffset == 0xFFFF_FFFF {
+            throw ZipArchiveError.unsupportedZip64
+        }
+        // Direkt vor dem EOCD liegt bei ZIP64 der Locator.
+        if eocd >= 20, readUInt32(window, eocd - 20) == signatureZip64Locator {
+            throw ZipArchiveError.unsupportedZip64
+        }
+
+        guard Int64(directorySize) <= Int64(maxCentralDirectoryBytes) else {
+            throw ZipArchiveError.corruptArchive("Inhaltsverzeichnis unplausibel groß")
+        }
+        guard Int64(directoryOffset) + Int64(directorySize) <= fileSize else {
+            throw ZipArchiveError.corruptArchive("Inhaltsverzeichnis liegt außerhalb der Datei")
+        }
+        return (directoryOffset, directorySize, entryCount)
     }
 
     /// Liest den Local File Header und liefert den Byte-Offset, an dem die

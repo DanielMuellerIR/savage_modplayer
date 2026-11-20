@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from urllib.parse import unquote, urlsplit
 
 from mpris_contract_tests import silent_mod
 
@@ -106,6 +107,30 @@ class DesktopEngineTests(unittest.TestCase):
         library = self.engine.wait("library", lambda v: bool(v.get("currentID")))
         return library["currentID"]
 
+    def test_optional_fields_and_query_type_errors_keep_the_session_usable(self):
+        self.open()
+        self.engine.send("query", query="invalid")
+        self.engine.wait("error", lambda v: v.get("command") == "query")
+        self.engine.send("playlistSave", text="List from visible tracks")
+        saved = self.engine.wait("library", lambda v: len(v["playlists"]) == 1)
+        references = [track["source"]["canonicalLocation"] for track in saved["playlists"][0]["tracks"]]
+        paths = [Path(unquote(urlsplit(reference).path)).resolve() for reference in references]
+        self.assertEqual(paths, [self.track.resolve()])
+
+    def test_note_preview_keeps_qml_payload_fields(self):
+        from gui_fixture import module
+        self.track.write_bytes(module())
+        self.engine.send("volume", value=0)
+        self.engine.send("option", text="loop", setting="track")
+        self.engine.send("open", paths=[str(self.track)])
+        self.engine.wait("module")
+        self.engine.send("notes", enabled=True)
+        frame = self.engine.wait("notes", lambda event: bool(event["notes"]))
+        self.assertEqual(set(frame), {"event", "time", "notes", "overflow", "preparing"})
+        for note in frame["notes"]:
+            self.assertEqual(set(note), {"key", "channel", "start", "end", "isOpen"})
+            self.assertGreaterEqual(note["end"], note["start"])
+
     def test_visualizer_rate_live_changes_hidden_pause_and_restart(self):
         self.engine.send("option", text="loop", setting="track")
         self.open()
@@ -162,7 +187,9 @@ class DesktopEngineTests(unittest.TestCase):
         self.addCleanup(other.close)
         other.send("playlistOpen", text=playlist)
         library = other.wait("library", lambda v: bool(v["tracks"]) and bool(v["tracks"][0].get("metadata")))
-        self.assertTrue(library["tracks"][0]["metadata"])
+        self.assertEqual(library["visible"], [source])
+        self.assertEqual(library["tracks"][0]["id"], source)
+        self.assertRegex(library["tracks"][0]["metadata"]["indexedAt"], r"^\d{4}-\d{2}-\d{2}T.*Z$")
 
     def test_real_transport_and_read_only_inspection(self):
         self.assertIsNone(self.engine.process.poll())
@@ -315,7 +342,17 @@ class DesktopEngineTests(unittest.TestCase):
         self.engine.wait("complete")
         data = output.read_bytes()
         self.assertEqual(data[:4], b"RIFF")
-        self.assertEqual(int.from_bytes(data[40:44], "little"), 4*4)
+        self.assertEqual(data[8:12], b"WAVE")
+        cursor = 12
+        while cursor + 8 <= len(data):
+            tag = data[cursor:cursor + 4]
+            size = int.from_bytes(data[cursor + 4:cursor + 8], "little")
+            if tag == b"data":
+                self.assertEqual(size, 4 * 4)
+                break
+            cursor += 8 + size + size % 2
+        else:
+            self.fail("WAV enthält keinen data-Chunk")
 
     def test_explicit_marker_address_and_section_loop(self):
         self.open()

@@ -6,12 +6,6 @@ import Glibc
 import Darwin
 #endif
 
-// JSON-Nachrichten werden nach dem Einlesen nicht mehr verändert und nur auf
-// dem MainActor ausgewertet. Der Audiothread berührt diesen Kanal niemals.
-private struct DesktopRequest: @unchecked Sendable {
-    let values: [String: Any]
-}
-
 @main
 struct DesktopMain {
     static func main() async {
@@ -23,11 +17,12 @@ struct DesktopMain {
         let (requests, input) = AsyncStream<DesktopRequest>.makeStream()
         Task.detached {
             defer { input.finish() }
+            let decoder = JSONDecoder()
             while let line = readLine() {
                 guard line.utf8.count <= 32 * 1024 * 1024,
                       let data = line.data(using: .utf8),
-                      let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-                input.yield(DesktopRequest(values: values))
+                      let request = try? decoder.decode(DesktopRequest.self, from: data) else { continue }
+                input.yield(request)
             }
         }
         // EOF lässt alle angenommenen Befehle durchlaufen, bevor Hintergrundarbeit endet.
@@ -80,18 +75,10 @@ private final class DesktopEngine {
     private var visualizerWasAnimating = false
     private var nextStateUpdate = ContinuousClock.now
     private var ticker: Task<Void, Never>?
-    private var exportTask: Task<Void, Never>?
-    private var exportModule: Mod?
-    private var exportOptions = ChannelStemExportOptions()
-    private var noteCommandCount = 0
-    private var noteRevision = UUID()
-    private var noteTask: Task<Void, Never>?
-    private var notes = [[String: Any]]()
-    private var noteWorker = NotePreviewWorker()
-    private var noteSource: UUID?
-    private var preparedThrough: Double = 0
-    private var nextNoteSongEnd: Double?
-    private var noteRainVisible = false
+    private lazy var exports = DesktopExports(player: player, temporary: temporary) { [weak self] event, fields in
+        self?.emit(event, fields)
+    }
+    private let notePreview = DesktopNotePreview()
     private var writable = true
     private var libraryPreferences: LibraryPreferencesStore
     private var libraryDocument = LibraryPreferencesDocument()
@@ -145,13 +132,13 @@ private final class DesktopEngine {
             player.setVolume(Float(number("volume", default: 0.6)))
             player.visualizerFrameRate = number("visualizerHz", default: 60)
             applySound()
-        } catch { writable = false; emit("error", ["message": "Gespeicherte Daten sind geschützt: \(error.localizedDescription)"]) }
+        } catch { writable = false; emit(.error, ["message": "Gespeicherte Daten sind geschützt: \(error.localizedDescription)"]) }
         #if DEBUG
         var ready: [String: Any] = ["preferences": preferences, "writable": writable, "protocolVersion": 2]
         if ProcessInfo.processInfo.environment["SAVAGE_DESKTOP_TEST_SCAN_GATE"] != nil { ready["testScanGate"] = true }
-        emit("ready", ready)
+        emit(.ready, ready)
         #else
-        emit("ready", ["preferences": preferences, "writable": writable, "protocolVersion": 2])
+        emit(.ready, ["preferences": preferences, "writable": writable, "protocolVersion": 2])
         #endif
         sendLibrary()
         ticker = Task { [weak self] in
@@ -161,7 +148,7 @@ private final class DesktopEngine {
                 guard let self else { return }
                 tick()
                 let animated = player.isPlaying && !player.isPaused
-                    && (player.visualizersVisible || noteRainVisible)
+                    && (player.visualizersVisible || notePreview.visible)
                 let rate = min(60, max(1, player.visualizerFrameRate))
                 let interval = animated ? 1 / rate : 0.2
                 deadline += .seconds(interval)
@@ -183,28 +170,28 @@ private final class DesktopEngine {
         cancelPendingLoads()
         scanGeneration = UUID()
         ticker?.cancel()
-        noteTask?.cancel()
+        notePreview.cancel()
         indexTask?.cancel()
-        exportTask?.cancel()
+        exports.cancel()
         let scans = Array(scanTasks.values)
         for scan in scans { scan.cancel() }
         player.stop()
         for scan in scans { await scan.value }
-        await exportTask?.value
+        await exports.finish()
         try? FileManager.default.removeItem(at: temporary)
     }
 
     func handle(_ request: DesktopRequest) async {
-        let v = request.values
-        let command = v["command"] as? String ?? ""
-        let index = v["index"] as? Int ?? 0
-        let value = v["value"] as? Double ?? 0
-        let text = v["text"] as? String ?? ""
+        let v = request
+        let command = request.command
+        let index = v[.index]?.integer ?? 0
+        let value = v[.value]?.number ?? 0
+        let text = v[.text]?.string ?? ""
         do {
             switch command {
-            case "open": startupSuperseded = true; await open(v["paths"] as? [String] ?? [], autoPlay: v["autoPlay"] as? Bool ?? true)
-            case "load": cancelPendingLoads(); try await load(id: text, play: true)
-            case "recentLoad":
+            case .open: startupSuperseded = true; await open(v[.paths]?.strings ?? [], autoPlay: v[.autoPlay]?.bool ?? true)
+            case .load: cancelPendingLoads(); try await load(id: text, play: true)
+            case .recentLoad:
                 cancelPendingLoads()
                 guard let reference = recent.first(where: { $0.id == text }) else { return }
                 if knownEntries[text] != nil {
@@ -219,116 +206,116 @@ private final class DesktopEngine {
                         self.finishScanning()
                         self.remember(result.entries)
                         do { try await self.load(id: text, play: true) }
-                        catch { self.emit("error", ["message": error.localizedDescription, "command": command]) }
+                        catch { self.emit(.error, ["message": error.localizedDescription, "command": request.commandName]) }
                     }
                 }
-            case "play":
+            case .play:
                 cancelPendingLoads()
                 player.sleepTimer.prepareForManualPlayback()
                 if player.isPaused { player.resume() }
                 else if player.isPlaying { player.pause() }
                 else { player.play() }
                 await markHeardIfPlaying(); sendLibrary()
-            case "stop": cancelPendingLoads(); player.sleepTimer.cancel(); player.stop(); player.seek(toPosition: 0)
-            case "resume":
+            case .stop: cancelPendingLoads(); player.sleepTimer.cancel(); player.stop(); player.seek(toPosition: 0)
+            case .resume:
                 cancelPendingLoads()
                 player.sleepTimer.prepareForManualPlayback()
                 if player.isPaused { player.resume() } else if !player.isPlaying { player.play() }
                 await markHeardIfPlaying(); sendLibrary()
-            case "pause": cancelPendingLoads(); if player.isPlaying && !player.isPaused { player.pause() }
-            case "next": cancelPendingLoads(); try await adjacent(backwards: false)
-            case "previous": cancelPendingLoads(); try await adjacent(backwards: true)
-            case "seek":
-                if let row = v["row"] as? Int { player.seek(toPosition: index, row: row) }
+            case .pause: cancelPendingLoads(); if player.isPlaying && !player.isPaused { player.pause() }
+            case .next: cancelPendingLoads(); try await adjacent(backwards: false)
+            case .previous: cancelPendingLoads(); try await adjacent(backwards: true)
+            case .seek:
+                if let row = v[.row]?.integer { player.seek(toPosition: index, row: row) }
                 else { player.seek(toPosition: index) }
-            case "seekSeconds": player.seek(bySeconds: value)
-            case "bpm": player.bpm = max(32, min(300, index))
-            case "speed": player.speed = max(1, min(31, index))
-            case "mute": player.toggleMute(channelIndex: index)
-            case "solo": player.toggleSolo(channelIndex: index)
-            case "volume": preferences["volume"] = min(1, max(0, value)); player.setVolume(Float(value)); try savePreferences(); emit("preferences", preferences)
-            case "defaultOption":
+            case .seekSeconds: player.seek(bySeconds: value)
+            case .bpm: player.bpm = max(32, min(300, index))
+            case .speed: player.speed = max(1, min(31, index))
+            case .mute: player.toggleMute(channelIndex: index)
+            case .solo: player.toggleSolo(channelIndex: index)
+            case .volume: preferences["volume"] = min(1, max(0, value)); player.setVolume(Float(value)); try savePreferences(); emit(.preferences, preferences)
+            case .defaultOption:
                 guard ["palClock", "stereoSeparation", "useInterpolation", "ledFilterActive"].contains(text) else { return }
-                try requireWritable(); preferences[text] = v["setting"]
-                applySound(); try savePreferences(); emit("preferences", preferences)
-            case "option":
+                try requireWritable(); preferences[text] = v[.setting]?.foundationValue
+                applySound(); try savePreferences(); emit(.preferences, preferences)
+            case .option:
                 guard ["theme", "loop", "shuffle", "palClock", "stereoSeparation", "useInterpolation", "ledFilterActive", "visualizerHz", "autoplayFolder", "zoom", "sidebarWidth", "recentHeight", "sleepTimerMinutes", "noteRainHorizon", "noteRainZoomToSong"].contains(text) else { return }
                 if ["palClock", "stereoSeparation", "useInterpolation", "ledFilterActive"].contains(text),
                    let currentID, var settings = overrides.tracks[currentID],
-                   let encoded = json(settings) as? [String: Any], encoded[text] != nil {
-                    var changed = encoded; changed[text] = v["setting"]
+                   let encoded = desktopJSONObject(settings) as? [String: Any], encoded[text] != nil {
+                    var changed = encoded; changed[text] = v[.setting]?.foundationValue
                     settings = try JSONDecoder().decode(TrackPlaybackOverrides.self, from: JSONSerialization.data(withJSONObject: changed))
                     var next = overrides; next.tracks[currentID] = settings
                     try requireWritable()
                     try TrackPlaybackSettingsStore(fileURL: directory.appendingPathComponent("track-settings.json")).save(next)
                     overrides = next; sendDetails()
-                } else { preferences[text] = v["setting"] }
+                } else { preferences[text] = v[.setting]?.foundationValue }
                 player.visualizerFrameRate = number("visualizerHz", default: 60)
                 applySound(); try savePreferences()
-                emit("preferences", preferences)
-            case "compact":
-                player.visualizersVisible = !(v["enabled"] as? Bool ?? false)
-                if !player.visualizersVisible { emit("visualizer", ["vu": [], "waves": [], "master": []]) }
-            case "indexCancel": indexTask?.cancel()
-            case "indexRefresh": refreshIndex(generation: scanGeneration)
-            case "favorite":
+                emit(.preferences, preferences)
+            case .compact:
+                player.visualizersVisible = !(v[.enabled]?.bool ?? false)
+                if !player.visualizersVisible { emit(DesktopVisualizerEvent()) }
+            case .indexCancel: indexTask?.cancel()
+            case .indexRefresh: refreshIndex(generation: scanGeneration)
+            case .favorite:
                 try requireWritable()
                 if saved.favoriteIDs.contains(text) { saved.favoriteIDs.remove(text) } else { saved.favoriteIDs.insert(text) }
                 try savePlaylists(); sendLibrary()
-            case "markUnheard":
+            case .markUnheard:
                 try requireWritable()
                 libraryDocument = try await libraryPreferences.markHeard(text, heard: false).document
                 played.remove(text); sendLibrary()
-            case "query":
-                query = try JSONDecoder().decode(LibraryQuery.self, from: JSONSerialization.data(withJSONObject: v["query"] ?? [:]))
-                preferences["query"] = json(query); try savePreferences(); sendLibrary()
-            case "selection":
-                selection = v["ids"] as? [String]; sendLibrary()
+            case .query:
+                query = try v.decode(LibraryQuery.self, field: .query)
+                preferences["query"] = desktopJSONObject(query); try savePreferences(); sendLibrary()
+            case .selection:
+                selection = v[.ids]?.strings; sendLibrary()
                 if let first = selection?.first { cancelPendingLoads(); try await load(id: first, play: true) }
-            case "clear": cancelPendingLoads(); player.stop(); entries = []; selection = nil; resumeSource = nil; sendLibrary()
-            case "demo":
+            case .clear: cancelPendingLoads(); player.stop(); entries = []; selection = nil; resumeSource = nil; sendLibrary()
+            case .demo:
                 player.sleepTimer.prepareForManualPlayback(); player.setMod(ModParser.generateDemoMod())
                 currentID = nil; moduleRevision = UUID(); lastPattern = -1; lastPosition = -1
                 applySound(); player.play(); sendDetails(); sendLibrary()
-            case "enqueue":
-                if let entry = entries.first(where: { $0.source.id == text }) { queue.enqueue(entry.reference, next: v["next"] as? Bool ?? false) }
+            case .enqueue:
+                if let entry = entries.first(where: { $0.source.id == text }) { queue.enqueue(entry.reference, next: v[.next]?.bool ?? false) }
                 sendLibrary()
-            case "queueRemove": if let id = UUID(uuidString: text) { queue.remove(id: id) }; sendLibrary()
-            case "queueMove": if let id = UUID(uuidString: text) { queue.move(id: id, by: index) }; sendLibrary()
-            case "queueClear": queue.removeAll(); sendLibrary()
-            case "playlistSave":
+            case .queueRemove: if let id = UUID(uuidString: text) { queue.remove(id: id) }; sendLibrary()
+            case .queueMove: if let id = UUID(uuidString: text) { queue.move(id: id, by: index) }; sendLibrary()
+            case .queueClear: queue.removeAll(); sendLibrary()
+            case .playlistSave:
                 try requireWritable()
-                let ids = v["ids"] as? [String] ?? visibleIDs()
+                let ids = v[.ids]?.strings ?? visibleIDs()
                 let tracks = ids.compactMap { id in entries.first { $0.source.id == id }?.reference }
                 saved.playlists.append(SavedPlaylist(name: text, tracks: tracks)); try savePlaylists(); sendLibrary()
-            case "playlistRename":
+            case .playlistRename:
                 try requireWritable()
-                if let id = v["playlist"] as? String, let i = saved.playlists.firstIndex(where: { $0.id.uuidString == id }) {
+                if let id = v[.playlist]?.string, let i = saved.playlists.firstIndex(where: { $0.id.uuidString == id }) {
                     saved.playlists[i].name = text; try savePlaylists(); sendLibrary()
                 }
-            case "playlistDelete":
+            case .playlistDelete:
                 try requireWritable(); saved.playlists.removeAll { $0.id.uuidString == text }; try savePlaylists(); sendLibrary()
-            case "playlistMove":
+            case .playlistMove:
                 try requireWritable()
                 if let i = saved.playlists.firstIndex(where: { $0.id.uuidString == text }), saved.playlists.indices.contains(i + index) {
                     saved.playlists.swapAt(i, i + index); try savePlaylists(); sendLibrary()
                 }
-            case "playlistTrackRemove", "playlistTrackMove":
+            case .playlistTrackRemove, .playlistTrackMove:
                 try requireWritable()
-                if let id = v["playlist"] as? String, let i = saved.playlists.firstIndex(where: { $0.id.uuidString == id }),
+                if let id = v[.playlist]?.string, let i = saved.playlists.firstIndex(where: { $0.id.uuidString == id }),
                    let j = saved.playlists[i].tracks.firstIndex(where: { $0.id == text }) {
-                    if command == "playlistTrackRemove" { saved.playlists[i].tracks.remove(at: j) }
+                    if command == .playlistTrackRemove { saved.playlists[i].tracks.remove(at: j) }
                     else if saved.playlists[i].tracks.indices.contains(j + index) { saved.playlists[i].tracks.swapAt(j, j + index) }
                     try savePlaylists(); sendLibrary()
                 }
-            case "playlistAdd":
+            case .playlistAdd:
                 try requireWritable()
-                if let id = v["playlist"] as? String, let i = saved.playlists.firstIndex(where: { $0.id.uuidString == id }),
+                if let id = v[.playlist]?.string, let i = saved.playlists.firstIndex(where: { $0.id.uuidString == id }),
                    let entry = entries.first(where: { $0.source.id == text }) {
                     if !saved.playlists[i].tracks.contains(where: { $0.id == entry.source.id }) { saved.playlists[i].tracks.append(entry.reference) }
                     try savePlaylists(); sendLibrary()
                 }
-            case "playlistOpen":
+            case .playlistOpen:
                 cancelPendingLoads()
                 if let playlist = saved.playlists.first(where: { $0.id.uuidString == text }) {
                     let folder = temporary.appendingPathComponent(UUID().uuidString)
@@ -344,92 +331,91 @@ private final class DesktopEngine {
                         self.sendLibrary()
                         self.refreshIndex(generation: generation)
                         if !result.missing.isEmpty || !result.limited.isEmpty {
-                            self.emit("notice", ["message": "\(result.missing.count) fehlende und \(result.limited.count) begrenzte Quellen."])
+                            self.emit(.notice, ["message": "\(result.missing.count) fehlende und \(result.limited.count) begrenzte Quellen."])
                         }
                     }
                 }
-            case "preview":
+            case .preview:
                 player.sleepTimer.prepareForManualPlayback()
-                if v["snapshot"] as? Bool == true, let mod = inspectionModule { player.previewInstrument(mod: mod, index: index) }
+                if v[.snapshot]?.bool == true, let mod = inspectionModule { player.previewInstrument(mod: mod, index: index) }
                 else { player.previewInstrument(index: index) }
-            case "stopPreview": player.stopPreview()
-            case "inspect": inspectionModule = player.activeMod; try sendInspection()
-            case "instrument": sendInstrument(index)
-            case "sample": try sendSample(id: text, zoom: max(1, index), position: value, focus: v["focus"] as? String)
-            case "prepareSampleExport":
-                guard let mod = player.activeMod, v["revision"] as? String == moduleRevision.uuidString,
+            case .stopPreview: player.stopPreview()
+            case .inspect: inspectionModule = player.activeMod; try sendInspection()
+            case .instrument: sendInstrument(index)
+            case .sample: try sendSample(id: text, zoom: max(1, index), position: value, focus: v[.focus]?.string)
+            case .prepareSampleExport:
+                guard let mod = player.activeMod, v[.revision]?.string == moduleRevision.uuidString,
                       let selection = mod.previewSelection(instrumentIndex: index) else { throw CocoaError(.fileReadNoSuchFile) }
                 let token = UUID(); sampleExport = (token, mod, index)
-                emit("sampleExportPrepared", ["token": token.uuidString, "name": selection.sample.name.isEmpty ? "sample_\(index)" : selection.sample.name])
-            case "sampleExportCancel": sampleExport = nil
-            case "sampleExport":
-                if let path = v["path"] as? String {
+                emit(.sampleExportPrepared, ["token": token.uuidString, "name": selection.sample.name.isEmpty ? "sample_\(index)" : selection.sample.name])
+            case .sampleExportCancel: sampleExport = nil
+            case .sampleExport:
+                if let path = v[.path]?.string {
                     let captured: (Mod, Int)
-                    if let token = v["token"] as? String {
+                    if let token = v[.token]?.string {
                         guard let snapshot = sampleExport, snapshot.token.uuidString == token else { throw CocoaError(.fileReadNoSuchFile) }
                         captured = (snapshot.mod, snapshot.index)
                     } else if let mod = player.activeMod { captured = (mod, index) }
                     else { return }
                     defer { sampleExport = nil }
                     let destination = URL(fileURLWithPath: path)
-                    let expected = try Self.wavStamp(destination, overwrite: v["overwrite"] as? Bool ?? false)
+                    let expected = try DesktopExports.wavStamp(destination, overwrite: v[.overwrite]?.bool ?? false)
                     let staging = destination.deletingLastPathComponent().appendingPathComponent(".savage-sample-\(UUID()).wav")
                     defer { try? FileManager.default.removeItem(at: staging) }
                     try player.exportInstrumentToWav(mod: captured.0, index: captured.1, destinationURL: staging)
-                    try Self.publishWAV(staging, to: destination, replacing: expected)
-                    emit("complete", ["path": path])
+                    try DesktopExports.publishWAV(staging, to: destination, replacing: expected)
+                    emit(.complete, ["path": path])
                 }
-            case "timer":
+            case .timer:
                 if index > 0 {
                     if player.sleepTimer.start(minutes: index), writable {
                         preferences["sleepTimerMinutes"] = index
-                        try savePreferences(); emit("preferences", preferences)
+                        try savePreferences(); emit(.preferences, preferences)
                     }
                 } else { player.sleepTimer.cancel() }
-            case "timerExtend": player.sleepTimer.extend()
-            case "markerAdd", "markerRename", "markerDelete": try await editMarker(command, v)
-            case "section":
-                if let a = v["start"] as? [String: Any], let b = v["end"] as? [String: Any] {
-                    let start = SongAddress(position: a["position"] as? Int ?? 0, row: a["row"] as? Int ?? 0)
-                    let end = SongAddress(position: b["position"] as? Int ?? 0, row: b["row"] as? Int ?? 0)
+            case .timerExtend: player.sleepTimer.extend()
+            case .markerAdd, .markerRename, .markerDelete: try await editMarker(v)
+            case .section:
+                if let a = v[.start]?.object, let b = v[.end]?.object {
+                    let start = SongAddress(position: a["position"]?.integer ?? 0, row: a["row"]?.integer ?? 0)
+                    let end = SongAddress(position: b["position"]?.integer ?? 0, row: b["row"]?.integer ?? 0)
                     if let section = SongSection(start: start, end: end) {
                         player.sleepTimer.prepareForManualPlayback(); player.startSectionLoop(section)
                     }
                 }
-            case "sectionCancel": player.cancelSectionLoop()
-            case "trackSettings":
+            case .sectionCancel: player.cancelSectionLoop()
+            case .trackSettings:
                 try requireWritable()
                 if let currentID {
-                    let data = try JSONSerialization.data(withJSONObject: v["settings"] ?? [:])
-                    let settings = try JSONDecoder().decode(TrackPlaybackOverrides.self, from: data)
+                    let settings = try v.decode(TrackPlaybackOverrides.self, field: .settings)
                     var next = overrides
                     next.tracks[currentID] = settings.isEmpty ? nil : settings
                     try TrackPlaybackSettingsStore(fileURL: directory.appendingPathComponent("track-settings.json")).save(next)
                     overrides = next
                     applySound(); sendDetails()
                 }
-            case "notes": noteRainVisible = v["enabled"] as? Bool ?? false
-            case "prepareExport":
-                exportModule = player.activeMod
-                exportOptions = .init(stereoSeparation: player.stereoSeparation, useInterpolation: player.useInterpolation,
-                    palClock: player.palClock, mutedChannels: (0..<player.channelCount).filter { player.isMuted(channelIndex: $0) },
-                    soloChannels: (0..<player.channelCount).filter { player.isSoloed(channelIndex: $0) })
-                emit("exportPrepared", ["title": player.trackName])
-                if v["video"] as? Bool == true { beginVideoExport([:], preview: true) }
-            case "export": beginExport(v)
-            case "videoExport": beginVideoExport(v)
-            case "videoPreview": beginVideoExport(v, preview: true)
-            case "batchExport": beginBatchExport(v)
-            case "collectionExport":
-                if let path = v["path"] as? String {
+            case .notes: notePreview.visible = v[.enabled]?.bool ?? false
+            case .prepareExport:
+                exports.capturePlayback()
+                if v[.video]?.bool == true { exports.beginVideo(.init(.videoPreview), preview: true, light: lightTheme) }
+            case .export:
+                exports.beginWAV(v)
+            case .videoExport:
+                exports.beginVideo(v, light: lightTheme)
+            case .videoPreview:
+                exports.beginVideo(v, preview: true, light: lightTheme)
+            case .batchExport:
+                beginBatchExport(v)
+            case .collectionExport:
+                if let path = v[.path]?.string {
                     let snapshot = collectionSnapshot()
                     let sources = try collectionSources(snapshot)
                     let document = try CollectionExchangeExporter.makeDocument(from: snapshot, sources: sources)
                     try CollectionExchangeCodec.encode(document).write(to: URL(fileURLWithPath: path), options: .withoutOverwriting)
-                    emit("complete", ["path": path])
+                    emit(.complete, ["path": path])
                 }
-            case "collectionImport":
-                if let path = v["path"] as? String {
+            case .collectionImport:
+                if let path = v[.path]?.string {
                     if exchangeDocument != nil { pendingCollections.append(path); return }
                     exchangeDocument = try CollectionExchangeCodec.load(from: URL(fileURLWithPath: path))
                     exchangeMapping = [:]; exchangeSkipped = []; exchangeResolutions = [:]
@@ -441,39 +427,39 @@ private final class DesktopEngine {
                     }
                     try sendExchangePreview()
                 }
-            case "collectionMap":
-                if let id = (v["track"] as? String).flatMap(UUID.init(uuidString:)) {
+            case .collectionMap:
+                if let id = (v[.track]?.string).flatMap(UUID.init(uuidString:)) {
                     exchangeMapping[id] = entries.first { $0.source.id == text }?.reference
                     if text == "__skip__" { exchangeSkipped.insert(id) } else { exchangeSkipped.remove(id) }
                     try sendExchangePreview()
                 }
-            case "collectionResolve":
-                if let id = exchangeConflictIDs[text], let choice = v["choice"] as? String,
+            case .collectionResolve:
+                if let id = exchangeConflictIDs[text], let choice = v[.choice]?.string,
                    let resolution = CollectionExchangeResolution(rawValue: choice) {
                     exchangeResolutions[id] = resolution; try sendExchangePreview()
                 }
-            case "collectionApply": try await applyExchange(); await advancePendingCollection()
-            case "collectionCancel": exchangeDocument = nil; exchangePreview = nil; await advancePendingCollection()
-            case "filterSave":
+            case .collectionApply: try await applyExchange(); await advancePendingCollection()
+            case .collectionCancel: exchangeDocument = nil; exchangePreview = nil; await advancePendingCollection()
+            case .filterSave:
                 try requireWritable()
                 let current = query
                 let snapshot = try await libraryPreferences.update { document in
                     document.savedFilters.append(SavedLibraryFilter(name: text, query: current))
                 }
                 libraryDocument = snapshot.document; sendLibrary()
-            case "filterDelete":
+            case .filterDelete:
                 try requireWritable()
                 let snapshot = try await libraryPreferences.update { $0.savedFilters.removeAll { $0.id.uuidString == text } }
                 libraryDocument = snapshot.document; sendLibrary()
-            case "filterOpen":
+            case .filterOpen:
                 if let filter = libraryDocument.savedFilters.first(where: { $0.id.uuidString == text }) {
-                    query = filter.query; preferences["query"] = json(query); try savePreferences(); sendLibrary()
+                    query = filter.query; preferences["query"] = desktopJSONObject(query); try savePreferences(); sendLibrary()
                 }
-            case "exportCancel": exportTask?.cancel()
-            case "quit": await shutdown(); exit(0)
-            default: emit("error", ["message": "Unbekannter Desktop-Auftrag: \(command)"])
+            case .exportCancel: exports.cancel()
+            case .quit: await shutdown(); exit(0)
+            case nil: emit(.error, ["message": "Unbekannter Desktop-Auftrag: \(request.commandName)"])
             }
-        } catch { emit("error", ["message": error.localizedDescription, "command": command]) }
+        } catch { emit(.error, ["message": error.localizedDescription, "command": request.commandName]) }
     }
 
     private func number(_ key: String, default value: Double) -> Double { preferences[key] as? Double ?? value }
@@ -501,7 +487,7 @@ private final class DesktopEngine {
         let generation = UUID()
         scanGeneration = generation
         isScanning = true
-        emit("loading", ["active": true])
+        emit(.loading, ["active": true])
         // Der Auftrag ist registriert, bevor weitere Befehle angenommen werden.
         // Das Scanergebnis wird nur übernommen, solange seine Generation gültig ist.
         scanTasks[generation] = Task {
@@ -521,7 +507,7 @@ private final class DesktopEngine {
     }
     private func finishScanning() {
         isScanning = false
-        emit("loading", ["active": false])
+        emit(.loading, ["active": false])
     }
     private var defaults: PlaybackOptions {
         .init(palClock: flag("palClock", default: true), stereoSeparation: number("stereoSeparation", default: 0.8),
@@ -562,7 +548,7 @@ private final class DesktopEngine {
             #if DEBUG
             // Das fertige Ergebnis im Worker halten, bis die Prozessprüfung es freigibt.
             if let gate, !Task.isCancelled {
-                await self.emit("testScanWaiting", [:])
+                await self.emit(.testScanWaiting, [:])
                 let deadline = ContinuousClock.now + .seconds(15)
                 while !FileManager.default.fileExists(atPath: gate.appendingPathComponent("release").path),
                       ContinuousClock.now < deadline {
@@ -575,21 +561,21 @@ private final class DesktopEngine {
         }
         guard !Task.isCancelled else { return }
         #if DEBUG
-        defer { if gate != nil { emit("testScanReturned", [:]) } }
+        defer { if gate != nil { emit(.testScanReturned, [:]) } }
         #endif
         guard scanGeneration == generation else { return }
         entries = found; remember(found); selection = nil; sendLibrary()
         if writable {
             do { libraryDocument = try await libraryPreferences.registerSources(Dictionary(found.map { ($0.source.id, Date()) }, uniquingKeysWith: { first, _ in first })).document }
-            catch { emit("error", ["message": error.localizedDescription]) }
+            catch { emit(.error, ["message": error.localizedDescription]) }
         }
         guard scanGeneration == generation else { return }
         finishScanning()
         let initial = restoreLast ? found.first { $0.source.id == preferences["lastPlayedSourceID"] as? String } ?? found.first : found.first
         if let first = initial {
             do { try await load(id: first.source.id, play: autoPlay) }
-            catch { emit("error", ["message": error.localizedDescription]) }
-        } else { emit("notice", ["message": "Keine unterstützten Tracker-Dateien gefunden."]) }
+            catch { emit(.error, ["message": error.localizedDescription]) }
+        } else { emit(.notice, ["message": "Keine unterstützten Tracker-Dateien gefunden."]) }
         guard scanGeneration == generation else { return }
         refreshIndex(generation: generation)
         await advancePendingCollection()
@@ -603,26 +589,26 @@ private final class DesktopEngine {
         }
         while exchangeDocument == nil, !pendingCollections.isEmpty {
             let path = pendingCollections.removeFirst()
-            await handle(DesktopRequest(values: ["command": "collectionImport", "path": path]))
+            await handle(DesktopRequest(.collectionImport, [.path: .string(path)]))
         }
     }
     private func refreshIndex(generation: UUID) {
         indexTask?.cancel()
         if let metadataIndex {
             let inputs = entries.map { ModuleMetadataInput(id: $0.source.id, url: $0.url) }
-            emit("indexing", ["active": true, "completed": 0, "total": inputs.count])
+            emit(.indexing, ["active": true, "completed": 0, "total": inputs.count])
             let owner = self
             indexTask = Task { [weak self] in
                 let result = await metadataIndex.refresh(inputs, progress: { progress in
                     guard progress.completed.isMultiple(of: 16) || progress.completed == progress.total else { return }
                     Task { @MainActor in
                         guard owner.scanGeneration == generation else { return }
-                        owner.emit("indexing", ["active": true, "completed": progress.completed, "total": progress.total])
+                        owner.emit(.indexing, ["active": true, "completed": progress.completed, "total": progress.total])
                     }
                 })
                 guard let self, scanGeneration == generation else { return }
                 metadata = result.records
-                emit("indexing", ["active": false, "completed": result.records.count, "total": inputs.count, "cancelled": result.wasCancelled, "warnings": result.warnings.map(\.rawValue)])
+                emit(.indexing, ["active": false, "completed": result.records.count, "total": inputs.count, "cancelled": result.wasCancelled, "warnings": result.warnings.map(\.rawValue)])
                 indexTask = nil; sendLibrary()
             }
         }
@@ -643,10 +629,10 @@ private final class DesktopEngine {
         recent = Array(recent.prefix(20))
         if writable {
             do {
-                preferences["recent"] = json(recent)
+                preferences["recent"] = desktopJSONObject(recent)
                 preferences["lastPlayedSourceID"] = id
                 try savePreferences()
-            } catch { emit("notice", ["message": "Der Titel wurde geladen; sein Verlauf konnte nicht gespeichert werden: \(error.localizedDescription)"]) }
+            } catch { emit(.notice, ["message": "Der Titel wurde geladen; sein Verlauf konnte nicht gespeichert werden: \(error.localizedDescription)"]) }
         }
         guard currentGeneration == generation else { return }
         if play {
@@ -662,7 +648,7 @@ private final class DesktopEngine {
         played.insert(id)
         if writable {
             do { libraryDocument = try await libraryPreferences.markHeard(id).document }
-            catch { played.remove(id); emit("notice", ["message": "Der Hörstatus konnte nicht gespeichert werden."]) }
+            catch { played.remove(id); emit(.notice, ["message": "Der Hörstatus konnte nicht gespeichert werden."]) }
         }
     }
     private func adjacent(backwards: Bool, automatic: Bool = false) async throws {
@@ -707,27 +693,27 @@ private final class DesktopEngine {
     }
     private func sendLibrary() {
         let visible = visibleIDs()
-        emit("libraryBegin", ["currentID": currentID ?? "", "selection": selection ?? [],
-           "playlists": json(saved.playlists), "recent": recent.map { ["id": $0.id, "name": $0.displayName] }, "query": json(query),
-           "savedFilters": json(libraryDocument.savedFilters),
-           "queue": queue.items.map { ["id": $0.id.uuidString, "sourceID": $0.track.id, "name": $0.track.displayName] }])
+        emit(DesktopLibraryEvents.Begin(currentID: currentID ?? "", selection: selection ?? [],
+            playlists: saved.playlists, recent: recent.map { .init(id: $0.id, name: $0.displayName) },
+            query: query, savedFilters: libraryDocument.savedFilters, queue: queue.items.map {
+                .init(id: $0.id.uuidString, sourceID: $0.track.id, name: $0.track.displayName)
+            }))
         for first in stride(from: 0, to: entries.count, by: 128) {
-            let batch = entries[first..<min(entries.count, first + 128)].map { e -> [String: Any] in
-            var value: [String: Any] = ["id": e.source.id, "name": e.displayName, "folders": e.folderPath,
-                                       "favorite": saved.favoriteIDs.contains(e.source.id), "heard": played.contains(e.source.id)]
-            if let record = metadata[e.source.id] { value["metadata"] = json(record) }
-            return value
+            let batch = entries[first..<min(entries.count, first + 128)].map { entry in
+                let id = entry.source.id
+                return DesktopLibraryEvents.Track(id: id, name: entry.displayName, folders: entry.folderPath,
+                    favorite: saved.favoriteIDs.contains(id), heard: played.contains(id), metadata: metadata[id])
             }
-            emit("libraryTracks", ["tracks": batch])
+            emit(DesktopLibraryEvents.Tracks(tracks: batch))
         }
         for first in stride(from: 0, to: visible.count, by: 128) {
-            emit("libraryVisible", ["ids": Array(visible[first..<min(visible.count, first + 128)])])
+            emit(DesktopLibraryEvents.Visible(ids: Array(visible[first..<min(visible.count, first + 128)])))
         }
-        emit("libraryEnd", [:])
+        emit(DesktopLibraryEvents.End())
     }
     private func sendDetails() {
         guard let mod = player.activeMod else { return }
-        emit("module", ["title": player.trackName, "format": mod.format.rawValue,
+        emit(.module, ["title": player.trackName, "format": mod.format.rawValue,
             "sourceID": currentID ?? "", "revision": moduleRevision.uuidString,
             "fileURL": currentID.flatMap { knownEntries[$0]?.source.location.absoluteString } ?? "",
             "channels": mod.channelCount, "usedChannels": mod.usedChannelCount, "displayChannels": mod.displayChannelIndices,
@@ -740,12 +726,12 @@ private final class DesktopEngine {
                     "playable": mod.playableInstrumentIndices.contains(i), "frames": sample?.pcm.count ?? 0,
                     "volume": sample?.volume ?? 0, "finetune": sample?.finetune ?? 0, "looped": sample?.isLooped ?? false]
             }, "warnings": mod.compatibilityWarnings, "amigaClock": PlaybackOptions.supportsAmigaClock(mod.format),
-            "trackSettings": json(currentID.flatMap { overrides.tracks[$0] } ?? TrackPlaybackOverrides()),
-            "markers": json(markerDocument.markers.filter { $0.sourceID == currentID })])
+            "trackSettings": desktopJSONObject(currentID.flatMap { overrides.tracks[$0] } ?? TrackPlaybackOverrides()),
+            "markers": desktopJSONObject(markerDocument.markers.filter { $0.sourceID == currentID })])
     }
     private func tick() {
         if let error = player.playbackError, error != lastPlaybackError {
-            emit("error", ["message": "Die Audioausgabe konnte nicht gestartet werden: \(error)"])
+            emit(.error, ["message": "Die Audioausgabe konnte nicht gestartet werden: \(error)"])
         }
         lastPlaybackError = player.playbackError
         if player.songEndPulse != endPulse {
@@ -760,8 +746,8 @@ private final class DesktopEngine {
         let visualizer = player.visualizerState
         let animating = player.isPlaying && !player.isPaused
         if player.visualizersVisible && (animating || visualizerWasAnimating || lastVisualizerRevision != moduleRevision) {
-            emit("visualizer", ["vu": visualizer.vuLevels,
-                "waves": visualizer.channelWaveforms, "master": visualizer.masterSamples])
+            emit(DesktopVisualizerEvent(vu: visualizer.vuLevels,
+                waves: visualizer.channelWaveforms, master: visualizer.masterSamples))
             lastVisualizerRevision = moduleRevision
         }
         visualizerWasAnimating = animating && player.visualizersVisible
@@ -769,25 +755,13 @@ private final class DesktopEngine {
         // pro Sekunde. Die Bilddaten invalidieren nur ihre eigenen QML-Views.
         if ContinuousClock.now >= nextStateUpdate {
             nextStateUpdate = .now + .milliseconds(50)
-            emit("state", ["playing": player.isPlaying, "paused": player.isPaused,
-                "position": player.currentPosition, "row": player.currentRow, "bpm": player.bpm, "speed": player.speed,
-                "sound": ["palClock": player.palClock, "stereoSeparation": player.stereoSeparation,
-                          "useInterpolation": player.useInterpolation, "ledFilterActive": player.ledFilterActive],
-                "elapsed": visualizer.elapsedTime, "duration": visualizer.totalDuration,
-                "muted": (0..<player.channelCount).map { player.isMuted(channelIndex: $0) },
-                "solo": (0..<player.channelCount).map { player.isSoloed(channelIndex: $0) },
-                "timerSeconds": player.sleepTimer.snapshot.remainingSeconds, "timerActive": player.sleepTimer.snapshot.isActive,
-                "timerPhase": String(describing: player.sleepTimer.snapshot.phase),
-                "markerSaving": markerWritesInFlight > 0,
-                "sectionActive": player.sectionLoopIsActive, "sectionPreparing": player.sectionLoopIsPreparing,
-                "sectionError": player.sectionLoopError?.localizedDescription ?? "",
-                "sectionProgress": player.sectionLoopProgress])
+            emit(DesktopPlaybackEvent(player, markerSaving: markerWritesInFlight > 0))
         }
         if let mod = player.activeMod, mod.patternTable.indices.contains(player.currentPosition) {
             let pattern = mod.patternTable[player.currentPosition]
             if pattern != lastPattern || player.currentPosition != lastPosition, mod.patterns.indices.contains(pattern) {
                 lastPattern = pattern; lastPosition = player.currentPosition
-                emit("pattern", ["index": pattern, "position": player.currentPosition,
+                emit(.pattern, ["index": pattern, "position": player.currentPosition,
                     "rows": mod.patterns[pattern].rows.map { row in row.notes.map { note in
                         let text = TrackerNoteText(note)
                         return ["noteText": text.note, "instrumentText": text.instrument, "volumeText": text.volume, "effectText": text.effect, "key": note.key, "period": note.period, "instrument": note.instrument,
@@ -795,44 +769,9 @@ private final class DesktopEngine {
                     } }])
             }
         }
-        if noteRainVisible { updateNotes() }
-    }
-    private func updateNotes() {
-        guard let source = player.notePreviewSource else {
-            noteTask?.cancel(); noteTask = nil; noteSource = nil; notes = []; nextNoteSongEnd = nil
-            emit("notes", ["time": 0, "notes": [], "overflow": false, "preparing": false]); return
-        }
-        let time = Double(source.exchange.frame) / source.configuration.sampleRate
-        if noteSource != source.id {
-            noteTask?.cancel(); noteTask = nil; noteSource = source.id
-            noteWorker = NotePreviewWorker(); preparedThrough = 0; notes = []; nextNoteSongEnd = nil
-            noteCommandCount = 0; noteRevision = UUID()
-        }
-        let commands = source.collectCommands()
-        if commands.count != noteCommandCount {
-            noteCommandCount = commands.count; noteRevision = UUID()
-            noteTask?.cancel(); noteTask = nil
-            preparedThrough = 0; notes = []; nextNoteSongEnd = nil
-        }
-        let end = (preferences["loop"] as? String) == "track" ? nil : nextNoteSongEnd
-        let displayed = notes.compactMap { note -> [String: Any]? in
-            guard let end else { return note }
-            guard let start = note["start"] as? Double, start < end else { return nil }
-            var clipped = note
-            clipped["end"] = min(note["end"] as? Double ?? end, end)
-            return clipped
-        }
-        emit("notes", ["time": time, "notes": displayed, "overflow": source.exchange.hasOverflowed, "preparing": noteTask != nil])
-        guard noteTask == nil, preparedThrough < time + 9 else { return }
-        let worker = noteWorker, id = source.id, revision = noteRevision
-        noteTask = Task { [weak self] in
-            do {
-                let snapshot = try await worker.preview(source: source, commands: commands, currentTime: time, horizon: 10)
-                guard let self, !Task.isCancelled, noteSource == id, noteRevision == revision else { return }
-                notes = snapshot.notes.map { ["key": $0.key, "channel": $0.channel, "start": $0.start, "end": $0.end, "isOpen": $0.isOpen] }
-                nextNoteSongEnd = snapshot.nextSongEnd
-                preparedThrough = snapshot.preparedThrough; noteTask = nil
-            } catch { if let self, noteRevision == revision { noteTask = nil } }
+        if notePreview.visible {
+            let trackLoop = (preferences["loop"] as? String) == "track"
+            emit(notePreview.update(source: player.notePreviewSource, loopingTrack: trackLoop))
         }
     }
     private func songKeyRange(_ mod: Mod) -> [Int] {
@@ -851,7 +790,7 @@ private final class DesktopEngine {
         }
         return high >= low ? [low, high] : []
     }
-    private func editMarker(_ command: String, _ v: [String: Any]) async throws {
+    private func editMarker(_ v: DesktopRequest) async throws {
         try requireWritable()
         guard let currentID, let mod = player.activeMod else { return }
         let layout = SongPositionLayout(module: mod)
@@ -859,23 +798,24 @@ private final class DesktopEngine {
         let position = min(layout.rowCounts.count - 1, max(0, player.currentPosition))
         let row = min(max(0, layout.rowCounts[position] - 1), max(0, player.currentRow))
         let address = SongAddress(position: position, row: row)
-        let name = v["text"] as? String ?? "Songstelle"
-        let id = (v["id"] as? String).flatMap(UUID.init(uuidString:))
-        let editedAddress: SongAddress? = (v["position"] as? Int).flatMap { position in
-            guard let row = v["row"] as? Int else { return nil }
+        let command = v.command
+        let name = v[.text]?.string ?? "Songstelle"
+        let id = (v[.id]?.string).flatMap(UUID.init(uuidString:))
+        let editedAddress: SongAddress? = (v[.position]?.integer).flatMap { position in
+            guard let row = v[.row]?.integer else { return nil }
             let address = SongAddress(position: position, row: row)
             return layout.contains(address) ? address : nil
         }
-        if v["position"] != nil, editedAddress == nil {
+        if v[.position] != nil, editedAddress == nil {
             throw NSError(domain: "SavageDesktop", code: 1, userInfo: [NSLocalizedDescriptionKey: "Die gewählte Songadresse ist ungültig."])
         }
         markerWritesInFlight += 1
         defer { markerWritesInFlight -= 1 }
         let snapshot = try await markerStore.update { document in
-            if command == "markerAdd" {
+            if command == .markerAdd {
                 document.markers.append(SongMarker(sourceID: currentID, name: name, address: editedAddress ?? address))
             } else if let id {
-                if command == "markerDelete" { document.markers.removeAll { $0.id == id && $0.sourceID == currentID } }
+                if command == .markerDelete { document.markers.removeAll { $0.id == id && $0.sourceID == currentID } }
                 else if let index = document.markers.firstIndex(where: { $0.id == id && $0.sourceID == currentID }) {
                     document.markers[index].name = name
                     if let editedAddress { document.markers[index].address = editedAddress }
@@ -886,131 +826,24 @@ private final class DesktopEngine {
             markerDocument = snapshot.document; markerRevision = snapshot.revision; sendDetails()
         }
     }
-    private func beginExport(_ v: [String: Any]) {
-        guard exportTask == nil, let mod = exportModule ?? player.activeMod, let path = v["path"] as? String else { return }
-        let output: ChannelStemRenderer.Output = (v["kind"] as? String == "stems") ? .channelStems : .stereoMix
-        var options = exportOptions
-        options.maximumSeconds = v["seconds"] as? Double ?? 180
-        let capturedOptions = options
-        let destination = URL(fileURLWithPath: path)
-        let expected: WAVStamp?
-        do { expected = try Self.wavStamp(destination, overwrite: output == .stereoMix && v["overwrite"] as? Bool == true) }
-        catch { emit("error", ["message": error.localizedDescription]); return }
-        let owner = self
-        let coordinator = player
-        exportTask = Task { [weak self] in
-            let worker = Task.detached {
-                if output == .stereoMix {
-                    let staging = destination.deletingLastPathComponent().appendingPathComponent(".savage-mix-\(UUID()).wav")
-                    defer { try? FileManager.default.removeItem(at: staging) }
-                    try coordinator.exportActiveModToWav(mod: mod, stereoSeparation: capturedOptions.stereoSeparation,
-                        useInterpolation: capturedOptions.useInterpolation, palClock: capturedOptions.palClock,
-                        destinationURL: staging, durationSeconds: capturedOptions.maximumSeconds)
-                    try Self.publishWAV(staging, to: destination, replacing: expected)
-                    return ["path": path] as [String: String]
-                }
-                _ = try ChannelStemRenderer.export(mod: mod, to: destination, options: capturedOptions, output: output) { progress in
-                    Task { @MainActor in owner.emit("progress", ["value": progress]) }
-                }
-                return ["path": path]
-            }
-            do {
-                let report = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
-                self?.emit("complete", ["path": path, "report": report])
-            } catch is CancellationError { self?.emit("cancelled", [:]) }
-            catch { self?.emit("error", ["message": error.localizedDescription]) }
-            self?.exportTask = nil
-        }
-    }
-    private struct WAVStamp: Sendable, Equatable {
-        let inode: UInt64, size: UInt64
-        let modified: Date
-    }
-    private nonisolated static func wavStamp(_ url: URL, overwrite: Bool) throws -> WAVStamp? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        guard overwrite else { throw CocoaError(.fileWriteFileExists) }
-        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        guard attributes[.type] as? FileAttributeType == .typeRegular,
-              let inode = attributes[.systemFileNumber] as? NSNumber, let size = attributes[.size] as? NSNumber,
-              let modified = attributes[.modificationDate] as? Date else { throw CocoaError(.fileWriteFileExists) }
-        return WAVStamp(inode: inode.uint64Value, size: size.uint64Value, modified: modified)
-    }
-    private nonisolated static func publishWAV(_ source: URL, to destination: URL, replacing expected: WAVStamp?) throws {
-        try Task.checkCancellation()
-        if let expected {
-            guard try wavStamp(destination, overwrite: true) == expected else {
-                throw NSError(domain: "SavageDesktop", code: 2, userInfo: [NSLocalizedDescriptionKey: "Das Ziel wurde während des Exports geändert und bleibt erhalten."])
-            }
-            let result = source.path.withCString { from in destination.path.withCString { to in rename(from, to) } }
-            guard result == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        } else { try FileManager.default.linkItem(at: source, to: destination) }
-    }
-    private func beginVideoExport(_ v: [String: Any], preview: Bool = false) {
-        guard exportTask == nil, let mod = exportModule ?? player.activeMod else { return }
-        guard let path = preview ? temporary.appendingPathComponent("preview-\(UUID()).mov").path : v["path"] as? String else { return }
-        var audio = exportOptions; audio.sampleRate = 48_000; audio.maximumSeconds = preview ? 5 : (v["seconds"] as? Double ?? 600)
-        let options = NoteRainVideoOptions(width: v["width"] as? Int ?? 1280, height: v["height"] as? Int ?? 720,
-            framesPerSecond: v["fps"] as? Int ?? 30, lookaheadSeconds: v["horizon"] as? Int ?? 4,
-            keyRange: 0...119, appearance: (v["light"] as? Bool ?? (preferences["theme"] as? String == "Light")) ? .light : .dark,
-            quality: v["compact"] as? Bool == true ? .compact : .high, audio: audio)
-        let owner = self, destination = URL(fileURLWithPath: path)
-        if preview { emit("videoPreviewState", ["active": true]) }
-        #if os(Linux)
-        guard let renderer = ProcessInfo.processInfo.environment["SAVAGE_VIDEO_RENDERER"] else {
-            emit("error", ["message": "Der Qt-Videoencoder ist nicht konfiguriert."]); return
-        }
-        #endif
-        exportTask = Task { [weak self] in
-            let worker = Task.detached {
-                let progress: @Sendable (Double) -> Void = { value in
-                    Task { @MainActor in owner.emit("progress", ["value": value]) }
-                }
-                #if os(Linux)
-                return try LinuxNoteRainVideoRenderer.export(mod: mod, to: destination, options: options,
-                    renderer: URL(fileURLWithPath: renderer), progress: progress)
-                #else
-                return try NoteRainVideoRenderer.export(mod: mod, to: destination, options: options, progress: progress)
-                #endif
-            }
-            do {
-                let report = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
-                self?.emit(preview ? "videoPreview" : "complete", ["path": path, "report": owner.json(report)])
-            } catch is CancellationError { self?.emit("cancelled", [:]) }
-            catch { self?.emit("error", ["message": error.localizedDescription]) }
-            if preview { self?.emit("videoPreviewState", ["active": false]) }
-            self?.exportTask = nil
-        }
-    }
-    private func beginBatchExport(_ v: [String: Any]) {
-        guard exportTask == nil, let path = v["path"] as? String else { return }
-        let ids = v["ids"] as? [String] ?? visibleIDs()
+    private func beginBatchExport(_ v: DesktopRequest) {
+        guard !exports.isRunning, let path = v[.path]?.string else { return }
+        let ids = v[.ids]?.strings ?? visibleIDs()
         let items = ids.compactMap { id in knownEntries[id] }.map {
             BatchWAVExportItem(source: $0.url, displayName: $0.displayName, sourceDescription: $0.folderPath.joined(separator: "/"))
         }
-        let settings = BatchWAVExportSettings(output: v["stems"] as? Bool == true ? .channelStems : .stereoMix,
-            conflictPolicy: v["rename"] as? Bool == true ? .keepBoth : .skipExisting,
-            audio: .init(maximumSeconds: v["seconds"] as? Double ?? 300, stereoSeparation: Float(v["separation"] as? Double ?? 0.8),
-                         useInterpolation: v["interpolation"] as? Bool ?? true, palClock: v["pal"] as? Bool ?? true))
-        preferences["batchSettings"] = ["stems": v["stems"] ?? false, "rename": v["rename"] ?? false,
+        let settings = BatchWAVExportSettings(output: v[.stems]?.bool == true ? .channelStems : .stereoMix,
+            conflictPolicy: v[.rename]?.bool == true ? .keepBoth : .skipExisting,
+            audio: .init(maximumSeconds: v[.seconds]?.number ?? 300, stereoSeparation: Float(v[.separation]?.number ?? 0.8),
+                         useInterpolation: v[.interpolation]?.bool ?? true, palClock: v[.pal]?.bool ?? true))
+        preferences["batchSettings"] = ["stems": v[.stems]?.bool ?? false, "rename": v[.rename]?.bool ?? false,
             "seconds": settings.audio.maximumSeconds, "separation": settings.audio.stereoSeparation,
             "interpolation": settings.audio.useInterpolation, "pal": settings.audio.palClock]
-        do { try savePreferences(); emit("preferences", preferences) }
-        catch { emit("notice", ["message": "Die Exporteinstellungen konnten nicht gespeichert werden."]) }
-        let owner = self
-        exportTask = Task { [weak self] in
-            let worker = Task.detached {
-                try BatchWAVExporter.export(items: items, to: URL(fileURLWithPath: path), settings: settings) { progress in
-                    Task { @MainActor in owner.emit("progress", ["value": progress.fraction, "title": progress.sourceName]) }
-                }
-            }
-            do {
-                let report = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
-                self?.emit("complete", ["path": path, "report": owner.json(report)])
-            } catch is CancellationError { self?.emit("cancelled", [:]) }
-            catch { self?.emit("error", ["message": error.localizedDescription]) }
-            self?.exportTask = nil
-        }
+        do { try savePreferences(); emit(.preferences, preferences) }
+        catch { emit(.notice, ["message": "Die Exporteinstellungen konnten nicht gespeichert werden."]) }
+        exports.beginBatch(items: items, path: path, settings: settings)
     }
+    private var lightTheme: Bool { preferences["theme"] as? String == "Light" }
     private func collectionSnapshot() -> CollectionExchangeSnapshot {
         .init(playlists: saved, markers: markerDocument, trackSettings: overrides, playbackDefaults: defaults)
     }
@@ -1050,7 +883,7 @@ private final class DesktopEngine {
             skippedTrackIDs: exchangeSkipped, resolutions: exchangeResolutions)
         exchangePreview = preview
         exchangeConflictIDs = Dictionary(uniqueKeysWithValues: preview.conflicts.map { (conflictKey($0.id), $0.id) })
-        emit("collectionPreview", ["ready": preview.isReady,
+        emit(.collectionPreview, ["ready": preview.isReady,
             "tracks": document.tracks.map { track in
                 ["id": track.id.uuidString, "name": track.descriptor.fileName,
                  "relativePath": track.descriptor.relativePath ?? "",
@@ -1080,12 +913,12 @@ private final class DesktopEngine {
         markerStore = SongMarkerStore(fileURL: directory.appendingPathComponent("song-markers.json"))
         let markers = try await markerStore.snapshot(); markerDocument = markers.document; markerRevision = markers.revision
         exchangeDocument = nil; exchangePreview = nil
-        applySound(); sendLibrary(); sendDetails(); emit("preferences", preferences); emit("collectionApplied", [:])
+        applySound(); sendLibrary(); sendDetails(); emit(.preferences, preferences); emit(.collectionApplied, [:])
     }
     private func sendInspection() throws {
         guard let mod = inspectionModule else { return }
         let inspection = try ModuleInspection(module: mod)
-        emit("inspection", ["title": mod.name, "format": mod.format.displayName,
+        emit(.inspection, ["title": mod.name, "format": mod.format.displayName,
             "channels": mod.channelCount, "usedChannels": mod.usedChannelCount, "patternCount": mod.patterns.count,
             "sampleCount": inspection.sampleCount, "instrumentCount": inspection.instrumentIndices.count,
             "initialTempo": mod.initialTempo, "initialSpeed": mod.initialSpeed, "initialVolume": mod.initialGlobalVolume,
@@ -1094,7 +927,7 @@ private final class DesktopEngine {
                 "Benötigte IT-Version (cmwt)": String(format: "0x%04X", $0.compatibleWithVersion),
                 "IT-Modus": $0.usesInstruments ? "Instrumente" : "Samples",
                 "Zuletzt mit OpenMPT gespeichert": $0.openMPTExtensions?.lastSavedWithVersion?.displayName ?? "—"] } ?? [:],
-            "findings": json(inspection.compatibilityFindings),
+            "findings": desktopJSONObject(inspection.compatibilityFindings),
             "patternRows": mod.patterns.indices.map { ["index": $0, "rows": mod.patterns[$0].rows.count, "uses": inspection.patternUseCounts[$0] ?? 0] },
             "orders": inspection.orders.map { ["position": $0.position, "pattern": $0.pattern, "rows": $0.rowCount ?? 0] },
             "tracker": inspection.tracker ?? "", "artist": inspection.artist ?? "", "warnings": inspection.compatibilityWarnings,
@@ -1111,10 +944,10 @@ private final class DesktopEngine {
     private func sendInstrument(_ index: Int) {
         guard let mod = inspectionModule, mod.instruments.indices.contains(index), let instrument = mod.instruments[index] else { return }
         let mapping = SampleInspection(module: mod).instruments.first { $0.id == index }
-        emit("instrument", ["index": index, "name": instrument.name, "fadeout": instrument.fadeout,
-            "autoVibrato": json(instrument.autoVibrato), "itProperties": json(instrument.itProperties),
-            "volumeEnvelope": json(instrument.volumeEnvelope), "panningEnvelope": json(instrument.panningEnvelope),
-            "pitchEnvelope": json(instrument.pitchEnvelope),
+        emit(.instrument, ["index": index, "name": instrument.name, "fadeout": instrument.fadeout,
+            "autoVibrato": desktopJSONObject(instrument.autoVibrato), "itProperties": desktopJSONObject(instrument.itProperties),
+            "volumeEnvelope": desktopJSONObject(instrument.volumeEnvelope), "panningEnvelope": desktopJSONObject(instrument.panningEnvelope),
+            "pitchEnvelope": desktopJSONObject(instrument.pitchEnvelope),
             "sampleIDs": mapping?.sampleIDs ?? [],
             "keyZones": mapping?.keyZones.map { ["start": $0.sourceNotes.lowerBound, "end": $0.sourceNotes.upperBound,
                 "targetStart": $0.targetNotes.lowerBound, "targetEnd": $0.targetNotes.upperBound, "sample": $0.sampleID ?? ""] } ?? []])
@@ -1122,7 +955,7 @@ private final class DesktopEngine {
     private func sendSample(id: String, zoom: Int, position: Double, focus: String? = nil) throws {
         guard let mod = inspectionModule,
               let entry = SampleInspection(module: mod).samples.first(where: { $0.id == id }) else { return }
-        guard let sample = entry.sample else { emit("sample", ["id": id, "empty": true]); return }
+        guard let sample = entry.sample else { emit(.sample, ["id": id, "empty": true]); return }
         var range = SampleFrameRange(frameCount: sample.pcm.count, zoom: zoom, position: position)
         if focus == "loop", sample.isLooped { range = .init(frameCount: sample.pcm.count, start: sample.loopStart, length: sample.loopLength) }
         if focus == "sustain", let sustain = sample.sustainLoop, sustain.type != .none {
@@ -1130,21 +963,31 @@ private final class DesktopEngine {
         }
         if focus != nil, position > 0 { range = .init(frameCount: sample.pcm.count, start: Int((Double(sample.pcm.count - range.count) * position).rounded()), length: range.count) }
         let waveform = try SampleWaveform.make(sample: sample, range: range)
-        emit("sample", ["id": id, "name": sample.name, "frames": sample.pcm.count, "volume": sample.volume,
+        emit(.sample, ["id": id, "name": sample.name, "frames": sample.pcm.count, "volume": sample.volume,
             "loopStart": sample.loopStart, "loopLength": sample.loopLength,
-            "loopType": sample.loopType.rawValue, "sustainLoop": json(sample.sustainLoop), "itProperties": json(sample.itProperties),
+            "loopType": sample.loopType.rawValue, "sustainLoop": desktopJSONObject(sample.sustainLoop), "itProperties": desktopJSONObject(sample.itProperties),
             "finetune": sample.finetune, "relativeNote": sample.relativeNote, "panning": sample.panning, "c2spd": sample.c2spd,
             "left": waveform.left.map { [$0.minimum, $0.maximum] }, "right": waveform.right?.map { [$0.minimum, $0.maximum] } ?? [],
             "start": waveform.range.lowerBound, "end": waveform.range.upperBound])
     }
-    private func json<T: Encodable>(_ value: T) -> Any {
-        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(value), let result = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) else { return NSNull() }
-        return result
+    private func emit<Payload: Encodable>(_ event: Payload) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(event) else { return }
+        writeEvent(data)
     }
-    private func emit(_ event: String, _ fields: [String: Any]) {
-        var message = fields; message["event"] = event
-        guard var data = try? JSONSerialization.data(withJSONObject: message, options: [.sortedKeys]) else { return }
-        data.append(10); output.write(data)
+
+    private func emit(_ event: DesktopEvent, _ fields: [String: Any]) {
+        var message = fields
+        message["event"] = event.rawValue
+        guard let data = try? JSONSerialization.data(withJSONObject: message, options: [.sortedKeys]) else { return }
+        writeEvent(data)
+    }
+
+    private func writeEvent(_ json: Data) {
+        var line = json
+        line.append(10)
+        output.write(line)
     }
 }

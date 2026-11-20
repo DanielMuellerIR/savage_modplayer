@@ -48,6 +48,17 @@ final class PlaybackActions: ObservableObject {
         return fileRequestID
     }
 
+    enum ModuleLoadOrigin {
+        case selection
+        case playlistScan
+    }
+
+    func beginModuleLoad(origin: ModuleLoadOrigin) {
+        // Der Scan hat seinen Auftrag bereits zu Beginn registriert. Seine
+        // Übernahme darf einen inzwischen gestarteten Drop nicht entwerten.
+        if origin == .selection { beginFileRequest() }
+    }
+
     func collectPlaylist<Result: Sendable>(
         scan: @escaping @Sendable () -> Result,
         accept: @escaping @MainActor (Result) -> Void

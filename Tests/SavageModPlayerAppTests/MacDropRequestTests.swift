@@ -20,9 +20,18 @@ final class MacDropRequestTests: XCTestCase {
     func testProviderReturningAfterNewSelectionIsDiscarded() async {
         let actions = PlaybackActions()
         let urls = await resolve(module, using: actions) {
-            actions.beginFileRequest()
+            actions.beginModuleLoad(origin: .selection)
         }
         XCTAssertNil(urls)
+    }
+
+    func testOlderScanCompletionDoesNotDiscardNewDrop() async {
+        let actions = PlaybackActions()
+        actions.beginFileRequest()
+        let urls = await resolve(module, using: actions) {
+            actions.beginModuleLoad(origin: .playlistScan)
+        }
+        XCTAssertEqual(urls, [module])
     }
 
     func testCollectionDropSurvivesStopAndOrdinaryDropIsAccepted() async {

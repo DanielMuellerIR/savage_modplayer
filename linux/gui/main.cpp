@@ -56,32 +56,58 @@ public:
     explicit DesktopBridge(QObject *parent = nullptr) : QObject(parent) {
         connect(&process, &QProcess::readyReadStandardOutput, this, [this] {
             buffered += process.readAllStandardOutput();
-            if (buffered.size() > 32 * 1024 * 1024) { process.kill(); emit message("error", {{"message", "Desktop-Antwort überschreitet die Größenbegrenzung."}}); return; }
+            if (buffered.size() > 32 * 1024 * 1024) {
+                process.kill();
+                emit message("error", {{"message", "Desktop-Antwort überschreitet die Größenbegrenzung."}});
+                return;
+            }
             while (true) {
                 auto newline = buffered.indexOf('\n');
                 if (newline < 0) break;
-                auto data = buffered.left(newline); buffered.remove(0, newline + 1);
+                auto data = buffered.left(newline);
+                buffered.remove(0, newline + 1);
                 auto document = QJsonDocument::fromJson(data);
                 if (!document.isObject()) continue;
                 auto values = document.object().toVariantMap();
                 auto event = values.value("event").toString();
-                if (event == "state") { if (state != values) { state = values; emit stateChanged(); } }
-                else if (event == "visualizer") { visualizer = values; emit visualizerChanged(); continue; }
-                else if (event == "module") { module = values; emit moduleChanged(); }
-                else if (event == "libraryBegin") { pendingLibrary = values; pendingTracks.clear(); pendingVisible.clear(); }
-                else if (event == "libraryTracks") pendingTracks += values.value("tracks").toList();
-                else if (event == "libraryVisible") pendingVisible += values.value("ids").toList();
-                else if (event == "libraryEnd") {
-                    pendingLibrary["tracks"] = pendingTracks; pendingLibrary["visible"] = pendingVisible;
-                    library = pendingLibrary; emit libraryChanged(); emit message("library", library);
-                }
-                else if (event == "pattern") { pattern = values; emit patternChanged(); }
-                else if (event == "notes") { notes = values; emit notesChanged(); }
-                else if (event == "preferences" || event == "ready") {
+                if (event == "state") {
+                    if (state != values) {
+                        state = values;
+                        emit stateChanged();
+                    }
+                } else if (event == "visualizer") {
+                    visualizer = values;
+                    emit visualizerChanged();
+                    continue;
+                } else if (event == "module") {
+                    module = values;
+                    emit moduleChanged();
+                } else if (event == "libraryBegin") {
+                    pendingLibrary = values;
+                    pendingTracks.clear();
+                    pendingVisible.clear();
+                } else if (event == "libraryTracks") {
+                    pendingTracks += values.value("tracks").toList();
+                } else if (event == "libraryVisible") {
+                    pendingVisible += values.value("ids").toList();
+                } else if (event == "libraryEnd") {
+                    pendingLibrary["tracks"] = pendingTracks;
+                    pendingLibrary["visible"] = pendingVisible;
+                    library = pendingLibrary;
+                    emit libraryChanged();
+                    emit message("library", library);
+                } else if (event == "pattern") {
+                    pattern = values;
+                    emit patternChanged();
+                } else if (event == "notes") {
+                    notes = values;
+                    emit notesChanged();
+                } else if (event == "preferences" || event == "ready") {
                     if (event == "ready") ready = true;
                     preferences = event == "ready" ? values.value("preferences").toMap() : values;
                     emit preferencesChanged();
-                    if (event == "ready" && !startupPaths.isEmpty()) send({{"command", "open"}, {"paths", startupPaths}, {"autoPlay",!captureStopped}});
+                    if (event == "ready" && !startupPaths.isEmpty())
+                        send({{"command", "open"}, {"paths", startupPaths}, {"autoPlay", !captureStopped}});
                 }
                 emit message(event, values);
             }
@@ -143,8 +169,12 @@ public:
     }
 signals:
     void visualizerChanged();
-    void stateChanged(); void moduleChanged(); void libraryChanged(); void preferencesChanged();
-    void patternChanged(); void notesChanged();
+    void stateChanged();
+    void moduleChanged();
+    void libraryChanged();
+    void preferencesChanged();
+    void patternChanged();
+    void notesChanged();
     void message(const QString &event, const QVariantMap &values);
 private:
     bool closing = false;

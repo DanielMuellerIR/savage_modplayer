@@ -537,6 +537,8 @@ public final class DSPChannel: Sendable {
         self.panning = (index == 1 || index == 4) ? 0.1 : 0.9
     }
     
+    // Panning gehört zur Kanalzuordnung. RenderEngine.configure und der
+    // IT-Stimmenpool setzen es bei der Zuweisung des neuen Kanals.
     public func reset() {
         instrument = nil
         sample = nil
@@ -684,7 +686,7 @@ public final class DSPChannel: Sendable {
     @inline(__always)
     public func getNearestSample(from pcm: [Float], index: Double) -> Float {
         let size = pcm.count
-        guard size > 0, index.isFinite, !index.isNaN else { return 0.0 }
+        guard size > 0, index.isFinite else { return 0.0 }
 
         let idx = Int(index)
         guard idx >= 0 && idx < size else { return 0.0 }
@@ -694,7 +696,7 @@ public final class DSPChannel: Sendable {
     @inline(__always)
     public func getInterpolatedSample(from pcm: [Float], index: Double) -> Float {
         let size = pcm.count
-        guard size > 0, index.isFinite, !index.isNaN else { return 0.0 }
+        guard size > 0, index.isFinite else { return 0.0 }
 
         let idx = Int(index)
         guard idx >= 0 && idx < size else { return 0.0 }
@@ -714,7 +716,7 @@ public final class DSPChannel: Sendable {
     @inline(__always)
     public func getInterpolatedSampleLooped(from pcm: [Float], index: Double, repeatOffset: Int, repeatLength: Int) -> Float {
         let size = pcm.count
-        guard size > 0, index.isFinite, !index.isNaN else { return 0.0 }
+        guard size > 0, index.isFinite else { return 0.0 }
 
         let idx = Int(index)
         guard idx >= 0 && idx < size else { return 0.0 }

@@ -10,13 +10,12 @@ struct TrackPlaybackSettingsButton: View {
 
     var body: some View {
         Button {
-            request = TrackPlaybackSettingsContext(sourceID: settings.sourceID, title: title, format: settings.format,
-                sourceDescription: settings.sourceDescription)
+            request = settings.presentationContext(title: title)
         } label: {
             Image(systemName: "slider.horizontal.3")
         }.accessibilityLabel(Text("Wiedergabeeinstellungen"))
             .accessibilityIdentifier("trackSettingsOpen")
-            .accessibilityValue(settings.overrides(for: settings.sourceID).isEmpty ? Text("Globale Vorgaben") : Text("Titel-Overrides"))
+            .accessibilityValue(settings.accessibilityStatus)
             .onChange(of: request?.id) { _, value in model.isLibraryPanelOpen = value != nil }
             .sheet(item: $request) { context in
                 TrackPlaybackSettingsView(model: settings, context: context)

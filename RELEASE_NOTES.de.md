@@ -1,3 +1,5 @@
+Savage Mod Player 1.6.64 verarbeitet Linux-Desktop-Befehle mit typisierten Feldern und trennt Export- und Notenvorschau-Aufträge. Die Modul- und ZIP-Parser trennen Strukturprüfungen von der Dekodierung. Mac und iPhone teilen die Aufbereitung der Wiedergabeeinstellungen und die Einrichtung des CloudKit-Dienstes.
+
 Savage Mod Player 1.6.63 prüft JavaScript und Audio-Worklet in der gebauten HTML-Datei. Die Linux-App behält Prozessdiagnosen bei Fehlern und meldet ungültige Downloadgrößen verständlicher. SwiftPM sucht nur auf Linux nach ALSA und zlib.
 
 Savage Mod Player 1.6.62 trennt die Linux-Dialoge und das Notenregen-Fenster vom Hauptfenster. Unter macOS nutzen Playlist-Scans eine gemeinsame Auftragssteuerung und der WAV-Export verwaltet seinen Dialogzustand selbst. Bedienung und Dateiformate bleiben gleich.

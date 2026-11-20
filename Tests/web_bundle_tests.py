@@ -3,6 +3,7 @@ from html.parser import HTMLParser
 import json
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +43,13 @@ class WebBundleTests(unittest.TestCase):
         self.assertIn("registerProcessor(", worklet)
         subprocess.run(["node", "--check"], input=script, text=True, check=True)
         subprocess.run(["node", "--input-type=module", "--check"], input=worklet, text=True, check=True)
+        with tempfile.TemporaryDirectory(prefix="savage-bundle-") as directory:
+            bundled_worklet = Path(directory) / "worklet.js"
+            bundled_worklet.write_text(worklet, encoding="utf-8")
+            subprocess.run(
+                ["node", str(ROOT / "Tests/js/worklet-timing.mjs"), str(bundled_worklet)],
+                stdout=subprocess.DEVNULL, check=True,
+            )
 
 
 if __name__ == "__main__":

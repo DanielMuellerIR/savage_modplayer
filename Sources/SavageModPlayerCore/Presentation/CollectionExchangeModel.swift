@@ -8,7 +8,8 @@ public final class CollectionExchangeModel: ObservableObject {
         public let snapshot: CollectionExchangeSnapshot
         public let sources: [CollectionExchangeLocalTrack]
         public init(snapshot: CollectionExchangeSnapshot, sources: [CollectionExchangeLocalTrack]) {
-            self.snapshot = snapshot; self.sources = sources
+            self.snapshot = snapshot
+            self.sources = sources
         }
     }
     public enum Completion: Equatable { case imported, cleanupPending, exported }
@@ -45,30 +46,51 @@ public final class CollectionExchangeModel: ObservableObject {
     private final class ReadingCancellation: @unchecked Sendable {
         private let lock = NSLock()
         private var cancelled = false
-        func cancel() { lock.lock(); cancelled = true; lock.unlock() }
-        func isCancelled() -> Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            lock.unlock()
+        }
+        func isCancelled() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return cancelled
+        }
     }
 
-    public init(capture: @escaping @MainActor () async throws -> State,
-                apply: @escaping @MainActor (CollectionExchangeImportPreview) async throws -> Bool,
-                read: @escaping @Sendable (URL, @escaping @Sendable () -> Bool) throws -> CollectionExchangeDocument = { url, cancelled in
-                    try CollectionExchangeCodec.load(from: url, isCancelled: cancelled)
-                }) {
-        self.capture = capture; self.apply = apply; self.read = read
+    public init(
+        capture: @escaping @MainActor () async throws -> State,
+        apply: @escaping @MainActor (CollectionExchangeImportPreview) async throws -> Bool,
+        read: @escaping @Sendable (URL, @escaping @Sendable () -> Bool) throws -> CollectionExchangeDocument = { url, cancelled in
+            try CollectionExchangeCodec.load(from: url, isCancelled: cancelled)
+        }
+    ) {
+        self.capture = capture
+        self.apply = apply
+        self.read = read
     }
-    deinit { task?.cancel(); filterTask?.cancel(); readingCancellation?.cancel() }
+    deinit {
+        task?.cancel()
+        filterTask?.cancel()
+        readingCancellation?.cancel()
+    }
 
     public func load() async {
         guard !isBusy else { return }
-        isBusy = true; error = nil; completion = nil
-        let token = UUID(); request = token
+        isBusy = true
+        error = nil
+        completion = nil
+        let token = UUID()
+        request = token
         do {
             let state = try await capture()
             guard !Task.isCancelled, request == token else { throw CancellationError() }
             try state.snapshot.validate()
             guard state.sources.count <= CollectionExchangeCodec.maximumTracks,
-                  Set(state.sources.map { $0.reference.id }).count == state.sources.count else { throw CollectionExchangeError.invalidMapping }
-            self.state = state; sourcesByID = Dictionary(uniqueKeysWithValues: state.sources.map { ($0.reference.id, $0) })
+                Set(state.sources.map { $0.reference.id }).count == state.sources.count
+            else { throw CollectionExchangeError.invalidMapping }
+            self.state = state
+            sourcesByID = Dictionary(uniqueKeysWithValues: state.sources.map { ($0.reference.id, $0) })
             isBusy = false
             if let incoming { try await receive(incoming) }
         } catch {
@@ -80,11 +102,22 @@ public final class CollectionExchangeModel: ObservableObject {
 
     public func loadFile(_ url: URL) async {
         guard !isBusy, state != nil else { return }
-        isBusy = true; error = nil; completion = nil
-        incoming = nil; preview = nil; mapping = [:]; skipped = []; resolutions = [:]; allTracks = []; filterTracks()
-        sourceFileName = url.lastPathComponent; tracksByID = [:]
-        let token = UUID(); request = token
-        let cancellation = ReadingCancellation(); readingCancellation = cancellation
+        isBusy = true
+        error = nil
+        completion = nil
+        incoming = nil
+        preview = nil
+        mapping = [:]
+        skipped = []
+        resolutions = [:]
+        allTracks = []
+        filterTracks()
+        sourceFileName = url.lastPathComponent
+        tracksByID = [:]
+        let token = UUID()
+        request = token
+        let cancellation = ReadingCancellation()
+        readingCancellation = cancellation
         let read = read
         do {
             let document = try await withTaskCancellationHandler {
@@ -92,7 +125,8 @@ public final class CollectionExchangeModel: ObservableObject {
             } onCancel: { cancellation.cancel() }
             guard !Task.isCancelled, !cancellation.isCancelled(), request == token else { throw CancellationError() }
             readingCancellation = nil
-            isBusy = false; try await receive(document)
+            isBusy = false
+            try await receive(document)
         } catch {
             guard request == token else { return }
             readingCancellation = nil
@@ -103,24 +137,36 @@ public final class CollectionExchangeModel: ObservableObject {
 
     public func receive(_ document: CollectionExchangeDocument) async throws {
         guard let state else { throw CollectionExchangeError.invalidLocalState }
-        task?.cancel(); let token = UUID(); request = token; isBusy = true; error = nil; completion = nil
+        task?.cancel()
+        let token = UUID()
+        request = token
+        isBusy = true
+        error = nil
+        completion = nil
         do {
             let matches = try await Task.detached(priority: .userInitiated) {
                 try CollectionExchangeMatcher.match(document, against: state.sources)
             }.value
             guard !Task.isCancelled, request == token else { throw CancellationError() }
-            incoming = document; self.matches = matches
+            incoming = document
+            self.matches = matches
             tracksByID = Dictionary(uniqueKeysWithValues: document.tracks.map { ($0.id, $0) })
-            mapping = [:]; skipped = []; resolutions = [:]; preview = nil
-            allTracks = []; filterTracks()
+            mapping = [:]
+            skipped = []
+            resolutions = [:]
+            preview = nil
+            allTracks = []
+            filterTracks()
             let automatic = document.tracks.compactMap { track -> (UUID, String)? in
-                if case .matched(let id) = matches[track.id] { return (track.id, id) }; return nil
+                if case .matched(let id) = matches[track.id] { return (track.id, id) }
+                return nil
             }
             let counts = Dictionary(grouping: automatic, by: { $0.1 }).mapValues(\.count)
             for (trackID, sourceID) in automatic where counts[sourceID] == 1 {
                 mapping[trackID] = sourcesByID[sourceID]?.reference
             }
-            isBusy = false; recompute()
+            isBusy = false
+            recompute()
         } catch {
             if request == token {
                 if !(error is CancellationError) { self.error = error }
@@ -148,26 +194,37 @@ public final class CollectionExchangeModel: ObservableObject {
     }
     public func assign(_ source: CollectionExchangeLocalTrack, to trackID: UUID) {
         guard !isBusy, incoming?.tracks.contains(where: { $0.id == trackID }) == true,
-              sourcesByID[source.reference.id] != nil, !isAssignedElsewhere(source.reference.id, than: trackID) else { return }
-        mapping[trackID] = source.reference; skipped.remove(trackID); resolutions = [:]; recompute()
+            sourcesByID[source.reference.id] != nil, !isAssignedElsewhere(source.reference.id, than: trackID)
+        else { return }
+        mapping[trackID] = source.reference
+        skipped.remove(trackID)
+        resolutions = [:]
+        recompute()
     }
     public func skip(_ trackID: UUID) {
         guard !isBusy, incoming?.tracks.contains(where: { $0.id == trackID }) == true else { return }
-        mapping.removeValue(forKey: trackID); skipped.insert(trackID); resolutions = [:]; recompute()
+        mapping.removeValue(forKey: trackID)
+        skipped.insert(trackID)
+        resolutions = [:]
+        recompute()
     }
     public func skipUnresolved() {
         guard !isBusy, let incoming else { return }
         for track in incoming.tracks where mapping[track.id] == nil { skipped.insert(track.id) }
-        resolutions = [:]; recompute()
+        resolutions = [:]
+        recompute()
     }
     public func resolve(_ conflict: CollectionExchangeConflictID, with value: CollectionExchangeResolution?) {
         guard !isBusy else { return }
-        resolutions[conflict] = value; recompute()
+        resolutions[conflict] = value
+        recompute()
     }
     public func exportData() async throws -> Data {
         guard !isBusy, let state else { throw CollectionExchangeError.invalidLocalState }
-        isBusy = true; error = nil
-        let token = UUID(); request = token
+        isBusy = true
+        error = nil
+        let token = UUID()
+        request = token
         defer { if request == token { isBusy = false } }
         let fresh = try await capture()
         guard fresh.snapshot == state.snapshot else { throw CollectionExchangeError.stalePreview }
@@ -179,25 +236,40 @@ public final class CollectionExchangeModel: ObservableObject {
     }
     public func applyImport() async {
         guard isReady, let preview else { return }
-        isBusy = true; isApplying = true; error = nil
-        do { completion = try await apply(preview) ? .cleanupPending : .imported }
-        catch { self.error = error }
-        isBusy = false; isApplying = false
+        isBusy = true
+        isApplying = true
+        error = nil
+        do { completion = try await apply(preview) ? .cleanupPending : .imported } catch { self.error = error }
+        isBusy = false
+        isApplying = false
     }
-    public func exported() { completion = .exported; error = nil }
+    public func exported() {
+        completion = .exported
+        error = nil
+    }
     public func report(_ error: Error) { self.error = error }
     public func cancel() {
-        task?.cancel(); filterTask?.cancel(); filterRequest = UUID(); isFiltering = false
-        readingCancellation?.cancel(); readingCancellation = nil; request = UUID()
+        task?.cancel()
+        filterTask?.cancel()
+        filterRequest = UUID()
+        isFiltering = false
+        readingCancellation?.cancel()
+        readingCancellation = nil
+        request = UUID()
         if !isApplying { isBusy = false }
     }
 
     private func recompute() {
         task?.cancel()
         guard let incoming, let state else { return }
-        let token = UUID(); request = token
-        let mapping = mapping, skipped = skipped, resolutions = resolutions
-        isBusy = true; error = nil; preview = nil
+        let token = UUID()
+        request = token
+        let mapping = mapping
+        let skipped = skipped
+        let resolutions = resolutions
+        isBusy = true
+        error = nil
+        preview = nil
         task = Task { [weak self] in
             do {
                 let result = try await Task.detached(priority: .userInitiated) {
@@ -212,20 +284,32 @@ public final class CollectionExchangeModel: ObservableObject {
                     return (preview, tracks)
                 }.value
                 guard let self, !Task.isCancelled, request == token else { return }
-                preview = result.0; isBusy = false; allTracks = result.1
+                preview = result.0
+                isBusy = false
+                allTracks = result.1
                 filterTracks()
             } catch {
                 guard let self, !Task.isCancelled, request == token else { return }
-                self.error = error; isBusy = false
+                self.error = error
+                isBusy = false
             }
         }
     }
     private func filterTracks() {
         filterTask?.cancel()
-        let token = UUID(); filterRequest = token
+        let token = UUID()
+        filterRequest = token
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let tracks = allTracks, unresolved = unresolvedOnly, mapping = mapping, skipped = skipped
-        if tracks.isEmpty { matchingTrackCount = 0; visibleTracks = []; isFiltering = false; return }
+        let tracks = allTracks
+        let unresolved = unresolvedOnly
+        let mapping = mapping
+        let skipped = skipped
+        if tracks.isEmpty {
+            matchingTrackCount = 0
+            visibleTracks = []
+            isFiltering = false
+            return
+        }
         isFiltering = true
         filterTask = Task { [weak self] in
             if !query.isEmpty { try? await Task.sleep(for: .milliseconds(120)) }

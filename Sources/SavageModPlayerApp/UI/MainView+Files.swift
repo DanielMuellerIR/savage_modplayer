@@ -66,10 +66,10 @@ extension MainView {
             // Headless-/Agent-Steuerung "--autoplay [filter]" gesetzt ist —
             // Letzteres auch fuer Screenshots und Smoke-Tests ohne Klicks.
             if autoPlay || LaunchArguments.autoplayRequested(CommandLine.arguments) {
-                self.selectPlaylistSong(at: startIndex, autoPlay: true, manualPlayback: false)
+                self.selectPlaylistSong(at: startIndex, autoPlay: true, manualPlayback: false, origin: .playlistScan)
             } else {
                 self.currentPlaylistIndex = startIndex
-                self.loadModFile(from: sorted[startIndex])
+                self.loadModFile(from: sorted[startIndex], origin: .playlistScan)
                 self.expandAncestors(of: sorted[startIndex])
             }
         }
@@ -116,26 +116,28 @@ extension MainView {
     }
 
     @discardableResult
-    func selectPlaylistSong(at index: Int, autoPlay: Bool = true, manualPlayback: Bool = true) -> Bool {
+    func selectPlaylistSong(at index: Int, autoPlay: Bool = true, manualPlayback: Bool = true,
+                            origin: PlaybackActions.ModuleLoadOrigin = .selection) -> Bool {
         var navigation = playlistPlayback
         let selected = navigation.select(index, in: playlist) { url in
-            loadPlaylistSelection(url, autoPlay: autoPlay, manualPlayback: manualPlayback)
+            loadPlaylistSelection(url, autoPlay: autoPlay, manualPlayback: manualPlayback, origin: origin)
         }
         playlistPlayback = navigation
         return selected
     }
 
-    func loadPlaylistSelection(_ url: URL, autoPlay: Bool, manualPlayback: Bool) -> Bool {
+    func loadPlaylistSelection(_ url: URL, autoPlay: Bool, manualPlayback: Bool,
+                               origin: PlaybackActions.ModuleLoadOrigin = .selection) -> Bool {
         if autoPlay && manualPlayback { playbackActions.prepareManualPlayback(coordinator: coordinator) }
         expandAncestors(of: url)
-        guard loadModFile(from: url) else { return false }
+        guard loadModFile(from: url, origin: origin) else { return false }
         if autoPlay { coordinator.play() }
         return true
     }
 
     @discardableResult
-    func loadModFile(from url: URL) -> Bool {
-        playbackActions.beginFileRequest()
+    func loadModFile(from url: URL, origin: PlaybackActions.ModuleLoadOrigin = .selection) -> Bool {
+        playbackActions.beginModuleLoad(origin: origin)
         self.errorMessage = nil
         self.compatibilityMessage = nil
         let accessed = url.startAccessingSecurityScopedResource()

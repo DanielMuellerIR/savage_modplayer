@@ -8,12 +8,14 @@ struct SleepTimerButton: View {
     @State private var showing = false
 
     var body: some View {
-        Button { timer.refresh(); showing = true } label: {
+        Button {
+            timer.refresh()
+            showing = true
+        } label: {
             HStack(spacing: 5) {
                 Image(systemName: "timer")
-                if timer.snapshot.isActive {
-                    let seconds = timer.snapshot.remainingSeconds
-                    Text(verbatim: String(format: "%d:%02d", seconds / 60, seconds % 60)).monospacedDigit()
+                if let countdown = timer.snapshot.toolbarCountdown {
+                    Text(verbatim: countdown).monospacedDigit()
                 } else { Text("Timer") }
             }.scaledFont(compact ? 9 : 10, weight: .semibold)
                 .padding(.horizontal, 9).padding(.vertical, 6)
@@ -23,18 +25,11 @@ struct SleepTimerButton: View {
         }.buttonStyle(PremiumHoverButtonStyle(theme: theme))
             .help("Einschlaftimer: mit sanftem Ausblenden, Verlängerung und Abbruch.")
             .accessibilityLabel("Einschlaftimer").accessibilityIdentifier("sleepTimerOpen")
-            .accessibilityValue(statusValue)
+            .accessibilityValue(timer.snapshot.accessibilityStatus)
             .sheet(isPresented: $showing) {
                 SleepTimerView(timer: timer).frame(width: 380, height: 480)
                     .preferredColorScheme(theme == .workbench ? .light : .dark)
             }
     }
 
-    private var statusValue: Text {
-        if timer.snapshot.isActive {
-            let seconds = timer.snapshot.remainingSeconds
-            return Text(verbatim: String(format: "%d:%02d", seconds / 60, seconds % 60))
-        }
-        return timer.snapshot.phase == .expired ? Text("Wiedergabe beendet") : Text("Ausgeschaltet")
-    }
 }

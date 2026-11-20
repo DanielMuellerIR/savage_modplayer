@@ -232,60 +232,7 @@ public class ModParser {
             throw ParserError.truncatedSampleData
         }
 
-        // 3. Instrumenten-Header parsen (Offset 20, je 30 Bytes)
-        var instruments: [Instrument?] = [nil] // Index 0 ist leer
-        var sampleStartOffset = patternsEnd
-
-        for i in 0..<layout.instrumentCount {
-            let offset = 20 + i * 30
-            let header = data.subdata(in: offset..<(offset + 30))
-
-            // Wie der Songname: roh/Latin-1 dekodieren (parity zur JS-Variante).
-            let instNameBytes = header.subdata(in: 0..<22).filter { $0 != 0 }
-            let instName = (String(bytes: instNameBytes, encoding: .isoLatin1) ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            // Big-Endian Words
-            let instLength = 2 * Int(UInt16(header[22]) << 8 | UInt16(header[23]))
-
-            // Finetune (signed 4-bit nibble)
-            var finetune = Int(header[24] & 0x0F)
-            if finetune > 7 { finetune -= 16 }
-
-            let volume = Int(header[25])
-            // Ur-Soundtracker speichert den Repeat-Offset in BYTES, alle
-            // 31-Instrument-Varianten in Words (x2).
-            let repeatOffsetRaw = Int(UInt16(header[26]) << 8 | UInt16(header[27]))
-            let repeatOffset = layout.instrumentCount == 15 ? repeatOffsetRaw : 2 * repeatOffsetRaw
-            let repeatLength = 2 * Int(UInt16(header[28]) << 8 | UInt16(header[29]))
-
-            // Sample-Bytes extrahieren
-            let end = sampleStartOffset + instLength
-            let sampleData = data.subdata(in: sampleStartOffset..<end)
-
-            // Convert to signed Int8
-            let bytes = sampleData.map { Int8(bitPattern: $0) }
-            sampleStartOffset += instLength
-
-            // Eine Probe loopt genau dann, wenn die Loop-Laenge > 1 Word (> 2 Bytes)
-            // ist. Ein repeatOffset > 0 allein markiert KEINEN Loop — sonst wuerde
-            // ein One-Shot mit gesetztem Offset, aber 2-Byte-Sentinel-Laenge faelsch
-            // eine winzige Region loopen (Brummen statt Ausklang).
-            let isLooped = repeatLength > 2
-
-            let instrument = Instrument(
-                index: i + 1,
-                name: instName,
-                length: instLength,
-                finetune: finetune,
-                volume: volume,
-                repeatOffset: repeatOffset,
-                repeatLength: repeatLength,
-                bytes: bytes,
-                isLooped: isLooped
-            )
-            instruments.append(instrument)
-        }
+        let instruments = parseInstruments(data, layout: layout, sampleOffset: patternsEnd)
 
         // 4. Physisch gespeicherte Patterns parsen (Row = storedChannels * 4 Bytes)
         var storedPatterns = [Pattern]()
@@ -364,6 +311,65 @@ public class ModParser {
             format: layout.format,
             channelPannings: Mod.defaultAmigaPannings(channelCount: layout.channelCount)
         )
+    }
+
+    // Der Aufrufer hat die deklarierten Header- und Samplebereiche geprüft.
+    private static func parseInstruments(_ data: Data, layout: Layout, sampleOffset: Int) -> [Instrument?] {
+        // 3. Instrumenten-Header parsen (Offset 20, je 30 Bytes)
+        var instruments: [Instrument?] = [nil] // Index 0 ist leer
+        var sampleStartOffset = sampleOffset
+
+        for i in 0..<layout.instrumentCount {
+            let offset = 20 + i * 30
+            let header = data.subdata(in: offset..<(offset + 30))
+
+            // Wie der Songname: roh/Latin-1 dekodieren (parity zur JS-Variante).
+            let instNameBytes = header.subdata(in: 0..<22).filter { $0 != 0 }
+            let instName = (String(bytes: instNameBytes, encoding: .isoLatin1) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Big-Endian Words
+            let instLength = 2 * Int(UInt16(header[22]) << 8 | UInt16(header[23]))
+
+            // Finetune (signed 4-bit nibble)
+            var finetune = Int(header[24] & 0x0F)
+            if finetune > 7 { finetune -= 16 }
+
+            let volume = Int(header[25])
+            // Ur-Soundtracker speichert den Repeat-Offset in BYTES, alle
+            // 31-Instrument-Varianten in Words (x2).
+            let repeatOffsetRaw = Int(UInt16(header[26]) << 8 | UInt16(header[27]))
+            let repeatOffset = layout.instrumentCount == 15 ? repeatOffsetRaw : 2 * repeatOffsetRaw
+            let repeatLength = 2 * Int(UInt16(header[28]) << 8 | UInt16(header[29]))
+
+            // Sample-Bytes extrahieren
+            let end = sampleStartOffset + instLength
+            let sampleData = data.subdata(in: sampleStartOffset..<end)
+
+            // Convert to signed Int8
+            let bytes = sampleData.map { Int8(bitPattern: $0) }
+            sampleStartOffset += instLength
+
+            // Eine Probe loopt genau dann, wenn die Loop-Laenge > 1 Word (> 2 Bytes)
+            // ist. Ein repeatOffset > 0 allein markiert KEINEN Loop — sonst wuerde
+            // ein One-Shot mit gesetztem Offset, aber 2-Byte-Sentinel-Laenge faelsch
+            // eine winzige Region loopen (Brummen statt Ausklang).
+            let isLooped = repeatLength > 2
+
+            let instrument = Instrument(
+                index: i + 1,
+                name: instName,
+                length: instLength,
+                finetune: finetune,
+                volume: volume,
+                repeatOffset: repeatOffset,
+                repeatLength: repeatLength,
+                bytes: bytes,
+                isLooped: isLooped
+            )
+            instruments.append(instrument)
+        }
+        return instruments
     }
 
     public static func generateDemoMod() -> Mod {

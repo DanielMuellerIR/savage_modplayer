@@ -129,45 +129,7 @@ public class S3MParser {
         }
         guard channelCount > 0 else { throw ParserError.noChannels }
 
-        // ---- Order-Liste ----
-        // 254 (++) = Skip-Marker, 255 (--) = Ende. Skip-Marker werden entfernt,
-        // beim ersten Endmarker ist die Liste wirklich zu Ende;
-        // damit Bxx (Position Jump) weiter stimmt, merken wir uns pro
-        // Original-Index den Ziel-Index in der gefilterten Liste.
-        var patternTable = [Int]()
-        var rawIsSkip = [Bool](repeating: false, count: ordNum)
-        var effectiveOrderCount = ordNum
-        for i in 0..<ordNum {
-            let v = byte(0x60 + i)
-            if v == 255 {
-                effectiveOrderCount = i
-                break
-            } else if v == 254 {
-                rawIsSkip[i] = true
-            } else {
-                // Anders als 254/255 ist jeder andere Wert ein echter
-                // Pattern-Verweis. Ein Index ausserhalb der deklarierten
-                // Pattern-Tabelle ist strukturelle Korruption und darf nicht
-                // als 64 Zeilen Stille weitergereicht werden.
-                guard v < patNum else {
-                    throw ParserError.corruptPattern(
-                        "Order \(i) verweist auf nicht deklariertes Pattern \(v)")
-                }
-                patternTable.append(v)
-            }
-        }
-        guard !patternTable.isEmpty else { throw ParserError.emptySong }
-
-        // orderMap[original] = Index in patternTable; Skip-Marker zeigen auf
-        // den nächsten echten Eintrag. Der Endmarker, der Rest dahinter und
-        // Sprungziele ausserhalb der Order-Liste zeigen auf `length`: Der
-        // Sequencer behandelt das als Songende statt als Sprung zu Position 0.
-        var orderMap = [Int](repeating: patternTable.count, count: max(1, ordNum))
-        var filtered = 0
-        for i in 0..<effectiveOrderCount {
-            orderMap[i] = min(filtered, patternTable.count)
-            if !rawIsSkip[i] { filtered += 1 }
-        }
+        let (patternTable, orderMap) = try parseOrders(data[0x60..<afterOrders], patternCount: patNum)
 
         // ---- Parapointer ----
         let instParaOffset = 0x60 + ordNum
@@ -514,4 +476,49 @@ public class S3MParser {
             return (0, 0)
         }
     }
+
+    private static func parseOrders(_ orders: Data, patternCount patNum: Int) throws -> ([Int], [Int]) {
+        let ordNum = orders.count
+        // ---- Order-Liste ----
+        // 254 (++) = Skip-Marker, 255 (--) = Ende. Skip-Marker werden entfernt,
+        // beim ersten Endmarker ist die Liste wirklich zu Ende;
+        // damit Bxx (Position Jump) weiter stimmt, merken wir uns pro
+        // Original-Index den Ziel-Index in der gefilterten Liste.
+        var patternTable = [Int]()
+        var rawIsSkip = [Bool](repeating: false, count: ordNum)
+        var effectiveOrderCount = ordNum
+        for i in 0..<ordNum {
+            let v = Int(orders[orders.startIndex + i])
+            if v == 255 {
+                effectiveOrderCount = i
+                break
+            } else if v == 254 {
+                rawIsSkip[i] = true
+            } else {
+                // Anders als 254/255 ist jeder andere Wert ein echter
+                // Pattern-Verweis. Ein Index ausserhalb der deklarierten
+                // Pattern-Tabelle ist strukturelle Korruption und darf nicht
+                // als 64 Zeilen Stille weitergereicht werden.
+                guard v < patNum else {
+                    throw ParserError.corruptPattern(
+                        "Order \(i) verweist auf nicht deklariertes Pattern \(v)")
+                }
+                patternTable.append(v)
+            }
+        }
+        guard !patternTable.isEmpty else { throw ParserError.emptySong }
+
+        // orderMap[original] = Index in patternTable; Skip-Marker zeigen auf
+        // den nächsten echten Eintrag. Der Endmarker, der Rest dahinter und
+        // Sprungziele ausserhalb der Order-Liste zeigen auf `length`: Der
+        // Sequencer behandelt das als Songende statt als Sprung zu Position 0.
+        var orderMap = [Int](repeating: patternTable.count, count: max(1, ordNum))
+        var filtered = 0
+        for i in 0..<effectiveOrderCount {
+            orderMap[i] = min(filtered, patternTable.count)
+            if !rawIsSkip[i] { filtered += 1 }
+        }
+        return (patternTable, orderMap)
+    }
+
 }

@@ -14,7 +14,8 @@ cd "$(dirname "$0")"
 
 APPLE_TEAM_ID="${APPLE_TEAM_ID:-9QSWKSR4NQ}"
 SIGN_APP="${SIGN_APP:-auto}"
-SWIFT_BUILD_ARGS=(-c release)
+# Nur das handgebaute App-Bundle lädt Sparkle aus Contents/Frameworks.
+SWIFT_BUILD_ARGS=(-c release -Xlinker -rpath -Xlinker @loader_path/../Frameworks)
 CLOUDKIT_SETTINGS=""
 if [[ -n "${SAVAGE_CLOUDKIT_PROFILE:-}" ]]; then
     [[ "$SIGN_APP" != "0" ]] || { echo "ABBRUCH: CloudKit benötigt eine gültige Signatur." >&2; exit 1; }

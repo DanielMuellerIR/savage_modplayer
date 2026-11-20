@@ -94,7 +94,7 @@ extension MainView {
             queueResumeURL = nil
             catalog.query = LibraryQuery()
             selectedSidebarTab = 0
-            selectPlaylistSong(at: 0, autoPlay: wasPlaying, manualPlayback: false)
+            selectPlaylistSong(at: 0, autoPlay: wasPlaying, manualPlayback: false, origin: .playlistScan)
             var notices: [String] = []
             if !result.missing.isEmpty { notices.append("\(result.missing.count) Titel aus „\(saved.name)“ fehlen.") }
             if !result.limited.isEmpty { notices.append("\(result.limited.count) Titel konnten wegen der Archiv-Sicherheitsgrenzen nicht geöffnet werden.") }

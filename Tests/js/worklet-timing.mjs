@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const workletPath = join(here, '..', '..', 'mod-player-worklet.js');
+const workletPath = process.argv[2] ?? join(here, '..', '..', 'mod-player-worklet.js');
 
 // Nur den Teil bis zur AudioWorkletProcessor-Klasse nehmen: das sind die
 // Konstanten (PAULA_FREQUENCY etc.) plus die self-contained `Channel`-Klasse.

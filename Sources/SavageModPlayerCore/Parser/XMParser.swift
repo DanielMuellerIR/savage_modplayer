@@ -81,47 +81,20 @@ public class XMParser {
         guard data.count >= 80 else { throw ParserError.fileTooSmall }
         guard canParse(data: data) else { throw ParserError.invalidSignature }
 
-        // Little-Endian-Leser mit Bounds-Guard: außerhalb der Datei liefern sie
-        // 0 statt zu crashen (defekte Dateien werden so tolerant behandelt).
-        // `data` kann einen von 0 verschiedenen startIndex haben (Slices) —
-        // deshalb konsequent relativ zu startIndex indizieren.
-        let base = data.startIndex
-        func byte(_ o: Int) -> Int {
-            guard o >= 0, o < data.count else { return 0 }
-            return Int(data[base + o])
-        }
-        func word(_ o: Int) -> Int { byte(o) | (byte(o + 1) << 8) }
-        func dword(_ o: Int) -> Int { word(o) | (word(o + 2) << 16) }
-        // Signed Byte (finetune, relativeNote): -128..127.
-        func sbyte(_ o: Int) -> Int { Int(Int8(bitPattern: UInt8(byte(o) & 0xFF))) }
-        // Latin-1-String fester Länge, 0x00/0x20-Padding entfernt.
-        func string(_ o: Int, _ len: Int) -> String {
-            let bytes = (0..<len).map { UInt8(truncatingIfNeeded: byte(o + $0)) }.filter { $0 != 0 }
-            return (String(bytes: bytes, encoding: .isoLatin1) ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        // Ein einziger ueberlaufgepruefter Fensterhelfer fuer alle variablen
-        // XM-Strukturen. Jede deklarierte Laenge wird damit vollstaendig
-        // erzwungen, bevor auch nur ein Feld aus ihrem Fenster gelesen wird.
-        func checkedEnd(start: Int, length: Int) throws -> Int {
-            guard start >= 0, length >= 0 else { throw ParserError.fileTooSmall }
-            let (end, overflow) = start.addingReportingOverflow(length)
-            guard !overflow, end <= data.count else { throw ParserError.fileTooSmall }
-            return end
-        }
+        let reader = Reader(data: data)
 
         // ---- Datei-Header (§1) ----
-        let name = string(0x11, 20)
-        let headerSize = dword(0x3C)          // Größe ab 0x3C; erstes Pattern bei 0x3C + headerSize
-        let songLength = word(0x40)
-        // restartPos = word(0x42) — bewusst ignoriert (Song wrappt auf 0).
-        let numChannels = word(0x44)
-        let numPatterns = word(0x46)
-        let numInstruments = word(0x48)
-        let flags = word(0x4A)
+        let name = reader.string(0x11, 20)
+        let headerSize = reader.dword(0x3C)          // Größe ab 0x3C; erstes Pattern bei 0x3C + headerSize
+        let songLength = reader.word(0x40)
+        // restartPos = reader.word(0x42) — bewusst ignoriert (Song wrappt auf 0).
+        let numChannels = reader.word(0x44)
+        let numPatterns = reader.word(0x46)
+        let numInstruments = reader.word(0x48)
+        let flags = reader.word(0x4A)
         let linearFrequency = (flags & 1) != 0  // Bit0: 0 = Amiga-Perioden, 1 = linear
-        let defaultTempo = word(0x4C)           // "Speed" = Ticks pro Row -> initialSpeed
-        let defaultBPM = word(0x4E)             // BPM -> initialTempo
+        let defaultTempo = reader.word(0x4C)           // "Speed" = Ticks pro Row -> initialSpeed
+        let defaultBPM = reader.word(0x4E)             // BPM -> initialTempo
 
         guard numChannels > 0 else { throw ParserError.noChannels }
         guard songLength > 0 else { throw ParserError.emptySong }
@@ -150,16 +123,77 @@ public class XMParser {
             throw ParserError.unsupportedDimensions(
                 "headerSize \(headerSize) deckt \(songLength) Songpositionen nicht ab")
         }
-        _ = try checkedEnd(start: 0x3C, length: headerSize)
+        _ = try reader.checkedEnd(start: 0x3C, length: headerSize)
 
         // Order-Table (256 Byte ab 0x50), nur die ersten songLength Einträge gültig.
-        var patternTable = (0..<songLength).map { byte(0x50 + $0) }
+        var patternTable = (0..<songLength).map { reader.byte(0x50 + $0) }
 
-        // ---- Patterns (§2) ----
-        // Ab hier strikt über die Längenfelder vorwärts seeken.
         var pos = 0x3C + headerSize
-        let emptyRow = Row(notes: [Note](repeating: Note(instrument: 0, period: 0, effectId: 0, effectData: 0), count: numChannels))
+        var patterns = try parsePatterns(reader, count: numPatterns, channels: numChannels, position: &pos)
 
+        // Order-Einträge auf nicht existierende Patterns -> ein leeres Pattern.
+        let realPatternCount = patterns.count
+        if patternTable.contains(where: { $0 < 0 || $0 >= realPatternCount }) {
+            let emptyNote = Note(instrument: 0, period: 0, effectId: 0, effectData: 0)
+            let emptyRow = Row(notes: Array(repeating: emptyNote, count: numChannels))
+            let emptyIndex = patterns.count
+            patterns.append(Pattern(rows: [Row](repeating: emptyRow, count: 64)))
+            patternTable = patternTable.map { ($0 >= 0 && $0 < realPatternCount) ? $0 : emptyIndex }
+        }
+
+        let instruments = try parseInstruments(reader, count: numInstruments, position: pos)
+
+        return Mod(
+            name: name,
+            length: patternTable.count,
+            patternTable: patternTable,
+            instruments: instruments,
+            patterns: patterns,
+            channelCount: numChannels,
+            format: .xm,
+            // Der lockfreie Seek-Snapshot speichert Speed in einem Byte. XM
+            // deklariert das Headerfeld zwar als Word, Tracker-Effekte und die
+            // uebrigen Formate liefern hier aber hoechstens 255.
+            initialSpeed: defaultTempo > 0 ? min(255, defaultTempo) : 6,
+            initialTempo: defaultBPM >= 32 ? defaultBPM : 125,
+            initialGlobalVolume: 64,
+            channelPannings: [Float](repeating: 0.5, count: numChannels), // XM-Kanal-Default = Mitte
+            linearFrequency: linearFrequency)
+    }
+
+
+    private struct Reader {
+        let data: Data
+
+        // Die Strukturen prüfen ihr deklariertes Fenster vor dem Lesen.
+        // Offsets sind auch bei Data-Slices relativ zum Dateianfang.
+        func byte(_ o: Int) -> Int {
+            guard o >= 0, o < data.count else { return 0 }
+            return Int(data[data.startIndex + o])
+        }
+        func word(_ o: Int) -> Int { byte(o) | (byte(o + 1) << 8) }
+        func dword(_ o: Int) -> Int { word(o) | (word(o + 2) << 16) }
+        // Signed Byte (finetune, relativeNote): -128..127.
+        func sbyte(_ o: Int) -> Int { Int(Int8(bitPattern: UInt8(byte(o) & 0xFF))) }
+        // Latin-1-String fester Länge, 0x00/0x20-Padding entfernt.
+        func string(_ o: Int, _ len: Int) -> String {
+            let bytes = (0..<len).map { UInt8(truncatingIfNeeded: byte(o + $0)) }.filter { $0 != 0 }
+            return (String(bytes: bytes, encoding: .isoLatin1) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // Ein einziger ueberlaufgepruefter Fensterhelfer fuer alle variablen
+        // XM-Strukturen. Jede deklarierte Laenge wird damit vollstaendig
+        // erzwungen, bevor auch nur ein Feld aus ihrem Fenster gelesen wird.
+        func checkedEnd(start: Int, length: Int) throws -> Int {
+            guard start >= 0, length >= 0 else { throw ParserError.fileTooSmall }
+            let (end, overflow) = start.addingReportingOverflow(length)
+            guard !overflow, end <= data.count else { throw ParserError.fileTooSmall }
+            return end
+        }
+    }
+
+    private static func parsePatterns(_ reader: Reader, count numPatterns: Int,
+                                      channels numChannels: Int, position pos: inout Int) throws -> [Pattern] {
         var patterns = [Pattern]()
         patterns.reserveCapacity(numPatterns)
         var totalPatternCells = 0
@@ -170,16 +204,16 @@ public class XMParser {
             // trat an dieser Stelle ein leeres 64-Zeilen-Pattern an seine
             // Stelle — damit galt ein sauber endendes Präfix als gültiges,
             // teilweise stummes Modul.
-            guard pos >= 0, pos + 9 <= data.count else { throw ParserError.fileTooSmall }
-            let patternHeaderLen = dword(pos)
+            guard pos >= 0, pos + 9 <= reader.data.count else { throw ParserError.fileTooSmall }
+            let patternHeaderLen = reader.dword(pos)
             guard patternHeaderLen >= 9 else {
                 throw ParserError.corruptPattern(
                     "Pattern-Kopf ist mit \(patternHeaderLen) Byte kuerzer als 9 Byte")
             }
-            let patternHeaderEnd = try checkedEnd(start: pos, length: patternHeaderLen)
-            // let packingType = byte(pos + 4) // immer 0
-            var numRows = word(pos + 5)
-            let patternDataSize = word(pos + 7)
+            let patternHeaderEnd = try reader.checkedEnd(start: pos, length: patternHeaderLen)
+            // let packingType = reader.byte(pos + 4) // immer 0
+            var numRows = reader.word(pos + 5)
+            let patternDataSize = reader.word(pos + 7)
             if numRows == 0 { numRows = 64 }
             guard numRows <= maxRowsPerPattern else {
                 throw ParserError.unsupportedDimensions(
@@ -204,11 +238,11 @@ public class XMParser {
                 // liegen. Ein `min(…, data.count)` würde das Fenster still am
                 // Dateiende kürzen und eine abgeschnittene Datei als gültig
                 // durchlassen.
-                let dataEnd = try checkedEnd(start: dataStart, length: patternDataSize)
+                let dataEnd = try reader.checkedEnd(start: dataStart, length: patternDataSize)
                 var cursor = dataStart
                 var cell = 0
                 while cell < cellCount && cursor < dataEnd {
-                    let b = byte(cursor); cursor += 1
+                    let b = reader.byte(cursor); cursor += 1
                     var patternNote = 0, instr = 0, vol = 0, fxType = 0, fxParam = 0
                     // Benötigte Feldbytes VOR dem Lesen gegen die deklarierte
                     // Pattern-Grenze prüfen: eine Zelle, deren Felder dataEnd
@@ -229,18 +263,18 @@ public class XMParser {
                     }
                     if b & 0x80 != 0 {
                         // Komprimiert: nur die per Bit markierten Felder folgen.
-                        if b & 0x01 != 0 { patternNote = byte(cursor); cursor += 1 }
-                        if b & 0x02 != 0 { instr = byte(cursor); cursor += 1 }
-                        if b & 0x04 != 0 { vol = byte(cursor); cursor += 1 }
-                        if b & 0x08 != 0 { fxType = byte(cursor); cursor += 1 }
-                        if b & 0x10 != 0 { fxParam = byte(cursor); cursor += 1 }
+                        if b & 0x01 != 0 { patternNote = reader.byte(cursor); cursor += 1 }
+                        if b & 0x02 != 0 { instr = reader.byte(cursor); cursor += 1 }
+                        if b & 0x04 != 0 { vol = reader.byte(cursor); cursor += 1 }
+                        if b & 0x08 != 0 { fxType = reader.byte(cursor); cursor += 1 }
+                        if b & 0x10 != 0 { fxParam = reader.byte(cursor); cursor += 1 }
                     } else {
                         // Unkomprimiert: gelesenes Byte IST die Note, dann 4 feste Felder.
                         patternNote = b
-                        instr = byte(cursor); cursor += 1
-                        vol = byte(cursor); cursor += 1
-                        fxType = byte(cursor); cursor += 1
-                        fxParam = byte(cursor); cursor += 1
+                        instr = reader.byte(cursor); cursor += 1
+                        vol = reader.byte(cursor); cursor += 1
+                        fxType = reader.byte(cursor); cursor += 1
+                        fxParam = reader.byte(cursor); cursor += 1
                     }
 
                     let row = cell / numChannels
@@ -261,18 +295,14 @@ public class XMParser {
             }
 
             patterns.append(Pattern(rows: grid.map { Row(notes: $0) }))
-            pos = try checkedEnd(start: patternHeaderEnd, length: patternDataSize)
+            pos = try reader.checkedEnd(start: patternHeaderEnd, length: patternDataSize)
         }
+        return patterns
+    }
 
-        // Order-Einträge auf nicht existierende Patterns -> ein leeres Pattern.
-        let realPatternCount = patterns.count
-        if patternTable.contains(where: { $0 < 0 || $0 >= realPatternCount }) {
-            let emptyIndex = patterns.count
-            patterns.append(Pattern(rows: [Row](repeating: emptyRow, count: 64)))
-            patternTable = patternTable.map { ($0 >= 0 && $0 < realPatternCount) ? $0 : emptyIndex }
-        }
-
-        // ---- Instrumente (§3–§5) ----
+    private static func parseInstruments(_ reader: Reader, count numInstruments: Int,
+                                         position: Int) throws -> [Instrument?] {
+        var pos = position
         var instruments: [Instrument?] = [nil] // 1-basiert: Index 0 = nil
         var totalSamples = 0
         var totalPCMFrames = 0
@@ -280,16 +310,16 @@ public class XMParser {
             // Auch ein Instrument ohne Samples besitzt den festen 29-Byte-
             // Kopf. Fehlt ein deklariertes Instrument ganz oder teilweise,
             // ist das XM abgeschnitten und darf nicht als stilles Mod laden.
-            _ = try checkedEnd(start: pos, length: 29)
+            _ = try reader.checkedEnd(start: pos, length: 29)
             let instrStart = pos
-            let instrumentSize = dword(instrStart)
+            let instrumentSize = reader.dword(instrStart)
             guard instrumentSize >= 29 else {
                 throw ParserError.corruptInstrument(
                     "Kopf von Instrument \(i + 1) ist kuerzer als 29 Byte")
             }
-            let instrumentEnd = try checkedEnd(start: instrStart, length: instrumentSize)
-            let instName = string(instrStart + 4, 22)
-            let numSamples = word(instrStart + 27)
+            let instrumentEnd = try reader.checkedEnd(start: instrStart, length: instrumentSize)
+            let instName = reader.string(instrStart + 4, 22)
+            let numSamples = reader.word(instrStart + 27)
 
             guard numSamples <= maxSamplesPerInstrument else {
                 throw ParserError.unsupportedDimensions(
@@ -315,7 +345,7 @@ public class XMParser {
                 throw ParserError.corruptInstrument(
                     "Instrument \(i + 1) mit Samples hat keinen sampleHeaderSize-Wert")
             }
-            let sampleHeaderSize = dword(instrStart + 29)
+            let sampleHeaderSize = reader.dword(instrStart + 29)
             guard sampleHeaderSize >= 40 else {
                 throw ParserError.corruptInstrument(
                     "Sample-Kopf in Instrument \(i + 1) ist mit \(sampleHeaderSize) Byte kuerzer als 40 Byte")
@@ -337,7 +367,7 @@ public class XMParser {
             // Volume-/Panning-Envelope-Punkte: je 12 (x,y)-Word-Paare.
             func envelopePoints(_ off: Int, _ count: Int) -> [EnvelopePoint] {
                 (0..<min(count, 12)).map { j in
-                    EnvelopePoint(frame: word(off + j * 4), value: word(off + j * 4 + 2))
+                    EnvelopePoint(frame: reader.word(off + j * 4), value: reader.word(off + j * 4 + 2))
                 }
             }
 
@@ -348,23 +378,23 @@ public class XMParser {
             var fadeout = 0
 
             if hasExtendedHeader {
-                keymap = (0..<96).map { UInt8(truncatingIfNeeded: byte(instrStart + 33 + $0)) }
+                keymap = (0..<96).map { UInt8(truncatingIfNeeded: reader.byte(instrStart + 33 + $0)) }
 
-                let numVolPoints = byte(instrStart + 225)
-                let numPanPoints = byte(instrStart + 226)
-                let volSustainPoint = byte(instrStart + 227)
-                let volLoopStart = byte(instrStart + 228)
-                let volLoopEnd = byte(instrStart + 229)
-                let panSustainPoint = byte(instrStart + 230)
-                let panLoopStart = byte(instrStart + 231)
-                let panLoopEnd = byte(instrStart + 232)
-                let volType = byte(instrStart + 233)
-                let panType = byte(instrStart + 234)
-                let vibType = byte(instrStart + 235)
-                let vibSweep = byte(instrStart + 236)
-                let vibDepth = byte(instrStart + 237)
-                let vibRate = byte(instrStart + 238)
-                fadeout = word(instrStart + 239)
+                let numVolPoints = reader.byte(instrStart + 225)
+                let numPanPoints = reader.byte(instrStart + 226)
+                let volSustainPoint = reader.byte(instrStart + 227)
+                let volLoopStart = reader.byte(instrStart + 228)
+                let volLoopEnd = reader.byte(instrStart + 229)
+                let panSustainPoint = reader.byte(instrStart + 230)
+                let panLoopStart = reader.byte(instrStart + 231)
+                let panLoopEnd = reader.byte(instrStart + 232)
+                let volType = reader.byte(instrStart + 233)
+                let panType = reader.byte(instrStart + 234)
+                let vibType = reader.byte(instrStart + 235)
+                let vibSweep = reader.byte(instrStart + 236)
+                let vibDepth = reader.byte(instrStart + 237)
+                let vibRate = reader.byte(instrStart + 238)
+                fadeout = reader.word(instrStart + 239)
 
                 // Envelope nur bauen, wenn das jeweilige Type-Bit0 (on) gesetzt ist.
                 if volType & 0x01 != 0 {
@@ -395,7 +425,7 @@ public class XMParser {
             guard !sampleHeaderOverflow else {
                 throw ParserError.resourceLimit("Sample-Kopfbereich laeuft ueber")
             }
-            let sampleHeadersEnd = try checkedEnd(
+            let sampleHeadersEnd = try reader.checkedEnd(
                 start: shStart, length: sampleHeaderBytes)
             struct RawSampleHeader {
                 let length, loopStart, loopLength, volume, finetune, type, panning, relativeNote: Int
@@ -406,9 +436,9 @@ public class XMParser {
             for s in 0..<numSamples {
                 let shp = shStart + s * sampleHeaderSize
                 rawHeaders.append(RawSampleHeader(
-                    length: dword(shp), loopStart: dword(shp + 4), loopLength: dword(shp + 8),
-                    volume: byte(shp + 12), finetune: sbyte(shp + 13), type: byte(shp + 14),
-                    panning: byte(shp + 15), relativeNote: sbyte(shp + 16), name: string(shp + 18, 22)))
+                    length: reader.dword(shp), loopStart: reader.dword(shp + 4), loopLength: reader.dword(shp + 8),
+                    volume: reader.byte(shp + 12), finetune: reader.sbyte(shp + 13), type: reader.byte(shp + 14),
+                    panning: reader.byte(shp + 15), relativeNote: reader.sbyte(shp + 16), name: reader.string(shp + 18, 22)))
             }
 
             // Das gesamte PCM-Fenster wird VOR der ersten Dekodierung
@@ -437,7 +467,7 @@ public class XMParser {
                 }
                 totalPCMFrames = newTotalPCMFrames
             }
-            let sampleDataEnd = try checkedEnd(
+            let sampleDataEnd = try reader.checkedEnd(
                 start: sampleHeadersEnd, length: totalSampleBytes)
 
             var sdPos = sampleHeadersEnd
@@ -454,14 +484,14 @@ public class XMParser {
                     pcm.reserveCapacity(frames)
                     var old: Int16 = 0
                     for k in 0..<frames {
-                        old = old &+ Int16(bitPattern: UInt16(word(sdPos + k * 2)))
+                        old = old &+ Int16(bitPattern: UInt16(reader.word(sdPos + k * 2)))
                         pcm.append(Float(old) / 65536.0)
                     }
                 } else {
                     pcm.reserveCapacity(frames)
                     var old: Int8 = 0
                     for k in 0..<frames {
-                        old = old &+ Int8(bitPattern: UInt8(byte(sdPos + k) & 0xFF))
+                        old = old &+ Int8(bitPattern: UInt8(reader.byte(sdPos + k) & 0xFF))
                         pcm.append(Float(old) / 256.0)
                     }
                 }
@@ -497,23 +527,7 @@ public class XMParser {
 
             pos = sampleDataEnd
         }
-
-        return Mod(
-            name: name,
-            length: patternTable.count,
-            patternTable: patternTable,
-            instruments: instruments,
-            patterns: patterns,
-            channelCount: numChannels,
-            format: .xm,
-            // Der lockfreie Seek-Snapshot speichert Speed in einem Byte. XM
-            // deklariert das Headerfeld zwar als Word, Tracker-Effekte und die
-            // uebrigen Formate liefern hier aber hoechstens 255.
-            initialSpeed: defaultTempo > 0 ? min(255, defaultTempo) : 6,
-            initialTempo: defaultBPM >= 32 ? defaultBPM : 125,
-            initialGlobalVolume: 64,
-            channelPannings: [Float](repeating: 0.5, count: numChannels), // XM-Kanal-Default = Mitte
-            linearFrequency: linearFrequency)
+        return instruments
     }
 
     // Eine gepackte XM-Zelle in eine interne Note übersetzen.

@@ -1,7 +1,7 @@
 # Test-, Build- und Quick-Look-Runbook
 
-Stand: 2026-10-18. Diese Datei enthält die Details, die nur vor einer betroffenen
-Änderung geladen werden müssen. Die kompakte Pflichtmatrix steht in `AGENTS.md`.
+Die kompakte Pflichtmatrix steht in `AGENTS.md`. Dieses Runbook ergänzt die
+Befehle und Prüfgrenzen für die jeweils betroffenen Bereiche.
 
 ## Allgemeines Gate
 
@@ -230,7 +230,9 @@ lassen, sonst prüfen sie stillschweigend das alte Binary.
 
 - Nach Änderungen an `src/`, `modplayer.js`, `mod-player-worklet.js`, `VERSION`
   oder am Bundler: `npm ci --ignore-scripts`, `python3 build.py` und
-  `python3 Tests/web_bundle_tests.py` ausführen. Den HTML-Diff semantisch prüfen.
+  `python3 Tests/web_bundle_tests.py` ausführen. Der Test prüft die Syntax
+  beider eingebetteten Programme und das Tracker-Timing am gebauten Worklet.
+  Den HTML-Diff semantisch prüfen.
 - Parser-Grenzen des Browserplayers mit
   `node Tests/js/pattern-bounds.mjs` prüfen.
 - DSP-Änderungen immer mit `node Tests/js/worklet-timing.mjs` gegen Swift prüfen.
@@ -1038,6 +1040,10 @@ vollständiger Linux-GUI-Bau, sechs GUI-/MPRIS-Fälle, 17 Desktop-Prozessfälle 
 signierter Update-Rundlauf bestehen. Ein zusätzlicher Scanbarrieren-Fall ist im
 Release-Build ausgelassen, weil er Debug-Instrumentierung voraussetzt. Web-Bau
 und Pattern-Bounds-Prüfung bestehen; der HTML-Diff enthält nur die neue Version.
+
+Der Protokollstand 2 behält seine JSON-Feldnamen. Der Engine-Test schickt
+eine Anfrage mit einem ungültigen Query-Typ und prüft anschließend, dass die
+Engine ohne explizite ID-Liste eine Playlist aus den sichtbaren Titeln speichert.
 
 `desktop_engine_tests.py` prüft Play/Pause/Stopp und Seek, Mute, Timer,
 Inspektion, Neustart/Persistenz, explizite Songstellen und A/B, Warteschlange

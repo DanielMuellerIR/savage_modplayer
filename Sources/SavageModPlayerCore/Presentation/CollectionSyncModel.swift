@@ -5,9 +5,12 @@ import Combine
 public struct CollectionSyncService: Sendable {
     public let backend: any CollectionSyncAssetBackend
     public let prepareNewCollection: @Sendable (CollectionSyncAccountToken) async throws -> Void
-    public init(backend: any CollectionSyncAssetBackend,
-                prepareNewCollection: @escaping @Sendable (CollectionSyncAccountToken) async throws -> Void = { _ in }) {
-        self.backend = backend; self.prepareNewCollection = prepareNewCollection
+    public init(
+        backend: any CollectionSyncAssetBackend,
+        prepareNewCollection: @escaping @Sendable (CollectionSyncAccountToken) async throws -> Void = { _ in }
+    ) {
+        self.backend = backend
+        self.prepareNewCollection = prepareNewCollection
     }
 }
 
@@ -60,15 +63,22 @@ public final class CollectionSyncModel: ObservableObject {
     private var paused = false
 
     public init(binding: CollectionExchangeStoreBinding, service: CollectionSyncService? = nil) {
-        self.binding = binding; self.service = service
+        self.binding = binding
+        self.service = service
     }
-    deinit { task?.cancel(); retryTask?.cancel() }
+    deinit {
+        task?.cancel()
+        retryTask?.cancel()
+    }
 
     public func activate() {
         active = true
         schedule(force: true)
     }
-    public func deactivate() { active = false; cancelOperation() }
+    public func deactivate() {
+        active = false
+        cancelOperation()
+    }
     public func setPaused(_ value: Bool) {
         paused = value
         cancelOperation()
@@ -88,20 +98,32 @@ public final class CollectionSyncModel: ObservableObject {
         }
     }
     private func cancelOperation() {
-        task?.cancel(); retryTask?.cancel(); request = UUID(); isBusy = false
+        task?.cancel()
+        retryTask?.cancel()
+        request = UUID()
+        isBusy = false
         clearPreview()
     }
     public func cancelReview() {
-        cancelOperation(); error = nil
+        cancelOperation()
+        error = nil
         status = service == nil ? .notConfigured : (isEnabled ? .waiting : .off)
     }
     private func clearPreview() {
-        preview = nil; conflicts = []; resolutions = [:]; tracks = []; mapping = [:]; sources = []
+        preview = nil
+        conflicts = []
+        resolutions = [:]
+        tracks = []
+        mapping = [:]
+        sources = []
     }
 
     public func disable() async {
         cancelOperation()
-        let token = UUID(); request = token; isBusy = true; error = nil
+        let token = UUID()
+        request = token
+        isBusy = true
+        error = nil
         defer { if request == token { isBusy = false } }
         do {
             let captured = try await binding.captureStorage()
@@ -124,8 +146,12 @@ public final class CollectionSyncModel: ObservableObject {
 
     public func synchronize(force: Bool = true, setup: Bool = false) async {
         guard !isBusy, !paused, active else { return }
-        clearPreview(); error = nil; retryTask?.cancel()
-        let token = UUID(); request = token; isBusy = true
+        clearPreview()
+        error = nil
+        retryTask?.cancel()
+        let token = UUID()
+        request = token
+        isBusy = true
         defer { if request == token { isBusy = false } }
         do {
             var captured = try await binding.captureStorage()
@@ -134,10 +160,21 @@ public final class CollectionSyncModel: ObservableObject {
             let rawState = captured.disk.documents.syncState
             var stored = try await Task.detached { try rawState.map(CollectionSyncApplicationCodec.decode) }.value
             try check(token)
-            if let state = stored { try await show(state, token: token) }
-            else { isEnabled = false; hasPendingChanges = false; lastSuccessfulSync = nil }
-            guard let service else { status = .notConfigured; return }
-            guard setup || stored?.isEnabled == true else { status = .off; return }
+            if let state = stored {
+                try await show(state, token: token)
+            } else {
+                isEnabled = false
+                hasPendingChanges = false
+                lastSuccessfulSync = nil
+            }
+            guard let service else {
+                status = .notConfigured
+                return
+            }
+            guard setup || stored?.isEnabled == true else {
+                status = .off
+                return
+            }
             if var state = stored {
                 let previous = state, observation = captured
                 let preferenceKeys = Set(try binding.storedPreferenceValues(in: captured).keys)
@@ -157,7 +194,10 @@ public final class CollectionSyncModel: ObservableObject {
                     stored = state
                 }
                 try await show(state, token: token)
-                if !force, !hasPendingChanges { status = .current; return }
+                if !force, !hasPendingChanges {
+                    status = .current
+                    return
+                }
             }
             status = .syncing
             let scope = try await service.backend.currentAccountScope()
@@ -205,9 +245,12 @@ public final class CollectionSyncModel: ObservableObject {
                 try Self.makePreview(captured: observation, stored: previous, account: account, remote: remote)
             }.value
             try check(token)
-            preview = prepared.preview; sources = captured.sources
-            mapping = prepared.mapping; tracks = prepared.tracks
-            conflicts = prepared.preview.plan.conflicts; resolutions = [:]
+            preview = prepared.preview
+            sources = captured.sources
+            mapping = prepared.mapping
+            tracks = prepared.tracks
+            conflicts = prepared.preview.plan.conflicts
+            resolutions = [:]
             if stored == nil { try await rebuildInitialPlan(token: token) }
             if !setup, stored != nil, conflicts.isEmpty, tracks.isEmpty {
                 try await finish(token: token, service: service)
@@ -251,30 +294,43 @@ public final class CollectionSyncModel: ObservableObject {
 
     public func assign(_ source: CollectionExchangeLocalTrack, to id: UUID) async {
         guard !isBusy, tracks.contains(where: { $0.id == id }), sources.contains(source),
-              !mapping.contains(where: { $0.key != id && $0.value.id == source.reference.id }) else { return }
-        let token = UUID(); request = token; isBusy = true; error = nil
+            !mapping.contains(where: { $0.key != id && $0.value.id == source.reference.id })
+        else { return }
+        let token = UUID()
+        request = token
+        isBusy = true
+        error = nil
         defer { if request == token { isBusy = false } }
         do {
             if let p = preview, p.stored != nil {
                 _ = try await Task.detached { try p.registry.assigning(id, to: source.reference, account: p.account) }.value
                 try check(token)
             }
-            mapping[id] = source.reference; resolutions = [:]
+            mapping[id] = source.reference
+            resolutions = [:]
             try await rebuildInitialPlan(token: token)
             status = .review
         } catch { fail(error, token: token) }
     }
     public func unassign(_ id: UUID) async {
         guard !isBusy, tracks.contains(where: { $0.id == id }) else { return }
-        let token = UUID(); request = token; isBusy = true
+        let token = UUID()
+        request = token
+        isBusy = true
         defer { if request == token { isBusy = false } }
-        mapping.removeValue(forKey: id); resolutions = [:]; error = nil
-        do { try await rebuildInitialPlan(token: token); status = .review }
-        catch { fail(error, token: token) }
+        mapping.removeValue(forKey: id)
+        resolutions = [:]
+        error = nil
+        do {
+            try await rebuildInitialPlan(token: token)
+            status = .review
+        } catch { fail(error, token: token) }
     }
     public func assignUniqueSuggestions() async {
         guard !isBusy, let p = preview else { return }
-        let token = UUID(); request = token; isBusy = true
+        let token = UUID()
+        request = token
+        isBusy = true
         defer { if request == token { isBusy = false } }
         let assigned = Set(mapping.values.map(\.id))
         let owners = Dictionary(uniqueKeysWithValues: p.registry.bindings.map { ($0.reference.id, $0.id) })
@@ -289,9 +345,12 @@ public final class CollectionSyncModel: ObservableObject {
         var updated = mapping
         for (id, reference) in proposed where counts[reference.id] == 1 { updated[id] = reference }
         mapping = updated
-        resolutions = [:]; error = nil
-        do { try await rebuildInitialPlan(token: token); status = .review }
-        catch { fail(error, token: token) }
+        resolutions = [:]
+        error = nil
+        do {
+            try await rebuildInitialPlan(token: token)
+            status = .review
+        } catch { fail(error, token: token) }
     }
     public func resolve(_ id: CollectionSyncKey, with decision: CollectionSyncResolution?) {
         guard !isBusy, conflicts.contains(where: { $0.id == id }) else { return }
@@ -302,7 +361,8 @@ public final class CollectionSyncModel: ObservableObject {
         let mapping = mapping
         let updated = try await Task.detached { try Self.initialPreview(p, mapping: mapping) }.value
         try check(token)
-        preview = updated; conflicts = updated.plan.conflicts
+        preview = updated
+        conflicts = updated.plan.conflicts
     }
     private nonisolated static func initialPreview(_ previous: Preview, mapping: [UUID: PlaylistTrackReference]) throws -> Preview {
         var p = previous
@@ -315,13 +375,19 @@ public final class CollectionSyncModel: ObservableObject {
         let local = try CollectionSyncSnapshot(document: exported.document,
             collectionID: registry.collectionID, generation: registry.generation)
         let empty = CollectionSyncSnapshot(collectionID: registry.collectionID, generation: registry.generation)
-        p.local = local; p.observed = local; p.registry = exported.registry
+        p.local = local
+        p.observed = local
+        p.registry = exported.registry
         p.plan = try .init(base: empty, local: local, remote: p.remote?.snapshot ?? empty)
         return p
     }
     public func confirm() async {
         guard canConfirm, let service else { return }
-        let token = UUID(); request = token; isBusy = true; error = nil; status = .syncing
+        let token = UUID()
+        request = token
+        isBusy = true
+        error = nil
+        status = .syncing
         defer { if request == token { isBusy = false } }
         do { try await finish(token: token, service: service) }
         catch { fail(error, token: token) }
@@ -379,7 +445,9 @@ public final class CollectionSyncModel: ObservableObject {
         try check(token)
         cleanupPending = try binding.commit(candidate, replacing: current, syncState: confirmed.1) == .cleanupPending
         try await show(confirmed.0, token: token)
-        clearPreview(); error = nil; status = .current
+        clearPreview()
+        error = nil
+        status = .current
     }
 
     private nonisolated static func prepare(_ p: Preview, captured: CollectionExchangeStoreBinding.Capture,
@@ -429,7 +497,8 @@ public final class CollectionSyncModel: ObservableObject {
     private func show(_ state: CollectionSyncApplicationState, token: UUID) async throws {
         let pending = try await Task.detached { try state.hasPendingChanges() }.value
         try check(token)
-        isEnabled = state.isEnabled; lastSuccessfulSync = state.lastSuccessfulSync
+        isEnabled = state.isEnabled
+        lastSuccessfulSync = state.lastSuccessfulSync
         hasPendingChanges = pending
     }
     private func check(_ token: UUID) throws {

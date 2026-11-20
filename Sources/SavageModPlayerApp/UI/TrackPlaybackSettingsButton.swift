@@ -10,8 +10,7 @@ struct TrackPlaybackSettingsButton: View {
 
     var body: some View {
         Button {
-            request = TrackPlaybackSettingsContext(sourceID: model.sourceID, title: title, format: model.format,
-                sourceDescription: model.sourceDescription)
+            request = model.presentationContext(title: title)
         } label: {
             Label("Klang", systemImage: "slider.horizontal.3")
                 .scaledFont(compact ? 9 : 10, weight: .semibold)
@@ -22,7 +21,7 @@ struct TrackPlaybackSettingsButton: View {
         }.buttonStyle(PremiumHoverButtonStyle(theme: theme))
             .help("Klang: globale Vorgaben und Einstellungen nur für diesen Titel.")
             .accessibilityIdentifier("trackSettingsOpen")
-            .accessibilityValue(model.overrides(for: model.sourceID).isEmpty ? "Globale Vorgaben" : "Titel-Overrides")
+            .accessibilityValue(model.accessibilityStatus)
             .sheet(item: $request) { context in
                 TrackPlaybackSettingsView(model: model, context: context).frame(width: 440, height: 560)
                     .preferredColorScheme(theme == .workbench ? .light : .dark)

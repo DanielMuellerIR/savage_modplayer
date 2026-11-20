@@ -952,62 +952,10 @@ public enum ITParser {
                 defaultPanning = nil
             }
 
-            let dataPresent = flags & 0x01 != 0
-            let is16Bit = flags & 0x02 != 0
-            // IT 2.14 führte echtes Stereo ein; Zielumfang M3 ist 2.14/2.15.
-            let isStereo = flags & 0x04 != 0 && createdWithVersion >= 0x0214
-            let isCompressed = flags & 0x08 != 0
-            endOffset = max(endOffset, offset + 80)
-            var leftPCM = [Float]()
-            var rightPCM: [Float]?
-            if dataPresent, length > 0 {
-                if isCompressed {
-                    let decompressed = try ITSampleDecompressor.decompress(
-                        data: reader.data,
-                        offset: sampleDataOffset,
-                        frameCount: length,
-                        bitDepth: is16Bit ? .sixteen : .eight,
-                        stereo: isStereo,
-                        version: convertFlags & 0x04 != 0 ? .it215 : .it214
-                    )
-                    endOffset = max(endOffset, sampleDataOffset + decompressed.bytesConsumed)
-                    let divisor: Float = is16Bit ? 65_536.0 : 256.0
-                    leftPCM = decompressed.left.map { Float($0) / divisor }
-                    rightPCM = decompressed.right?.map { Float($0) / divisor }
-                } else {
-                    let bytesPerSample = is16Bit ? 2 : 1
-                    let channels = isStereo ? 2 : 1
-                    let (channelBytes, channelOverflow) = length.multipliedReportingOverflow(by: bytesPerSample)
-                    let (requiredBytes, totalOverflow) = channelBytes.multipliedReportingOverflow(by: channels)
-                    guard !channelOverflow, !totalOverflow,
-                          sampleDataOffset > 0,
-                          sampleDataOffset <= reader.data.count - requiredBytes else {
-                        throw ParserError.truncatedSample(sampleIndex)
-                    }
-
-                    leftPCM = try decodePCMChannel(
-                        reader: reader,
-                        offset: sampleDataOffset,
-                        frameCount: length,
-                        is16Bit: is16Bit,
-                        isSigned: convertFlags & 0x01 != 0,
-                        isBigEndian: convertFlags & 0x02 != 0,
-                        isDelta: convertFlags & 0x04 != 0
-                    )
-                    if isStereo {
-                        rightPCM = try decodePCMChannel(
-                            reader: reader,
-                            offset: sampleDataOffset + channelBytes,
-                            frameCount: length,
-                            is16Bit: is16Bit,
-                            isSigned: convertFlags & 0x01 != 0,
-                            isBigEndian: convertFlags & 0x02 != 0,
-                            isDelta: convertFlags & 0x04 != 0
-                        )
-                    }
-                    endOffset = max(endOffset, sampleDataOffset + requiredBytes)
-                }
-            }
+            let pcm = try samplePCM(reader: reader, sample: sampleIndex, flags: flags,
+                                    convertFlags: convertFlags, version: createdWithVersion,
+                                    offset: sampleDataOffset, length: length)
+            endOffset = max(endOffset, offset + 80, pcm.endOffset)
 
             let loopType: LoopType = loopEnabled
                 ? (flags & 0x40 != 0 ? .pingpong : .forward)
@@ -1028,7 +976,7 @@ public enum ITParser {
             let name = try reader.string(offset + 0x14, length: 26)
 
             samples.append(Sample(
-                pcm: leftPCM,
+                pcm: pcm.left,
                 loopStart: loopEnabled ? loopStart : 0,
                 loopLength: loopEnabled ? loopEnd - loopStart : 0,
                 loopType: loopType,
@@ -1038,7 +986,7 @@ public enum ITParser {
                 panning: defaultPanning.map { Float($0) / 64.0 } ?? 0.5,
                 c2spd: 8363,
                 name: name,
-                rightPCM: rightPCM,
+                rightPCM: pcm.right,
                 sustainLoop: sustainLoop,
                 itProperties: ITSampleProperties(
                     c5Speed: c5Speed,
@@ -1049,6 +997,43 @@ public enum ITParser {
             ))
         }
         return (samples, endOffset)
+    }
+
+    private static func samplePCM(
+        reader: Reader, sample: Int, flags: Int, convertFlags: Int,
+        version: Int, offset: Int, length: Int
+    ) throws -> (left: [Float], right: [Float]?, endOffset: Int) {
+        guard flags & 0x01 != 0, length > 0 else { return ([], nil, 0) }
+        let is16Bit = flags & 0x02 != 0
+        // IT 2.14 führte das Stereo-Flag für zwei hintereinanderliegende Kanäle ein.
+        let isStereo = flags & 0x04 != 0 && version >= 0x0214
+        if flags & 0x08 != 0 {
+            let decompressed = try ITSampleDecompressor.decompress(
+                data: reader.data, offset: offset, frameCount: length,
+                bitDepth: is16Bit ? .sixteen : .eight, stereo: isStereo,
+                version: convertFlags & 0x04 != 0 ? .it215 : .it214
+            )
+            let divisor: Float = is16Bit ? 65_536.0 : 256.0
+            return (decompressed.left.map { Float($0) / divisor },
+                    decompressed.right?.map { Float($0) / divisor },
+                    offset + decompressed.bytesConsumed)
+        }
+
+        let (channelBytes, channelOverflow) = length.multipliedReportingOverflow(by: is16Bit ? 2 : 1)
+        let (requiredBytes, totalOverflow) = channelBytes.multipliedReportingOverflow(by: isStereo ? 2 : 1)
+        guard !channelOverflow, !totalOverflow,
+              offset > 0, offset <= reader.data.count - requiredBytes else {
+            throw ParserError.truncatedSample(sample)
+        }
+        func decode(at start: Int) throws -> [Float] {
+            try decodePCMChannel(reader: reader, offset: start, frameCount: length, is16Bit: is16Bit,
+                                 isSigned: convertFlags & 0x01 != 0,
+                                 isBigEndian: convertFlags & 0x02 != 0,
+                                 isDelta: convertFlags & 0x04 != 0)
+        }
+        return (try decode(at: offset),
+                isStereo ? try decode(at: offset + channelBytes) : nil,
+                offset + requiredBytes)
     }
 
     private static func validateLoop(

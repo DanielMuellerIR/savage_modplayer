@@ -8,17 +8,19 @@ struct SleepTimerButton: View {
     @State private var showing = false
 
     var body: some View {
-        Button { timer.refresh(); showing = true } label: {
+        Button {
+            timer.refresh()
+            showing = true
+        } label: {
             HStack(spacing: 4) {
                 Image(systemName: "timer")
-                if timer.snapshot.isActive {
-                    let seconds = timer.snapshot.remainingSeconds
-                    Text(verbatim: String(format: "%d:%02d", seconds / 60, seconds % 60))
+                if let countdown = timer.snapshot.toolbarCountdown {
+                    Text(verbatim: countdown)
                         .font(.caption.monospacedDigit())
                 }
             }
         }.accessibilityLabel(Text("Einschlaftimer"))
-            .accessibilityValue(statusValue)
+            .accessibilityValue(timer.snapshot.accessibilityStatus)
             .accessibilityIdentifier("sleepTimerOpen")
             .onChange(of: showing) { _, open in model.isLibraryPanelOpen = open }
             .sheet(isPresented: $showing) {
@@ -28,11 +30,4 @@ struct SleepTimerButton: View {
             }
     }
 
-    private var statusValue: Text {
-        if timer.snapshot.isActive {
-            let seconds = timer.snapshot.remainingSeconds
-            return Text(verbatim: String(format: "%d:%02d", seconds / 60, seconds % 60))
-        }
-        return timer.snapshot.phase == .expired ? Text("Wiedergabe beendet") : Text("Ausgeschaltet")
-    }
 }
