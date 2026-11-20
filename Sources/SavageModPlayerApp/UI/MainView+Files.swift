@@ -11,7 +11,7 @@ extension MainView {
     
     // autoPlay=true startet die Wiedergabe direkt nach dem Laden — genutzt beim
     // App-Start und Fenster-Drops. Der Datei-Dialog lädt mit Default false nur.
-    func handleDroppedURLs(_ urls: [URL], autoPlay: Bool = false, requestID pendingRequestID: UUID? = nil) {
+    func handleDroppedURLs(_ urls: [URL], autoPlay: Bool = false) {
         let collectionURLs = urls.filter { $0.pathExtension.lowercased() == CollectionExchangeCodec.fileExtension }
         let audioURLs = urls.filter { $0.pathExtension.lowercased() != CollectionExchangeCodec.fileExtension }
         pendingCollectionURLs.append(contentsOf: collectionURLs)
@@ -21,77 +21,56 @@ extension MainView {
             return
         }
         playbackActions.observeSleepTimer(coordinator: coordinator)
-        if pendingRequestID == nil && (autoPlay || LaunchArguments.autoplayRequested(CommandLine.arguments)) {
+        if autoPlay || LaunchArguments.autoplayRequested(CommandLine.arguments) {
             playbackActions.prepareManualPlayback(coordinator: coordinator)
         }
-        let requestID: UUID
-        if let pendingRequestID {
-            guard playlistRequestID == pendingRequestID else { return }
-            requestID = pendingRequestID
-        } else {
-            requestID = playbackActions.beginFileRequest()
-        }
-        self.errorMessage = nil
-        self.compatibilityMessage = nil
-        self.playlistNotice = nil
-        collectingPlaylistRequest = requestID
-        // Dateisystem-Traversal + Kopieren laufen im Hintergrund — ein grosser
-        // Ordner-Drop blockierte sonst den Main-Thread (Beachball). Nur die
-        // @State-Mutation und das Laden der ersten Datei kehren auf den Main-Thread
-        // zurueck.
-        DispatchQueue.global(qos: .userInitiated).async {
-            // Einsammeln (inkl. Ordner-Rekursion und unsichtbarem Entpacken von
-            // Zip/7z-Archiven) uebernimmt der testbare Core-Scanner; hier bleibt
-            // nur das Temp-Ziel und die UI-Anbindung.
-            let entries = PlaylistScanner.collectEntries(from: audioURLs, tempDir: MainView.newDropTempDir())
-            let tree = PlaylistScanner.buildTree(entries)
-            let flat = PlaylistScanner.flattenedFiles(tree)
-            var seen = Set<String>()
-            let unique = flat.filter { seen.insert($0.source.id).inserted }
-            let uniqueTree = unique.count == flat.count ? tree : PlaylistScanner.buildTree(unique)
-            let pathsByURL = Dictionary(uniqueKeysWithValues: unique.map { ($0.url, $0.folderPath) })
-            DispatchQueue.main.async {
-                guard self.playlistRequestID == requestID else { return }
-                defer { self.collectingPlaylistRequest = nil; self.openNextCollectionIfPossible() }
-                guard !flat.isEmpty else {
-                    self.errorMessage = "Keine unterstützten Tracker-Dateien gefunden."
-                    return
-                }
-                self.registerTracks(unique)
-                let sorted = unique.map(\.url)
-                self.playlist = sorted
-                self.playlistTree = uniqueTree
-                self.folderPathByURL = pathsByURL
-                self.playbackSelection = nil
-                self.queueResumeURL = nil
-                // Standard: alle Ordner zugeklappt; nur der Pfad zum Start-Titel
-                // wird unten via selectPlaylistSong/expandAncestors geoeffnet.
-                self.expandedFolders = []
-                self.selectedSidebarTab = 0 // Playlist fokussieren
+        errorMessage = nil
+        compatibilityMessage = nil
+        playlistNotice = nil
+        let tempDir = Self.newDropTempDir()
+        playbackActions.collectPlaylist {
+            ScannedPlaylist(urls: audioURLs, tempDir: tempDir)
+        } accept: { result in
+            defer { openNextCollectionIfPossible() }
+            let unique = result.entries
+            guard !unique.isEmpty else {
+                errorMessage = "Keine unterstützten Tracker-Dateien gefunden."
+                return
+            }
+            self.registerTracks(unique)
+            let sorted = unique.map(\.url)
+            self.playlist = sorted
+            self.playlistTree = result.tree
+            self.folderPathByURL = result.folderPaths
+            self.playbackSelection = nil
+            self.queueResumeURL = nil
+            // Standard: alle Ordner zugeklappt; nur der Pfad zum Start-Titel
+            // wird unten via selectPlaylistSong/expandAncestors geoeffnet.
+            self.expandedFolders = []
+            self.selectedSidebarTab = 0 // Playlist fokussieren
 
-                // Start-Titel bestimmen: ein expliziter "--autoplay <filter>"
-                // gewinnt; sonst bei ausgeschaltetem Shuffle der zuletzt gespielte
-                // Titel (falls noch in der Liste); sonst bei Shuffle ein Zufalls-
-                // Titel, sonst der erste der (sortierten) Liste.
-                let filterIndex = Self.autoplayFilterIndex(in: sorted)
-                let legacyMatches = sorted.indices.filter { self.cleanFilename(sorted[$0]) == self.lastPlayedSongName }
-                let lastPlayedIndex = self.shuffleEnabled ? nil
-                    : sorted.firstIndex(where: { self.trackReferences[$0]?.id == self.lastPlayedSourceID })
-                        ?? (self.lastPlayedSourceID.isEmpty && legacyMatches.count == 1 ? legacyMatches.first : nil)
-                let startIndex = filterIndex
-                    ?? lastPlayedIndex
-                    ?? (self.shuffleEnabled ? Int.random(in: 0..<sorted.count) : 0)
+            // Start-Titel bestimmen: ein expliziter "--autoplay <filter>"
+            // gewinnt; sonst bei ausgeschaltetem Shuffle der zuletzt gespielte
+            // Titel (falls noch in der Liste); sonst bei Shuffle ein Zufalls-
+            // Titel, sonst der erste der (sortierten) Liste.
+            let filterIndex = Self.autoplayFilterIndex(in: sorted)
+            let legacyMatches = sorted.indices.filter { self.cleanFilename(sorted[$0]) == self.lastPlayedSongName }
+            let lastPlayedIndex = self.shuffleEnabled ? nil
+                : sorted.firstIndex(where: { self.trackReferences[$0]?.id == self.lastPlayedSourceID })
+                    ?? (self.lastPlayedSourceID.isEmpty && legacyMatches.count == 1 ? legacyMatches.first : nil)
+            let startIndex = filterIndex
+                ?? lastPlayedIndex
+                ?? (self.shuffleEnabled ? Int.random(in: 0..<sorted.count) : 0)
 
-                // Sofort losspielen, wenn der Aufrufer es will (App-Start) oder die
-                // Headless-/Agent-Steuerung "--autoplay [filter]" gesetzt ist —
-                // Letzteres auch fuer Screenshots und Smoke-Tests ohne Klicks.
-                if autoPlay || LaunchArguments.autoplayRequested(CommandLine.arguments) {
-                    self.selectPlaylistSong(at: startIndex, autoPlay: true, manualPlayback: false)
-                } else {
-                    self.currentPlaylistIndex = startIndex
-                    self.loadModFile(from: sorted[startIndex])
-                    self.expandAncestors(of: sorted[startIndex])
-                }
+            // Sofort losspielen, wenn der Aufrufer es will (App-Start) oder die
+            // Headless-/Agent-Steuerung "--autoplay [filter]" gesetzt ist —
+            // Letzteres auch fuer Screenshots und Smoke-Tests ohne Klicks.
+            if autoPlay || LaunchArguments.autoplayRequested(CommandLine.arguments) {
+                self.selectPlaylistSong(at: startIndex, autoPlay: true, manualPlayback: false)
+            } else {
+                self.currentPlaylistIndex = startIndex
+                self.loadModFile(from: sorted[startIndex])
+                self.expandAncestors(of: sorted[startIndex])
             }
         }
     }

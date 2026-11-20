@@ -75,34 +75,30 @@ extension MainView {
 
     func openSavedPlaylist(_ saved: SavedPlaylist) {
         playbackActions.observeSleepTimer(coordinator: coordinator)
-        let requestID = playbackActions.beginFileRequest()
-        collectingPlaylistRequest = requestID
         let wasPlaying = coordinator.isPlaying && !coordinator.isPaused
         let tempDir = Self.newDropTempDir()
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = SavedPlaylistResolver.resolve(saved.tracks, tempDir: tempDir)
-            DispatchQueue.main.async {
-                guard playlistRequestID == requestID else { return }
-                defer { collectingPlaylistRequest = nil; openNextCollectionIfPossible() }
-                guard !result.entries.isEmpty else {
-                    playlistNotice = "Keine Quelle für „\(saved.name)“ erreichbar. Die gespeicherten Einträge bleiben erhalten."
-                    return
-                }
-                registerTracks(result.entries)
-                playlist = result.entries.map(\.url)
-                playlistTree = nil
-                expandedFolders = []
-                folderPathByURL = [:]
-                playbackSelection = nil
-                queueResumeURL = nil
-                catalog.query = LibraryQuery()
-                selectedSidebarTab = 0
-                selectPlaylistSong(at: 0, autoPlay: wasPlaying, manualPlayback: false)
-                var notices: [String] = []
-                if !result.missing.isEmpty { notices.append("\(result.missing.count) Titel aus „\(saved.name)“ fehlen.") }
-                if !result.limited.isEmpty { notices.append("\(result.limited.count) Titel konnten wegen der Archiv-Sicherheitsgrenzen nicht geöffnet werden.") }
-                playlistNotice = notices.isEmpty ? nil : notices.joined(separator: " ") + " Die gespeicherte Liste bleibt vollständig."
+        playbackActions.collectPlaylist {
+            SavedPlaylistResolver.resolve(saved.tracks, tempDir: tempDir) { Task.isCancelled }
+        } accept: { result in
+            defer { openNextCollectionIfPossible() }
+            guard !result.entries.isEmpty else {
+                playlistNotice = "Keine Quelle für „\(saved.name)“ erreichbar. Die gespeicherten Einträge bleiben erhalten."
+                return
             }
+            registerTracks(result.entries)
+            playlist = result.entries.map(\.url)
+            playlistTree = nil
+            expandedFolders = []
+            folderPathByURL = [:]
+            playbackSelection = nil
+            queueResumeURL = nil
+            catalog.query = LibraryQuery()
+            selectedSidebarTab = 0
+            selectPlaylistSong(at: 0, autoPlay: wasPlaying, manualPlayback: false)
+            var notices: [String] = []
+            if !result.missing.isEmpty { notices.append("\(result.missing.count) Titel aus „\(saved.name)“ fehlen.") }
+            if !result.limited.isEmpty { notices.append("\(result.limited.count) Titel konnten wegen der Archiv-Sicherheitsgrenzen nicht geöffnet werden.") }
+            playlistNotice = notices.isEmpty ? nil : notices.joined(separator: " ") + " Die gespeicherte Liste bleibt vollständig."
         }
     }
 
@@ -115,7 +111,7 @@ extension MainView {
             onCreate: createSavedPlaylist,
             onRename: { id, name in editSavedPlaylist(id: id) { $0.name = name } },
             onDelete: { id in updateSavedPlaylists { $0.playlists.removeAll { $0.id == id } } },
-            onOpen: { saved in showSavedPlaylists = false; openSavedPlaylist(saved) },
+            onOpen: { saved in librarySheet = nil; openSavedPlaylist(saved) },
             onRemove: { id, trackID in editSavedPlaylist(id: id) { $0.tracks.removeAll { $0.id == trackID } } },
             onMove: { id, trackID, offset in
                 editSavedPlaylist(id: id) { saved in

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Window
+import QtQuick.Controls
 import QtTest
 import "../../linux/gui" as Player
 
@@ -36,9 +37,11 @@ TestCase {
         property var pattern: ({})
         property var notes: ({})
         property bool visualsDisabled: false
+        property var markerCommand
         signal message(string event, var values)
         function command(name, values) {
             if (name === "compact") visualsDisabled = values.enabled;
+            if (name === "markerRename") markerCommand = values;
         }
         function option(name, value) {}
     }
@@ -73,6 +76,47 @@ TestCase {
         tryCompare(bridge, "visualsDisabled", false);
         player.hide();
     }
+    function test_marker_dialog_edits_and_closes() {
+        player.width = 1440;
+        player.height = 900;
+        bridge.module = {
+            title: "Testmodul", revision: "marker-module", sourceID: "source",
+            orders: [0, 1], rowCounts: [64, 64],
+            markers: [{ id: "marker", name: "Vorher", address: { position: 1, row: 17 } }]
+        };
+        bridge.message("module", bridge.module);
+        player.show();
+        player.reviewView("markers");
+        const dialog = findChild(player, "markerDialog");
+        verify(dialog !== null);
+        tryCompare(dialog, "opened", true);
+
+        const scroll = findChild(dialog, "markerScroll");
+        const entries = findChild(dialog, "markerEntries");
+        verify(scroll !== null && entries !== null);
+        tryCompare(entries, "count", 1);
+        const entry = findChild(entries.itemAt(0), "editMarker");
+        verify(entry !== null);
+        scroll.contentItem.contentY = scroll.contentHeight - scroll.availableHeight;
+        waitForRendering(entry);
+        mouseClick(entry);
+
+        scroll.contentItem.contentY = 0;
+        const name = findChild(dialog, "markerName");
+        tryCompare(name, "text", "Vorher");
+        name.text = "Nachher";
+        mouseClick(findChild(dialog, "saveMarker"));
+        tryVerify(() => bridge.markerCommand !== undefined);
+        compare(bridge.markerCommand.id, "marker");
+        compare(bridge.markerCommand.text, "Nachher");
+        compare(bridge.markerCommand.position, 1);
+        compare(bridge.markerCommand.row, 17);
+
+        mouseClick(dialog.standardButton(Dialog.Close));
+        tryCompare(dialog, "opened", false);
+        player.hide();
+    }
+
     function test_settings_stay_inside_small_window_at_large_font() {
         player.width = 780;
         player.height = 600;

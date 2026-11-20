@@ -1,3 +1,5 @@
+Savage Mod Player 1.6.62 separates Linux dialogs and the note-rain window from the main window. On macOS, playlist scans share one request controller and the WAV export owns its own dialog state. The desktop controls and file formats are unchanged.
+
 Savage Mod Player 1.6.61 applies Linux desktop commands in input order. Closing the command input preserves the final accepted setting and discards pending scans. A new selection can still replace a pending scan. macOS regression tests cover delayed file drops and returning to the playlist after queued tracks.
 
 Savage Mod Player 1.6.60 improves Linux desktop media-key integration. MPRIS uses a stable player name, reports available transport actions when the first track loads, and checks registration failures. Play/Pause, Play, Pause, Stop and next/previous track use the existing playback coordinator; independent instances remain separately controllable.

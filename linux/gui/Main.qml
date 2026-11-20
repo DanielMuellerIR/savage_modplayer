@@ -2,7 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
-import QtMultimedia
 
 ApplicationWindow {
     id: window
@@ -15,11 +14,6 @@ ApplicationWindow {
     property string errorMessage: ""
     property var exchange: ({})
     property var expanded: ({})
-    property real exportProgress: 0
-    property var exportReport: ({})
-    property string exportResult: ""
-    property string exportTitle: ""
-    property bool exporting: false
     property real fontScale: Math.max(0.7, Math.min(1.8, 1 + (prefs.zoom || 0) * 0.13))
     property bool hasModule: !!m.title
     property var indexStatus: ({})
@@ -29,14 +23,12 @@ ApplicationWindow {
     property var m: desktop.module
     property string markerRevision: ""
     property bool pendingSamples: false
-    property string playlistID: ""
     property var prefs: desktop.preferences
     property color primary: dark ? "#eceef0" : "#13171d"
     property bool queryActive: !!((library.query || {}).search || (library.query || {}).favoritesOnly || (library.query || {}).format || (library.query || {}).minimumChannels || (library.query || {}).unheardOnly || (library.query || {}).addedWithinDays || (library.query || {}).reversed || ((library.query || {}).sort && library.query.sort !== "sourceOrder"))
     property var visuals: desktop.visualizer
     property var s: desktop.state
     property var sample: ({})
-    property int sampleInstrument: 0
     property color secondary: dark ? "#9ea8b0" : "#576170"
     property var sectionEnd: ({
             position: -1,
@@ -46,17 +38,11 @@ ApplicationWindow {
             position: -1,
             row: 0
         })
-    property var selectedPlaylist: (library.playlists || []).find(p => p.id === playlistID) || ({
-            tracks: []
-        })
-    property string selectedSample: ""
     property int sidebarTab: 0
     property var sound: s.sound || prefs
     property var stableMutes: []
     property color surface: dark ? "#131518" : "#f6f7fa"
     property bool validSection: sectionStart.position >= 0 && sectionEnd.position >= 0 && (sectionEnd.position > sectionStart.position || sectionEnd.position === sectionStart.position && sectionEnd.row >= sectionStart.row)
-    property bool videoPreparing: false
-    property string videoPreviewPath: ""
 
     function addressText(a) {
         return a.position < 0 ? "—" : (a.position + 1) + ":" + a.row;
@@ -68,16 +54,12 @@ ApplicationWindow {
             query: q
         });
     }
+    function clearSectionSelection() {
+        sectionStart = { position: -1, row: 0 };
+        sectionEnd = { position: -1, row: 0 };
+    }
     function option(name, value) {
         desktop.option(name, value);
-    }
-    function requestSample() {
-        send("sample", {
-            text: selectedSample,
-            index: sampleViewer.zoom,
-            value: sampleViewer.position,
-            focus: sampleViewer.focusRange || null
-        });
     }
     function reviewView(name) {
         if (name !== "signals")
@@ -162,18 +144,6 @@ ApplicationWindow {
     function showInspector() {
         send("inspect");
         inspector.open();
-    }
-    function showSample(id, instrument) {
-        selectedSample = id;
-        sampleInstrument = instrument;
-        sampleViewer.zoom = 1;
-        sampleViewer.position = 0;
-        sampleViewer.focusRange = "";
-        send("sample", {
-            text: id,
-            index: 1
-        });
-        sampleDialog.open();
     }
     function showSamples() {
         pendingSamples = true;
@@ -453,18 +423,11 @@ ApplicationWindow {
             } else if (event === "error" || event === "notice") {
                 errorMessage = values.message;
                 errorDialog.open();
-                exporting = false;
+                exportSession.exporting = false;
             } else if (event === "module") {
                 if (markerRevision && markerRevision !== values.revision) {
                     markers.close();
-                    sectionStart = {
-                        position: -1,
-                        row: 0
-                    };
-                    sectionEnd = {
-                        position: -1,
-                        row: 0
-                    };
+                    clearSectionSelection();
                 }
                 markerRevision = values.revision;
             } else if (event === "inspection") {
@@ -473,7 +436,7 @@ ApplicationWindow {
                     pendingSamples = false;
                     let first = (values.samples || [])[0];
                     if (first)
-                        showSample(first.id, 0);
+                        sampleDialog.showSample(first.id, 0);
                     else
                         sampleDialog.open();
                 }
@@ -502,25 +465,25 @@ ApplicationWindow {
                 exchangeDialog.close();
                 collection.close();
             } else if (event === "exportPrepared")
-                exportTitle = values.title;
+                exportSession.exportTitle = values.title;
             else if (event === "videoPreviewState")
-                videoPreparing = values.active;
+                exportSession.videoPreparing = values.active;
             else if (event === "videoPreview") {
-                videoPreviewPath = values.path;
-                exporting = false;
+                exportSession.videoPreviewPath = values.path;
+                exportSession.exporting = false;
             } else if (event === "cancelled") {
-                exporting = false;
-                videoPreparing = false;
+                exportSession.exporting = false;
+                exportSession.videoPreparing = false;
             } else if (event === "indexing")
                 indexStatus = values;
             else if (event === "progress") {
-                exportProgress = values.value;
-                exporting = true;
+                exportSession.exportProgress = values.value;
+                exportSession.exporting = true;
             } else if (event === "complete") {
-                exporting = false;
-                exportProgress = 1;
-                exportResult = values.path;
-                exportReport = values.report || {};
+                exportSession.exporting = false;
+                exportSession.exportProgress = 1;
+                exportSession.exportResult = values.path;
+                exportSession.exportReport = values.report || {};
             }
         }
 
@@ -2008,2475 +1971,192 @@ ApplicationWindow {
         target: desktopUpdates
         function onShowDialog() { updateDialog.open(); }
     }
-    Dialog {
+    UpdateDialog {
         id: updateDialog
-        objectName: "updateDialog"
-        anchors.centerIn: parent
-        modal: true
-        title: "Softwareupdate"
-        font.pixelSize: 13 * window.fontScale
+
+        secondary: window.secondary
+        fontScale: window.fontScale
+        updates: desktopUpdates
         width: Math.min(520, window.width - 40)
         height: Math.min(implicitHeight, window.height - 40)
-        closePolicy: desktopUpdates.busy ? Popup.NoAutoClose : Popup.CloseOnEscape
-        ScrollView {
-            id: updateScroll
-            anchors.fill: parent
-            implicitHeight: updateContent.implicitHeight
-            contentWidth: availableWidth
-            clip: true
-            ColumnLayout {
-                id: updateContent
-                width: updateScroll.availableWidth
-                spacing: 14
-                Label {
-                    Layout.fillWidth: true
-                    text: desktopUpdates.status
-                    textFormat: Text.PlainText
-                    wrapMode: Text.Wrap
-                }
-                ProgressBar {
-                    Layout.fillWidth: true
-                    visible: desktopUpdates.busy
-                    value: desktopUpdates.progress
-                    indeterminate: desktopUpdates.progress <= 0
-                }
-                Label {
-                    Layout.fillWidth: true
-                    visible: !!desktopUpdates.notes
-                    text: desktopUpdates.notes
-                    textFormat: Text.PlainText
-                    wrapMode: Text.Wrap
-                }
-                Label {
-                    Layout.fillWidth: true
-                    text: "Updateprüfung: GitHub Pages · Download nach Bestätigung: GitHub Releases. Signatur, Größe und SHA-256 werden geprüft."
-                    color: secondary
-                    font.pixelSize: 11 * window.fontScale
-                    wrapMode: Text.Wrap
-                }
-            }
-        }
-        footer: DialogButtonBox {
-            FormButton {
-                objectName: "cancelUpdateButton"
-                text: desktopUpdates.busy ? "Abbrechen" : "Schließen"
-                onClicked: desktopUpdates.busy ? desktopUpdates.cancel() : updateDialog.close()
-            }
-            FormButton {
-                objectName: "installUpdateButton"
-                text: "Update installieren"
-                visible: !!desktopUpdates.offeredVersion && !desktopUpdates.installed
-                enabled: desktopUpdates.canInstall && !desktopUpdates.busy
-                onClicked: desktopUpdates.install()
-            }
-        }
     }
-    Dialog {
+    SettingsDialog {
         id: settings
 
-        anchors.centerIn: parent
-        font.pixelSize: 13
-        modal: true
-        standardButtons: Dialog.Close
-        title: "Einstellungen"
+        secondary: window.secondary
+        fontScale: window.fontScale
+        darkTheme: window.dark
+        preferences: window.prefs
+        option: window.option
+        updates: desktopUpdates
+        chooseFolder: title => desktop.chooseFolder(title)
         width: Math.min(460, window.width - 40)
         height: Math.min(implicitHeight, window.height - 40)
-        objectName: "settingsDialog"
-
-        ScrollView {
-            id: settingsScroll
-            objectName: "settingsScroll"
-            anchors.fill: parent
-            implicitHeight: settingsContent.implicitHeight
-            contentWidth: availableWidth
-            clip: true
-
-            ColumnLayout {
-                id: settingsContent
-                width: settingsScroll.availableWidth
-                spacing: 16
-
-                GroupBox {
-                    Layout.fillWidth: true
-
-                    ColumnLayout {
-                        spacing: 8
-                        width: parent.width
-
-                        Label {
-                            font.bold: true
-                            text: "Autoplay-Ordner:"
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            color: secondary
-                            text: prefs.autoplayFolder || "Nicht gesetzt"
-                            wrapMode: Text.Wrap
-                        }
-                        RowLayout {
-                            FormButton {
-                                text: "Auswählen…"
-
-                                onClicked: {
-                                    let p = desktop.chooseFolder("Autoplay-Ordner wählen");
-                                    if (p)
-                                        option("autoplayFolder", p);
-                                }
-                            }
-                            FormButton {
-                                text: "Entfernen"
-                                visible: !!prefs.autoplayFolder
-
-                                onClicked: option("autoplayFolder", "")
-                            }
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            color: secondary
-                            font.pixelSize: 11 * window.fontScale
-                            text: "Aus diesem Ordner (inklusive Unterordnern und Zip-/7z-Archiven) füllt der Player beim Start die Playlist und beginnt zu spielen. Änderungen wirken ab dem nächsten Start."
-                            wrapMode: Text.Wrap
-                        }
-                    }
-                }
-                GroupBox {
-                    Layout.fillWidth: true
-
-                    ColumnLayout {
-                        spacing: 8
-                        width: parent.width
-
-                        Label {
-                            text: "Bildrate der Visualisierungen:"
-                        }
-                        FormCombo {
-                            Layout.fillWidth: true
-                            currentIndex: model.indexOf(prefs.visualizerHz || 60)
-                            displayText: currentValue === 60 ? "60 Bilder/s (Standard)" : currentValue === 15 ? "15 Bilder/s (Sparmodus)" : currentValue + " Bilder/s"
-                            model: [60, 30, 24, 15, 10]
-
-                            onActivated: option("visualizerHz", model[currentIndex])
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            color: secondary
-                            font.pixelSize: 11 * window.fontScale
-                            text: "60 Bilder pro Sekunde sorgen für flüssige Pegel und Oszilloskope; der Sparmodus verwendet 15 Bilder pro Sekunde. Die Änderung wirkt sofort. Verkleinere das Fenster, um die Visualizer ganz auszublenden: Erfassung, Übertragung und Zeichnen entfallen dann. Nur Transport und Spielzeit werden weiter aktualisiert. Der Klang bleibt unverändert."
-                            wrapMode: Text.Wrap
-                        }
-                    }
-                }
-                GroupBox {
-                    Layout.fillWidth: true
-                    title: "Updates"
-
-                    ColumnLayout {
-                        spacing: 8
-                        width: parent.width
-
-                        PlayerCheckBox {
-                            baseFontSize: 13
-                            dark: window.dark
-                            objectName: "automaticUpdateChecks"
-                            checked: desktopUpdates.automaticallyChecks
-                            onClicked: desktopUpdates.automaticallyChecks = checked
-                            text: "Automatisch nach Updates suchen"
-                            textScale: 1
-                        }
-                        FormButton {
-                            objectName: "checkUpdatesButton"
-                            enabled: !desktopUpdates.busy
-                            onClicked: desktopUpdates.check()
-                            text: "Nach Updates suchen…"
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            color: secondary
-                            font.pixelSize: 11 * window.fontScale
-                            text: "Der Player prüft höchstens einmal täglich auf neue Versionen. Nach Bestätigung lädt er das signierte Paket von GitHub und installiert es für den nächsten Start. Die Wiedergabe läuft weiter. Es werden keine Musikdateien oder Bibliotheksdaten übertragen."
-                            wrapMode: Text.Wrap
-                        }
-                    }
-                }
-            }
-        }
     }
-    Dialog {
+    LibraryFiltersDialog {
         id: filters
 
-        property var failures: filters.records.filter(t => !!t.metadata.failure)
-        property string filterID: ""
-        property var records: filters.tracks.filter(t => !!t.metadata)
-        property var tracks: library.tracks || []
-
-        function formatCount(format) {
-            return filters.records.filter(t => {
-                let f = (t.metadata.metadata || {}).format || "";
-                return (["protracker", "soundtracker", "multichannel"].indexOf(f) >= 0 ? "MOD" : f.toUpperCase()) === format;
-            }).length;
-        }
-
-        anchors.centerIn: parent
-        font.pixelSize: 13
-        height: Math.min(720, window.height - 40)
-        modal: true
-        standardButtons: Dialog.Close
-        title: "Anzeige und Filter"
+        secondary: window.secondary
+        darkTheme: window.dark
+        library: window.library
+        send: window.send
+        indexStatus: window.indexStatus
+        changeQuery: window.changeQuery
         width: Math.min(700, window.width - 40)
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 14
-
-            Label {
-                Layout.fillWidth: true
-                color: secondary
-                text: "Die Anzeige ersetzt die laufende Wiedergabeauswahl erst mit „Diese Ergebnisse abspielen“."
-                wrapMode: Text.Wrap
-            }
-            SplitView {
-                Layout.fillHeight: true
-                Layout.fillWidth: true
-
-                ColumnLayout {
-                    SplitView.preferredWidth: 210
-
-                    Label {
-                        font.bold: true
-                        text: "Gespeicherte Filter"
-                    }
-                    ListView {
-                        Layout.fillHeight: true
-                        Layout.fillWidth: true
-                        clip: true
-                        model: library.savedFilters || []
-
-                        delegate: ItemDelegate {
-                            required property var modelData
-
-                            highlighted: filters.filterID === modelData.id
-                            text: modelData.name
-                            width: ListView.view.width
-
-                            onClicked: {
-                                filters.filterID = modelData.id;
-                                send("filterOpen", {
-                                    text: modelData.id
-                                });
-                            }
-                        }
-                    }
-                    FormButton {
-                        enabled: !!filters.filterID
-                        text: "Ausgewählten Filter löschen"
-
-                        onClicked: {
-                            send("filterDelete", {
-                                text: filters.filterID
-                            });
-                            filters.filterID = "";
-                        }
-                    }
-                }
-                ColumnLayout {
-                    Layout.leftMargin: 12
-                    SplitView.fillWidth: true
-                    spacing: 8
-
-                    TextField {
-                        Layout.fillWidth: true
-                        placeholderText: "Datei, Titel oder Instrument"
-                        text: (library.query || {}).search || ""
-
-                        onTextEdited: changeQuery("search", text)
-                    }
-                    RowLayout {
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Format"
-                        }
-                        FormCombo {
-                            currentIndex: Math.max(0, model.indexOf((library.query || {}).format || "Alle"))
-                            model: ["Alle", "MOD", "S3M", "XM", "IT"]
-
-                            onActivated: changeQuery("format", currentIndex === 0 ? null : currentText)
-                        }
-                    }
-                    RowLayout {
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Mindestens Kanäle"
-                        }
-                        SpinBox {
-                            from: 0
-                            to: 64
-                            value: (library.query || {}).minimumChannels || 0
-
-                            onValueModified: changeQuery("minimumChannels", value)
-                        }
-                    }
-                    PlayerCheckBox {
-                        baseFontSize: 13
-                        checked: (library.query || {}).favoritesOnly || false
-                        dark: window.dark
-                        text: "Nur Favoriten"
-                        textScale: 1
-
-                        onClicked: changeQuery("favoritesOnly", checked)
-                    }
-                    PlayerCheckBox {
-                        baseFontSize: 13
-                        checked: (library.query || {}).unheardOnly || false
-                        dark: window.dark
-                        text: "Nur ungehörte Titel"
-                        textScale: 1
-
-                        onClicked: changeQuery("unheardOnly", checked)
-                    }
-                    RowLayout {
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Neu hinzugefügt"
-                        }
-                        FormCombo {
-                            currentIndex: [null, 7, 30].indexOf((library.query || {}).addedWithinDays || null)
-                            model: ["Alle", "Letzte 7 Tage", "Letzte 30 Tage"]
-
-                            onActivated: changeQuery("addedWithinDays", [null, 7, 30][currentIndex])
-                        }
-                    }
-                    RowLayout {
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Sortierung"
-                        }
-                        FormCombo {
-                            currentIndex: ["sourceOrder", "filename", "title", "format", "channels", "duration", "newest"].indexOf((library.query || {}).sort || "sourceOrder")
-                            model: ["Ordnerreihenfolge", "Dateiname", "Interner Modultitel", "Format", "Kanalzahl", "Spieldauer", "Neueste zuerst"]
-
-                            onActivated: changeQuery("sort", ["sourceOrder", "filename", "title", "format", "channels", "duration", "newest"][currentIndex])
-                        }
-                    }
-                    PlayerCheckBox {
-                        baseFontSize: 13
-                        checked: (library.query || {}).reversed || false
-                        dark: window.dark
-                        text: "Reihenfolge umkehren"
-                        textScale: 1
-
-                        onClicked: changeQuery("reversed", checked)
-                    }
-                    Item {
-                        Layout.fillHeight: true
-                    }
-                }
-            }
-            RowLayout {
-                TextField {
-                    id: filterName
-
-                    Layout.fillWidth: true
-                    placeholderText: "Name des Filters"
-                }
-                FormButton {
-                    enabled: filterName.text.trim().length > 0
-                    text: "Aktuellen Filter speichern"
-
-                    onClicked: {
-                        send("filterSave", {
-                            text: filterName.text
-                        });
-                        filterName.clear();
-                    }
-                }
-            }
-            GroupBox {
-                Layout.fillWidth: true
-                title: "Sammlung"
-
-                ColumnLayout {
-                    spacing: 5
-                    width: parent.width
-
-                    Label {
-                        text: "Indiziert: " + filters.records.length + " von " + filters.tracks.length + " · Fehler: " + filters.failures.length
-                    }
-                    Label {
-                        color: secondary
-                        text: ["MOD", "S3M", "XM", "IT"].map(f => f + ": " + filters.formatCount(f)).join(" · ")
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        color: secondary
-                        text: (indexStatus.warnings || []).map(w => ({
-                                    capacityLimited: "Indexgrenze erreicht; einige Metadaten fehlen.",
-                                    cacheWriteFailed: "Metadatenindex konnte nicht gesichert werden.",
-                                    invalidSource: "Einige Quellen konnten nicht indiziert werden."
-                                })[w] || "").filter(v => v).join("\n")
-                        visible: !!text
-                        wrapMode: Text.Wrap
-                    }
-                    FormCombo {
-                        Layout.fillWidth: true
-                        model: filters.failures.map(t => t.name + " · " + (t.metadata.detail || t.metadata.failure))
-                        visible: filters.failures.length > 0
-                    }
-                    ProgressBar {
-                        Layout.fillWidth: true
-                        value: (indexStatus.completed || 0) / Math.max(1, indexStatus.total || 1)
-                        visible: indexStatus.active || false
-                    }
-                    FormButton {
-                        text: "Indizierung abbrechen"
-                        visible: indexStatus.active || false
-
-                        onClicked: send("indexCancel")
-                    }
-                }
-            }
-            RowLayout {
-                FormButton {
-                    text: "Anzeige zurücksetzen"
-
-                    onClicked: send("query", {
-                        query: {
-                            search: "",
-                            minimumChannels: 0,
-                            favoritesOnly: false,
-                            unheardOnly: false,
-                            sort: "sourceOrder",
-                            reversed: false
-                        }
-                    })
-                }
-                FormButton {
-                    text: "Metadaten erneut prüfen"
-
-                    onClicked: send("indexRefresh")
-                }
-            }
-        }
+        height: Math.min(720, window.height - 40)
     }
-    Dialog {
+    SavedPlaylistsDialog {
         id: playlists
 
-        anchors.centerIn: parent
-        font.pixelSize: 13
-        height: Math.min(520, window.height - 40)
-        modal: true
-        standardButtons: Dialog.Close
-        title: "Gespeicherte Playlists"
+        secondary: window.secondary
+        send: window.send
+        library: window.library
+        fontScale: window.fontScale
+        confirmationWidth: Math.min(450, window.width - 40)
         width: Math.min(720, window.width - 40)
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 14
-
-            Label {
-                Layout.fillWidth: true
-                color: secondary
-                text: "Die Listen verweisen auf Originaldateien und Archive. Musikdateien werden nicht dauerhaft kopiert."
-                wrapMode: Text.Wrap
-            }
-            SplitView {
-                Layout.fillHeight: true
-                Layout.fillWidth: true
-
-                ListView {
-                    SplitView.preferredWidth: 210
-                    clip: true
-                    model: library.playlists || []
-
-                    delegate: ItemDelegate {
-                        required property var modelData
-
-                        highlighted: playlistID === modelData.id
-                        text: modelData.name + "\n" + modelData.tracks.length + " Titel"
-                        width: ListView.view.width
-
-                        onClicked: {
-                            playlistID = modelData.id;
-                            newPlaylistName.text = modelData.name;
-                        }
-                    }
-                }
-                ColumnLayout {
-                    Layout.leftMargin: 8
-                    SplitView.fillWidth: true
-
-                    Label {
-                        font.bold: true
-                        text: selectedPlaylist.name || "Eine Playlist auswählen."
-                    }
-                    ListView {
-                        Layout.fillHeight: true
-                        Layout.fillWidth: true
-                        clip: true
-                        model: selectedPlaylist.tracks
-
-                        delegate: RowLayout {
-                            required property int index
-                            required property var modelData
-
-                            height: 44
-                            width: ListView.view.width
-
-                            Label {
-                                Layout.fillWidth: true
-                                elide: Text.ElideMiddle
-                                text: modelData.displayName
-                            }
-                            FormButton {
-                                enabled: index > 0
-                                text: "↑"
-
-                                onClicked: send("playlistTrackMove", {
-                                    playlist: playlistID,
-                                    text: modelData.id,
-                                    index: -1
-                                })
-                            }
-                            FormButton {
-                                enabled: index < selectedPlaylist.tracks.length - 1
-                                text: "↓"
-
-                                onClicked: send("playlistTrackMove", {
-                                    playlist: playlistID,
-                                    text: modelData.id,
-                                    index: 1
-                                })
-                            }
-                            FormButton {
-                                text: "−"
-
-                                onClicked: send("playlistTrackRemove", {
-                                    playlist: playlistID,
-                                    text: modelData.id
-                                })
-                            }
-                        }
-                    }
-                    RowLayout {
-                        FormButton {
-                            enabled: selectedPlaylist.tracks.length > 0
-                            text: "Playlist öffnen"
-
-                            onClicked: {
-                                send("playlistOpen", {
-                                    text: playlistID
-                                });
-                                playlists.close();
-                            }
-                        }
-                        Item {
-                            Layout.fillWidth: true
-                        }
-                        FormButton {
-                            enabled: !!playlistID
-                            text: "Löschen…"
-
-                            onClicked: deletePlaylist.open()
-                        }
-                    }
-                }
-            }
-            RowLayout {
-                TextField {
-                    id: newPlaylistName
-
-                    Layout.fillWidth: true
-                    placeholderText: "Name der Playlist"
-                }
-                FormButton {
-                    enabled: !!playlistID && newPlaylistName.text.trim().length > 0
-                    text: "Umbenennen"
-
-                    onClicked: send("playlistRename", {
-                        playlist: playlistID,
-                        text: newPlaylistName.text.trim()
-                    })
-                }
-                FormButton {
-                    enabled: newPlaylistName.text.trim().length > 0 && (library.visible || []).length > 0
-                    text: "Aktuelle Titel speichern (" + (library.visible || []).length + ")"
-
-                    onClicked: {
-                        send("playlistSave", {
-                            text: newPlaylistName.text.trim()
-                        });
-                        newPlaylistName.clear();
-                    }
-                }
-            }
-            Label {
-                color: secondary
-                font.pixelSize: 11 * window.fontScale
-                text: "Weitere Titel: Rechtsklick auf einen Titel → Zu Playlist hinzufügen."
-            }
-        }
+        height: Math.min(520, window.height - 40)
     }
-    Dialog {
-        id: deletePlaylist
-
-        anchors.centerIn: parent
-        modal: true
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        title: "Playlist löschen?"
-        width: Math.min(450, window.width - 40)
-
-        onAccepted: {
-            send("playlistDelete", {
-                text: playlistID
-            });
-            playlistID = "";
-            newPlaylistName.clear();
-        }
-
-        Label {
-            text: "Nur die gespeicherte Liste wird entfernt. Musikdateien bleiben erhalten."
-            width: parent.width
-            wrapMode: Text.Wrap
-        }
-    }
-    Dialog {
+    TrackQueueDialog {
         id: queueDialog
 
-        anchors.centerIn: parent
-        font.pixelSize: 13
+        secondary: window.secondary
+        send: window.send
+        entries: window.library.queue || []
         height: Math.min(500, window.height - 60)
-        modal: true
-        standardButtons: Dialog.Close
-        title: "Als Nächstes"
-        width: 650
-
-        ColumnLayout {
-            anchors.fill: parent
-
-            Label {
-                Layout.fillWidth: true
-                color: secondary
-                text: "Eingereihte Titel haben Vorrang. Danach setzt sich die bisherige Playlist fort."
-                wrapMode: Text.Wrap
-            }
-            ListView {
-                Layout.fillHeight: true
-                Layout.fillWidth: true
-                clip: true
-                model: library.queue || []
-
-                delegate: RowLayout {
-                    required property var modelData
-
-                    height: 40
-                    width: ListView.view.width
-
-                    Label {
-                        Layout.fillWidth: true
-                        elide: Text.ElideMiddle
-                        text: modelData.name
-                    }
-                    FormButton {
-                        text: "↑"
-
-                        onClicked: send("queueMove", {
-                            text: modelData.id,
-                            index: -1
-                        })
-                    }
-                    FormButton {
-                        text: "↓"
-
-                        onClicked: send("queueMove", {
-                            text: modelData.id,
-                            index: 1
-                        })
-                    }
-                    FormButton {
-                        text: "Entfernen"
-
-                        onClicked: send("queueRemove", {
-                            text: modelData.id
-                        })
-                    }
-                }
-            }
-            FormButton {
-                text: "Warteschlange leeren"
-
-                onClicked: send("queueClear")
-            }
-        }
     }
-    Dialog {
+    SleepTimerDialog {
         id: timerDialog
 
-        anchors.centerIn: parent
-        font.pixelSize: 13
-        height: 480
-        modal: true
-        title: "Einschlaftimer"
-        width: 380
-
-        onOpened: timerMinutes.value = prefs.sleepTimerMinutes || 15
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 18
-
-            ScrollView {
-                id: timerScroll
-
-                Layout.fillHeight: true
-                Layout.fillWidth: true
-                clip: true
-                contentWidth: availableWidth
-
-                ColumnLayout {
-                    spacing: 18
-                    width: timerScroll.availableWidth
-
-                    Label {
-                        text: "Einschlaftimer"
-
-                        font {
-                            bold: true
-                            pixelSize: 20
-                        }
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        color: secondary
-                        text: "Die letzten zehn Sekunden blenden sanft aus. Der Lautstärkeregler bleibt unverändert."
-                        wrapMode: Text.Wrap
-                    }
-                    RowLayout {
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Dauer in Minuten"
-                        }
-                        SpinBox {
-                            id: timerMinutes
-
-                            from: 1
-                            to: 720
-                            value: 15
-
-                            onValueModified: option("sleepTimerMinutes", value)
-                        }
-                    }
-                    RowLayout {
-                        Repeater {
-                            model: [15, 30, 60]
-
-                            FormButton {
-                                required property int modelData
-
-                                text: modelData + " Min."
-
-                                onClicked: timerMinutes.value = modelData
-                            }
-                        }
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        color: secondary
-                        font.pixelSize: 11
-                        text: "Der Timer läuft auch bei Pause und Titelwechsel weiter. Nach Ablauf bleibt die Wiedergabe aus, bis du sie bewusst startest. Nach einem App-Neustart ist der Timer aus."
-                        wrapMode: Text.Wrap
-                    }
-                }
-            }
-            RowLayout {
-                Label {
-                    Layout.fillWidth: true
-                    font.bold: true
-                    text: ({
-                            inactive: "Ausgeschaltet",
-                            countingDown: "Restzeit",
-                            fading: "Ausblenden …",
-                            expired: "Wiedergabe beendet"
-                        })[s.timerPhase || "inactive"]
-                }
-                Label {
-                    font.pixelSize: 24
-                    text: time(s.timerSeconds)
-                }
-            }
-            RowLayout {
-                visible: s.timerPhase !== "inactive" && !!s.timerPhase
-
-                FormButton {
-                    text: "+15 Minuten"
-                    visible: s.timerActive || false
-
-                    onClicked: send("timerExtend")
-                }
-                FormButton {
-                    text: "Timer abbrechen"
-
-                    onClicked: send("timer", {
-                        index: 0
-                    })
-                }
-            }
-            RowLayout {
-                FormButton {
-                    text: "Schließen"
-
-                    onClicked: timerDialog.close()
-                }
-                Item {
-                    Layout.fillWidth: true
-                }
-                FormButton {
-                    text: s.timerActive ? "Neu starten" : "Timer starten"
-
-                    onClicked: send("timer", {
-                        index: timerMinutes.value
-                    })
-                }
-            }
-        }
+        secondary: window.secondary
+        send: window.send
+        option: window.option
+        savedMinutes: window.prefs.sleepTimerMinutes || 15
+        playbackState: window.s
+        time: window.time
     }
-    Dialog {
+    TrackSettingsDialog {
         id: trackSettings
 
-        property bool editingDefaults: false
-
-        function update(key, value) {
-            if (editingDefaults) {
-                send("defaultOption", {
-                    text: key,
-                    setting: value
-                });
-                return;
-            }
-            let v = Object.assign({}, m.trackSettings || {});
-            if (value === null)
-                delete v[key];
-            else
-                v[key] = value;
-            send("trackSettings", {
-                settings: v
-            });
-        }
-
-        anchors.centerIn: parent
-        font.pixelSize: 13
-        height: 560
-        modal: true
-        standardButtons: Dialog.Close
-        title: "Klang"
-        width: 440
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 18
-
-            Label {
-                Layout.fillWidth: true
-                text: trackSettings.editingDefaults ? "Globale Klangvorgaben" : m.title || "Kein Song geladen"
-                wrapMode: Text.Wrap
-
-                font {
-                    bold: true
-                    pixelSize: 20
-                }
-            }
-            TabBar {
-                Layout.fillWidth: true
-                currentIndex: trackSettings.editingDefaults ? 1 : 0
-
-                TabButton {
-                    text: "Dieser Titel"
-
-                    onClicked: trackSettings.editingDefaults = false
-                }
-                TabButton {
-                    text: "Globale Vorgaben"
-
-                    onClicked: trackSettings.editingDefaults = true
-                }
-            }
-            ScrollView {
-                id: soundScroll
-
-                Layout.fillHeight: true
-                Layout.fillWidth: true
-                clip: true
-                contentWidth: availableWidth
-
-                ColumnLayout {
-                    spacing: 16
-                    width: soundScroll.availableWidth
-
-                    Label {
-                        Layout.fillWidth: true
-                        color: secondary
-                        text: trackSettings.editingDefaults ? "Diese Vorgaben gelten für alle Titel ohne passenden Override." : "Jeder Titelwert ersetzt nur seine passende globale Vorgabe."
-                        wrapMode: Text.Wrap
-                    }
-                    Repeater {
-                        model: [
-                            {
-                                key: "palClock",
-                                label: "MOD-Clock",
-                                choices: ["PAL", "NTSC"]
-                            },
-                            {
-                                key: "useInterpolation",
-                                label: "Lineare Interpolation",
-                                choices: ["Ein", "Aus"]
-                            },
-                            {
-                                key: "ledFilterActive",
-                                label: "LED-Ausgabefilter",
-                                choices: ["Ein", "Aus"]
-                            }
-                        ]
-
-                        ColumnLayout {
-                            required property var modelData
-
-                            Layout.fillWidth: true
-                            spacing: 6
-                            visible: modelData.key !== "palClock" || trackSettings.editingDefaults || !!m.amigaClock
-
-                            Label {
-                                text: modelData.label
-                            }
-                            FormCombo {
-                                Layout.fillWidth: true
-                                currentIndex: trackSettings.editingDefaults ? (prefs[modelData.key] === false ? 1 : 0) : (m.trackSettings || {})[modelData.key] === undefined ? 0 : ((m.trackSettings || {})[modelData.key] ? 1 : 2)
-                                enabled: trackSettings.editingDefaults || !!m.sourceID
-                                model: trackSettings.editingDefaults ? modelData.choices : ["Globale Vorgabe"].concat(modelData.choices)
-
-                                onActivated: trackSettings.update(modelData.key, trackSettings.editingDefaults ? currentIndex === 0 : currentIndex === 0 ? null : currentIndex === 1)
-                            }
-                        }
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        color: secondary
-                        text: "Dieses Format verwendet ein festes Frequenzmodell; PAL/NTSC ist nicht anwendbar."
-                        visible: !trackSettings.editingDefaults && !m.amigaClock
-                        wrapMode: Text.Wrap
-                    }
-                    PlayerCheckBox {
-                        baseFontSize: 13
-                        checked: (m.trackSettings || {}).stereoSeparation !== undefined
-                        dark: window.dark
-                        enabled: !!m.sourceID
-                        text: "Stereoabstand für diesen Titel"
-                        visible: !trackSettings.editingDefaults
-
-                        onClicked: trackSettings.update("stereoSeparation", checked ? (sound.stereoSeparation === undefined ? .8 : sound.stereoSeparation) : null)
-                    }
-                    Label {
-                        text: "Separation: " + Math.round((trackSettings.editingDefaults ? (prefs.stereoSeparation === undefined ? .8 : prefs.stereoSeparation) : (sound.stereoSeparation || 0)) * 100) + " %"
-                    }
-                    PlayerSlider {
-                        Layout.fillWidth: true
-                        dark: window.dark
-                        enabled: trackSettings.editingDefaults || (m.trackSettings || {}).stereoSeparation !== undefined
-                        from: 0
-                        to: 1
-                        value: trackSettings.editingDefaults ? (prefs.stereoSeparation === undefined ? .8 : prefs.stereoSeparation) : sound.stereoSeparation || 0
-
-                        onMoved: trackSettings.update("stereoSeparation", value)
-                    }
-                }
-            }
-            FormButton {
-                enabled: !!m.sourceID
-                text: "Titel zurücksetzen"
-                visible: !trackSettings.editingDefaults
-
-                onClicked: send("trackSettings", {
-                    settings: {}
-                })
-            }
-        }
+        send: window.send
+        preferences: window.prefs
+        darkTheme: window.dark
+        moduleInfo: window.m
+        sound: window.sound
     }
-    Dialog {
+    QtObject {
+        id: exportSession
+
+        property bool exporting: false
+        property real exportProgress: 0
+        property var exportReport: ({})
+        property string exportResult: ""
+        property string exportTitle: ""
+        property bool videoPreparing: false
+        property string videoPreviewPath: ""
+    }
+    MarkerDialog {
         id: markers
 
-        property string editingID: ""
-
-        function chooseCurrent() {
-            markerPosition.value = Math.max(1, (s.position || 0) + 1);
-            markerRow.value = Math.max(0, s.row || 0);
-        }
-
-        anchors.centerIn: parent
-        font.pixelSize: 13
+        addressText: window.addressText
         height: Math.min(760, window.height - 40)
-        modal: true
-        standardButtons: Dialog.Close
-        title: "Songstellen und Bereich"
+        moduleInfo: window.m
+        playbackState: window.s
+        secondary: window.secondary
+        sectionEnd: window.sectionEnd
+        sectionStart: window.sectionStart
+        validSection: window.validSection
         width: Math.min(760, window.width - 40)
 
-        onOpened: {
-            editingID = "";
-            markerName.clear();
-            chooseCurrent();
+        onBoundaryRequested: (isStart, position, row) => {
+            const address = { position, row };
+            if (isStart)
+                window.sectionStart = address;
+            else
+                window.sectionEnd = address;
         }
-
-        ScrollView {
-            id: markerScroll
-
-            anchors.fill: parent
-            clip: true
-            contentWidth: availableWidth
-
-            ColumnLayout {
-                spacing: 20
-                width: markerScroll.availableWidth
-
-                Label {
-                    font.bold: true
-                    text: m.title || ""
-                }
-                Label {
-                    Layout.fillWidth: true
-                    color: secondary
-                    text: "Songpositionen beginnen bei 1, Zeilen bei 0. Ein Sprung erhält Play/Pause/Stopp; Tempo wird wie beim Tracker-Zeilenklick rekonstruiert. Laufende Stimmen und Effekte sind dabei näherungsweise."
-                    wrapMode: Text.Wrap
-                }
-                GroupBox {
-                    Layout.fillWidth: true
-                    title: "Ziel wählen"
-
-                    ColumnLayout {
-                        enabled: !s.markerSaving
-                        spacing: 12
-                        width: parent.width
-
-                        RowLayout {
-                            Layout.fillWidth: true
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: "Songposition"
-                            }
-                            SpinBox {
-                                id: markerPosition
-
-                                from: 1
-                                to: Math.max(1, (m.orders || []).length)
-                                value: 1
-                            }
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: "Zeile"
-                            }
-                            SpinBox {
-                                id: markerRow
-
-                                from: 0
-                                to: Math.max(0, ((m.rowCounts || [])[markerPosition.value - 1] || 1) - 1)
-                            }
-                        }
-                        RowLayout {
-                            FormButton {
-                                text: "Aktuelle Stelle"
-
-                                onClicked: markers.chooseCurrent()
-                            }
-                            Item {
-                                Layout.fillWidth: true
-                            }
-                            FormButton {
-                                enabled: hasModule
-                                text: "Zum Ziel springen"
-
-                                onClicked: send("seek", {
-                                    index: markerPosition.value - 1,
-                                    row: markerRow.value
-                                })
-                            }
-                        }
-                        TextField {
-                            id: markerName
-
-                            Layout.fillWidth: true
-                            maximumLength: 201
-                            placeholderText: "Name der Songstelle"
-                        }
-                        Label {
-                            color: "#e5503a"
-                            text: "Der Name darf höchstens 200 Zeichen haben."
-                            visible: markerName.text.trim().length > 200
-                        }
-                        RowLayout {
-                            FormButton {
-                                enabled: !!m.sourceID && markerName.text.trim().length > 0 && markerName.text.trim().length <= 200
-                                text: markers.editingID ? "Änderungen speichern" : "Songstelle hinzufügen"
-
-                                onClicked: {
-                                    send(markers.editingID ? "markerRename" : "markerAdd", {
-                                        id: markers.editingID,
-                                        text: markerName.text.trim(),
-                                        position: markerPosition.value - 1,
-                                        row: markerRow.value
-                                    });
-                                    markers.editingID = "";
-                                    markerName.clear();
-                                }
-                            }
-                            FormButton {
-                                text: "Neu"
-                                visible: !!markers.editingID
-
-                                onClicked: {
-                                    markers.editingID = "";
-                                    markerName.clear();
-                                    markers.chooseCurrent();
-                                }
-                            }
-                        }
-                    }
-                }
-                GroupBox {
-                    Layout.fillWidth: true
-                    title: "Bereich markieren"
-
-                    ColumnLayout {
-                        spacing: 10
-                        width: parent.width
-
-                        RowLayout {
-                            FormButton {
-                                text: "Anfang (A)"
-
-                                onClicked: sectionStart = {
-                                    position: markerPosition.value - 1,
-                                    row: markerRow.value
-                                }
-                            }
-                            FormButton {
-                                text: "Ende (B)"
-
-                                onClicked: sectionEnd = {
-                                    position: markerPosition.value - 1,
-                                    row: markerRow.value
-                                }
-                            }
-                            Item {
-                                Layout.fillWidth: true
-                            }
-                            FormButton {
-                                text: "Lösen"
-
-                                onClicked: {
-                                    sectionStart = {
-                                        position: -1,
-                                        row: 0
-                                    };
-                                    sectionEnd = {
-                                        position: -1,
-                                        row: 0
-                                    };
-                                }
-                            }
-                        }
-                        Label {
-                            color: secondary
-                            text: "Position:Zeile   " + addressText(sectionStart) + " – " + addressText(sectionEnd)
-                        }
-                        Label {
-                            color: "#e5503a"
-                            text: "Das Ende liegt vor dem Anfang."
-                            visible: sectionStart.position >= 0 && sectionEnd.position >= 0 && !validSection
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            color: secondary
-                            text: "Die Auswahl markiert den Bereich im Tracker und in der Positionsleiste. Der gewählte Wiedergabe-Loop-Modus gilt weiter."
-                            wrapMode: Text.Wrap
-                        }
-                        RowLayout {
-                            FormButton {
-                                enabled: !s.sectionPreparing && !s.sectionActive && validSection
-                                text: s.sectionPreparing ? "A/B wird vorbereitet …" : s.sectionActive ? "A/B-Schleife aktiv" : "A/B vorbereiten und abspielen"
-
-                                onClicked: send("section", {
-                                    start: sectionStart,
-                                    end: sectionEnd
-                                })
-                            }
-                            FormButton {
-                                text: s.sectionPreparing ? "Abbrechen" : "A/B ausschalten"
-                                visible: !!s.sectionActive || !!s.sectionPreparing
-
-                                onClicked: send("sectionCancel")
-                            }
-                        }
-                        ProgressBar {
-                            Layout.fillWidth: true
-                            value: s.sectionProgress || 0
-                            visible: s.sectionPreparing || false
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            color: "#e5503a"
-                            text: s.sectionError || ""
-                            visible: !!text
-                            wrapMode: Text.Wrap
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            color: secondary
-                            text: "A/B beginnt mit dem rekonstruierten Zustand bei A und schließt alle Ticks von B ein. Ausschalten spielt an der aktuellen Stelle weiter. Sprünge oder Audioeinstellungen lösen die Schleife."
-                            wrapMode: Text.Wrap
-                        }
-                    }
-                }
-                GroupBox {
-                    Layout.fillWidth: true
-                    title: "Gespeicherte Songstellen"
-
-                    ColumnLayout {
-                        spacing: 12
-                        width: parent.width
-
-                        Label {
-                            color: secondary
-                            text: "Noch keine Songstellen für diesen Titel."
-                            visible: !(m.markers || []).length
-                        }
-                        Repeater {
-                            model: m.markers || []
-
-                            ColumnLayout {
-                                required property var modelData
-
-                                Layout.fillWidth: true
-                                spacing: 6
-
-                                FormButton {
-                                    Layout.fillWidth: true
-                                    flat: true
-                                    text: modelData.name + "   " + addressText(modelData.address)
-
-                                    onClicked: {
-                                        markers.editingID = modelData.id;
-                                        markerName.text = modelData.name;
-                                        markerPosition.value = modelData.address.position + 1;
-                                        markerRow.value = modelData.address.row;
-                                    }
-                                }
-                                RowLayout {
-                                    FormButton {
-                                        text: "Springen"
-
-                                        onClicked: send("seek", {
-                                            index: modelData.address.position,
-                                            row: modelData.address.row
-                                        })
-                                    }
-                                    FormButton {
-                                        text: "Löschen"
-
-                                        onClicked: send("markerDelete", {
-                                            id: modelData.id
-                                        })
-                                    }
-                                }
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    color: Qt.alpha(secondary, .2)
-                                    height: 1
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        onClearSectionRequested: window.clearSectionSelection()
+        onCommandRequested: (name, values) => window.send(name, values)
     }
-    Dialog {
+    ModuleInspectorDialog {
         id: inspector
 
-        anchors.centerIn: parent
-        font.pixelSize: 13
-        height: Math.min(760, window.height - 40)
-        modal: true
-        standardButtons: Dialog.Close
-        title: "Modul-Inspektor"
+        accent: window.accent
+        backdrop: window.backdrop
+        primary: window.primary
+        secondary: window.secondary
+        send: window.send
+        fontScale: window.fontScale
+        inspection: window.inspection
+        instrumentDetails: window.instrumentDetails
         width: Math.min(760, window.width - 40)
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 12
-
-            Label {
-                Layout.fillWidth: true
-                elide: Text.ElideMiddle
-                text: inspection.title || ""
-
-                font {
-                    bold: true
-                    pixelSize: 20 * window.fontScale
-                }
-            }
-            TabBar {
-                id: inspectorTabs
-
-                Layout.fillWidth: true
-
-                TabButton {
-                    text: "Übersicht"
-                }
-                TabButton {
-                    text: "Instrumente"
-                }
-                TabButton {
-                    text: "Effekte"
-                }
-            }
-            StackLayout {
-                Layout.fillHeight: true
-                Layout.fillWidth: true
-                currentIndex: inspectorTabs.currentIndex
-
-                ScrollView {
-                    id: overviewScroll
-
-                    clip: true
-                    contentWidth: availableWidth
-
-                    ColumnLayout {
-                        spacing: 8
-                        width: overviewScroll.availableWidth
-
-                        Repeater {
-                            model: [["Format", inspection.format || ""], ["Songpositionen / Patterns", (inspection.orders || []).length + " / " + (inspection.patternCount || 0)], ["Kanalplätze / benutzt", (inspection.channels || 0) + " / " + (inspection.usedChannels || 0)], ["Instrumente / Samples", (inspection.instrumentCount || 0) + " / " + (inspection.sampleCount || 0)], ["Starttempo / Ticks pro Zeile", (inspection.initialTempo || 0) + " BPM / " + (inspection.initialSpeed || 0)], ["Startlautstärke", (inspection.initialVolume || 0) + "/" + (inspection.volumeScale || 64)], ["Frequenzmodell", inspection.linearFrequency ? "Linear" : "Amiga"]]
-
-                            RowLayout {
-                                required property var modelData
-
-                                Layout.fillWidth: true
-
-                                Label {
-                                    Layout.preferredWidth: 220
-                                    color: secondary
-                                    text: modelData[0]
-                                }
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: modelData[1]
-                                }
-                            }
-                        }
-                        GroupBox {
-                            Layout.fillWidth: true
-                            title: "Herkunft"
-
-                            ColumnLayout {
-                                spacing: 8
-                                width: parent.width
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    color: secondary
-                                    text: inspection.tracker ? "Tracker: " + inspection.tracker : "Trackerherkunft ist im geladenen Modell nicht enthalten."
-                                    wrapMode: Text.Wrap
-                                }
-                                Label {
-                                    color: secondary
-                                    text: inspection.artist ? "Künstlerfeld: " + inspection.artist : "Kein explizites Künstlerfeld vorhanden."
-                                }
-                                Repeater {
-                                    model: Object.keys(inspection.origin || {})
-
-                                    RowLayout {
-                                        required property var modelData
-
-                                        Layout.fillWidth: true
-
-                                        Label {
-                                            text: modelData
-                                        }
-                                        Item {
-                                            Layout.fillWidth: true
-                                        }
-                                        Label {
-                                            text: inspection.origin[modelData]
-                                        }
-                                    }
-                                }
-                                Label {
-                                    Layout.fillWidth: true
-                                    color: secondary
-                                    font.pixelSize: 11 * window.fontScale
-                                    text: "Namen und Textzeilen werden nicht als Künstlerangaben interpretiert."
-                                    wrapMode: Text.Wrap
-                                }
-                            }
-                        }
-                        Label {
-                            font.bold: true
-                            text: "Songpositionen und Pattern-Aufbau"
-                        }
-                        Repeater {
-                            model: inspection.orders || []
-
-                            RowLayout {
-                                required property var modelData
-
-                                Layout.fillWidth: true
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: "Position " + modelData.position + " · Pattern " + modelData.pattern + " · " + modelData.rows + " Zeilen"
-                                }
-                                FormButton {
-                                    text: "Springen"
-
-                                    onClicked: send("seek", {
-                                        index: modelData.position
-                                    })
-                                }
-                            }
-                        }
-                        Repeater {
-                            model: inspection.patternRows || []
-
-                            RowLayout {
-                                required property var modelData
-
-                                Layout.fillWidth: true
-
-                                Label {
-                                    text: "Pattern " + modelData.index
-                                }
-                                Item {
-                                    Layout.fillWidth: true
-                                }
-                                Label {
-                                    text: modelData.rows + " Zeilen · " + modelData.uses + "× in der Liste"
-                                }
-                            }
-                        }
-                        Label {
-                            font.bold: true
-                            text: "Kompatibilität"
-                        }
-                        Label {
-                            color: secondary
-                            text: !(inspection.warnings || []).length ? "Keine erfassten Kompatibilitätswarnungen." : ""
-                            visible: !!text
-                        }
-                        Repeater {
-                            model: inspection.findings || []
-
-                            ColumnLayout {
-                                required property var modelData
-
-                                Layout.fillWidth: true
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    font.bold: true
-                                    text: modelData.identifier + " · " + ({
-                                            supported: "Unterstützt",
-                                            irrelevantForPCM: "Keine PCM-Wirkung",
-                                            metadataOnly: "Nur Metadaten",
-                                            midiOrPluginOnly: "Externer MIDI-/Pluginpfad",
-                                            unsupported: "Nicht unterstützt",
-                                            differentPlayback: "Abweichende Wiedergabe"
-                                        })[modelData.support]
-                                    wrapMode: Text.Wrap
-                                }
-                                Label {
-                                    color: secondary
-                                    text: modelData.used ? "Verwendet" : "Gespeichert, nicht verwendet"
-                                }
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: modelData.detail
-                                    wrapMode: Text.Wrap
-                                }
-                            }
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            color: "#cf922b"
-                            text: (inspection.warnings || []).join("\n")
-                            wrapMode: Text.Wrap
-                        }
-                    }
-                }
-                ScrollView {
-                    id: instrumentScroll
-
-                    clip: true
-                    contentWidth: availableWidth
-
-                    ColumnLayout {
-                        spacing: 20
-                        width: instrumentScroll.availableWidth
-
-                        Label {
-                            color: secondary
-                            text: "Instrument"
-                        }
-                        FormCombo {
-                            Layout.fillWidth: true
-                            displayText: currentIndex >= 0 && model[currentIndex] ? model[currentIndex].index + " · " + model[currentIndex].name : "Keine Instrumentplätze vorhanden."
-                            model: inspection.instruments || []
-                            textRole: "name"
-
-                            onActivated: send("instrument", {
-                                index: model[currentIndex].index
-                            })
-                        }
-                        InstrumentDetails {
-                            Layout.fillWidth: true
-                            accent: window.accent
-                            backdrop: window.backdrop
-                            details: instrumentDetails
-                            primary: window.primary
-                            secondary: window.secondary
-                            textScale: 1
-                        }
-                    }
-                }
-                ListView {
-                    clip: true
-                    model: inspection.effects || []
-
-                    delegate: ColumnLayout {
-                        required property var modelData
-
-                        spacing: 4
-                        width: ListView.view.width
-
-                        Label {
-                            font.bold: true
-                            text: modelData.code + " · " + modelData.name + " · " + modelData.count + "×"
-                        }
-                        Label {
-                            color: secondary
-                            text: modelData.volumeColumn ? "Volume-Spalte" : "Effektspalte"
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            color: secondary
-                            text: modelData.detail
-                            wrapMode: Text.Wrap
-                        }
-                        Label {
-                            color: "#e7a04b"
-                            text: "Derzeit ignoriert"
-                            visible: !modelData.implemented
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            font.family: "monospace"
-                            text: "Übernommene Parameter: " + (modelData.parameters || []).slice(0, 32).map(v => modelData.volumeColumn && inspection.formatCode !== "xm" ? v : v.toString(16).toUpperCase().padStart(2, "0")).join(" ")
-                            wrapMode: Text.Wrap
-                        }
-                        Item {
-                            height: 10
-                        }
-                    }
-                }
-            }
-        }
+        height: Math.min(760, window.height - 40)
     }
-    Dialog {
+    SampleInspectorDialog {
         id: sampleDialog
 
-        anchors.centerIn: parent
-        font.pixelSize: 13
-        height: Math.min(760, window.height - 40)
-        modal: true
-        standardButtons: Dialog.Close
-        title: "Sample-Inspektor"
+        inspection: window.inspection
+        sample: window.sample
+        darkTheme: window.dark
+        send: window.send
+        accent: window.accent
+        primary: window.primary
+        secondary: window.secondary
         width: Math.min(760, window.width - 40)
-
-        ScrollView {
-            id: sampleScroll
-
-            anchors.fill: parent
-            clip: true
-            contentWidth: availableWidth
-
-            ColumnLayout {
-                spacing: 20
-                width: sampleScroll.availableWidth
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 4
-
-                    Label {
-                        color: secondary
-                        text: "Instrument"
-                    }
-                    FormCombo {
-                        Layout.fillWidth: true
-                        currentIndex: Math.max(0, model.findIndex(i => i.index === sampleInstrument))
-                        model: [
-                            {
-                                index: 0,
-                                name: "Alle Samples"
-                            }
-                        ].concat(inspection.instruments || [])
-                        textRole: "name"
-
-                        onActivated: {
-                            sampleInstrument = model[currentIndex].index;
-                            let i = model[currentIndex], ids = i.sampleIDs || [];
-                            let first = (inspection.samples || []).find(v => sampleInstrument === 0 || ids.indexOf(v.id) >= 0);
-                            if (first)
-                                showSample(first.id, sampleInstrument);
-                        }
-                    }
-                    Label {
-                        color: secondary
-                        text: "Sample"
-                    }
-                    FormCombo {
-                        property var ids: ((inspection.instruments || []).find(i => i.index === sampleInstrument) || {}).sampleIDs || []
-
-                        Layout.fillWidth: true
-                        currentIndex: Math.max(0, model.findIndex(v => v.id === selectedSample))
-                        displayText: currentIndex >= 0 && model[currentIndex] ? model[currentIndex].number + " · " + (model[currentIndex].name || "—") : "Kein Sample vorhanden"
-                        model: (inspection.samples || []).filter(v => sampleInstrument === 0 || ids.indexOf(v.id) >= 0)
-                        textRole: "name"
-
-                        onActivated: showSample(model[currentIndex].id, sampleInstrument)
-                    }
-                }
-                SampleWaveform {
-                    id: sampleViewer
-
-                    Layout.fillWidth: true
-                    accent: window.accent
-                    dark: window.dark
-                    primary: window.primary
-                    sample: window.sample
-                    secondary: window.secondary
-
-                    onRequest: requestSample()
-                }
-                Repeater {
-                    model: [["Frames", sample.frames || 0], ["Kanäle", (sample.right || []).length ? "Stereo" : "Mono"], ["Lautstärke", (sample.volume || 0) + "/64"], ["Finetune", sample.finetune || 0]].concat(inspection.formatCode === "xm" ? [["Relative Note", sample.relativeNote || 0]] : []).concat(["it", "s3m"].indexOf(inspection.formatCode) >= 0 ? [[inspection.formatCode === "it" ? "Referenzrate bei C-5" : "Referenzrate bei C-4", ((sample.itProperties || {}).c5Speed || sample.c2spd || 0) + " Hz"]] : [])
-
-                    RowLayout {
-                        required property var modelData
-
-                        Layout.fillWidth: true
-
-                        Label {
-                            text: modelData[0]
-                        }
-                        Item {
-                            Layout.fillWidth: true
-                        }
-                        Label {
-                            text: modelData[1]
-                        }
-                    }
-                }
-                Label {
-                    color: secondary
-                    text: sampleInstrument ? "Tastenzuordnung" : "Instrument wählen, um die Tastenzuordnung zu sehen."
-                }
-                Repeater {
-                    model: sampleInstrument ? ((inspection.instruments || []).find(i => i.index === sampleInstrument) || {}).keyZones || [] : []
-
-                    Label {
-                        required property var modelData
-
-                        text: modelData.start + "–" + modelData.end + " → " + modelData.targetStart + "–" + modelData.targetEnd + " · " + modelData.sample
-                    }
-                }
-            }
-        }
+        height: Math.min(760, window.height - 40)
     }
-    Dialog {
+    WAVExportDialog {
         id: exportDialog
 
-        property bool validFolder: exportFolder.text.trim().length > 0 && exportFolder.text !== "." && exportFolder.text !== ".." && !/[\/\x00:]/.test(exportFolder.text)
-
-        anchors.centerIn: parent
-        font.pixelSize: 11 * window.fontScale
-        modal: true
-        title: "OFFLINE-WAV-EXPORT"
+        secondary: window.secondary
+        send: window.send
+        fontScale: window.fontScale
+        session: exportSession
+        fileDialogs: desktop
+        moduleInfo: window.m
         width: Math.min(420, window.width - 40)
-
-        onOpened: {
-            exportProgress = 0;
-            exportResult = "";
-            send("prepareExport");
-            exportFolder.text = (m.title || "Modul").replace(/[\/:]/g, "_") + "-Kanalspuren";
-        }
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 16
-
-            Label {
-                Layout.fillWidth: true
-                text: exportTitle
-                wrapMode: Text.Wrap
-            }
-            TabBar {
-                id: exportKind
-
-                Layout.fillWidth: true
-
-                TabButton {
-                    text: "Stereo-Mix"
-                }
-                TabButton {
-                    text: "Kanalspuren"
-                }
-            }
-            Label {
-                Layout.fillWidth: true
-                text: exportKind.currentIndex ? "Eine Stereo-Float32-WAV je logischem Kanal, dazu Referenzmix und Begleitdatei. Alle Dateien beginnen gemeinsam und verwenden denselben Pegelfaktor." : "Exportiert den gesamten Titel offline in eine Stereo-WAV-Datei."
-                wrapMode: Text.Wrap
-            }
-            ColumnLayout {
-                Layout.fillWidth: true
-                visible: exportKind.currentIndex === 1
-
-                Label {
-                    text: "Neuer Ordnername"
-                }
-                TextField {
-                    id: exportFolder
-
-                    Layout.fillWidth: true
-                    placeholderText: "Kanalspuren"
-                }
-            }
-            Label {
-                Layout.fillWidth: true
-                color: secondary
-                text: "Übernimmt Mute/Solo, Clock, Interpolation und Separation. Limiter, Mixerlautstärke und externer LED-Ausgabefilter sind nicht enthalten."
-                visible: exportKind.currentIndex === 1
-                wrapMode: Text.Wrap
-            }
-            RowLayout {
-                Label {
-                    text: "Dauer begrenzen:"
-                }
-                FormCombo {
-                    id: exportSeconds
-
-                    Layout.fillWidth: true
-                    currentIndex: 1
-                    displayText: currentValue / 60 + " Minuten"
-                    model: [60, 180, 300, 600]
-                }
-            }
-            ProgressBar {
-                Layout.fillWidth: true
-                value: exportProgress
-                visible: exporting || exportProgress > 0
-            }
-            Label {
-                Layout.fillWidth: true
-                text: exportResult ? "Erfolgreich gesichert!" : ""
-                visible: !!exportResult
-                wrapMode: Text.Wrap
-            }
-            RowLayout {
-                FormButton {
-                    text: exporting ? "Abbrechen" : "Schließen"
-
-                    onClicked: {
-                        if (exporting)
-                            send("exportCancel");
-                        else
-                            exportDialog.close();
-                    }
-                }
-                Item {
-                    Layout.fillWidth: true
-                }
-                FormButton {
-                    text: "Ordner zeigen"
-                    visible: !!exportResult
-
-                    onClicked: desktop.reveal(exportResult)
-                }
-                FormButton {
-                    enabled: !exporting && (exportKind.currentIndex === 0 || exportDialog.validFolder)
-                    text: "Ziel wählen …"
-
-                    onClicked: {
-                        let path = exportKind.currentIndex === 0 ? desktop.saveFile("Song als WAV exportieren", exportTitle.replace(/[\/:]/g, "_") + ".wav", "WAV (*.wav)", true) : desktop.chooseFolder("Zielverzeichnis für Kanalspuren");
-                        if (path) {
-                            if (exportKind.currentIndex === 1)
-                                path += "/" + exportFolder.text.trim();
-                            exporting = true;
-                            send("export", {
-                                path: path,
-                                kind: exportKind.currentIndex ? "stems" : "mix",
-                                overwrite: exportKind.currentIndex === 0 && desktop.overwriteApproved(path),
-                                seconds: exportSeconds.currentValue
-                            });
-                        }
-                    }
-                }
-            }
-        }
     }
-    Dialog {
+    BatchExportDialog {
         id: batchDialog
 
-        property var items: []
-        property var selected: []
-
-        anchors.centerIn: parent
-        font.pixelSize: 13
-        height: Math.min(640, window.height - 40)
-        modal: true
-        standardButtons: Dialog.Close
-        title: "Stapel-Export"
+        secondary: window.secondary
+        send: window.send
+        fontScale: window.fontScale
+        session: exportSession
+        fileDialogs: desktop
+        darkTheme: window.dark
+        library: window.library
+        preferences: window.prefs
         width: Math.min(600, window.width - 40)
-
-        onClosed: if (exporting)
-            send("exportCancel")
-        onOpened: {
-            items = (library.tracks || []).filter(t => (library.visible || []).indexOf(t.id) >= 0);
-            selected = items.map(t => t.id);
-            exportReport = {};
-            exportResult = "";
-            exportProgress = 0;
-            let o = prefs.batchSettings || {};
-            batchKind.currentIndex = o.stems ? 1 : 0;
-            batchConflict.currentIndex = o.rename ? 1 : 0;
-            batchDuration.currentIndex = Math.max(0, [60, 180, 300, 600].indexOf(o.seconds || 300));
-            batchPAL.currentIndex = o.pal === false ? 1 : 0;
-            batchInterpolation.checked = o.interpolation !== false;
-            batchSeparation.value = o.separation === undefined ? .8 : o.separation;
-        }
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 14
-
-            ScrollView {
-                id: batchScroll
-
-                Layout.fillHeight: true
-                Layout.fillWidth: true
-                clip: true
-                contentWidth: availableWidth
-
-                ColumnLayout {
-                    spacing: 14
-                    width: batchScroll.availableWidth
-
-                    Label {
-                        Layout.fillWidth: true
-                        color: secondary
-                        text: "Die Titelliste ist beim Öffnen festgehalten. Jeder Titel beginnt am Songanfang; die normale Wiedergabe kann weiterlaufen."
-                        wrapMode: Text.Wrap
-                    }
-                    RowLayout {
-                        Label {
-                            Layout.fillWidth: true
-                            text: batchDialog.selected.length + " von " + batchDialog.items.length + " Titeln ausgewählt"
-                        }
-                        FormButton {
-                            text: "Alle"
-
-                            onClicked: batchDialog.selected = batchDialog.items.map(t => t.id)
-                        }
-                        FormButton {
-                            text: "Keine"
-
-                            onClicked: batchDialog.selected = []
-                        }
-                    }
-                    ListView {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 160
-                        clip: true
-                        model: batchDialog.items
-
-                        delegate: CheckDelegate {
-                            required property var modelData
-
-                            checked: batchDialog.selected.indexOf(modelData.id) >= 0
-                            enabled: !exporting
-                            text: modelData.name
-                            width: ListView.view.width
-
-                            onClicked: {
-                                let a = batchDialog.selected.slice(), i = a.indexOf(modelData.id);
-                                if (checked && i < 0)
-                                    a.push(modelData.id);
-                                else if (!checked && i >= 0)
-                                    a.splice(i, 1);
-                                batchDialog.selected = a;
-                            }
-                        }
-                    }
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: 2
-                        enabled: !exporting
-
-                        Label {
-                            text: "Ausgabe"
-                        }
-                        FormCombo {
-                            id: batchKind
-
-                            Layout.fillWidth: true
-                            model: ["Stereo-Mix", "Kanalspuren und Referenzmix"]
-                        }
-                        Label {
-                            text: "Vorhandene Ziele"
-                        }
-                        FormCombo {
-                            id: batchConflict
-
-                            Layout.fillWidth: true
-                            model: ["Überspringen", "Beide behalten (neuer Name)"]
-                        }
-                        Label {
-                            text: "Dauer je Titel"
-                        }
-                        FormCombo {
-                            id: batchDuration
-
-                            Layout.fillWidth: true
-                            currentIndex: 2
-                            displayText: currentValue / 60 + " Minuten"
-                            model: [60, 180, 300, 600]
-                        }
-                        Label {
-                            text: "MOD-Clock"
-                        }
-                        FormCombo {
-                            id: batchPAL
-
-                            model: ["PAL", "NTSC"]
-                        }
-                        Label {
-                            text: "Sample-Interpolation"
-                        }
-                        PlayerCheckBox {
-                            id: batchInterpolation
-
-                            baseFontSize: 13
-                            checked: true
-                            dark: window.dark
-                            textScale: 1
-                        }
-                        Label {
-                            text: "Separation: " + Math.round(batchSeparation.value * 100) + " %"
-                        }
-                        PlayerSlider {
-                            id: batchSeparation
-
-                            Layout.fillWidth: true
-                            dark: window.dark
-                            from: 0
-                            to: 1
-                            value: .8
-                        }
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        color: secondary
-                        font.pixelSize: 11 * window.fontScale
-                        text: "Stereo-Float32 mit 44.100 Hz. Kanalspuren verwenden einen gemeinsamen Pegelfaktor je Titel. Mute/Solo aus dem Player, Mixerlautstärke und externer LED-Ausgabefilter werden nicht übernommen."
-                        wrapMode: Text.Wrap
-                    }
-                }
-            }
-            ProgressBar {
-                Layout.fillWidth: true
-                value: exportProgress
-                visible: exporting
-            }
-            Label {
-                Layout.fillWidth: true
-                text: (exportReport.wasCancelled ? "Abgebrochen: " : "Stapel beendet: ") + (exportReport.results || []).filter(r => r.status === "exported").length + " exportiert, " + (exportReport.results || []).filter(r => r.status === "skipped").length + " übersprungen, " + (exportReport.results || []).filter(r => r.status === "failed").length + " fehlgeschlagen."
-                visible: !!exportReport.results
-                wrapMode: Text.Wrap
-            }
-            ListView {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 80
-                clip: true
-                model: exportReport.results || []
-                visible: !!exportReport.results
-
-                delegate: Label {
-                    required property var modelData
-
-                    text: modelData.sourceName + ": " + modelData.status + (modelData.detail ? " – " + modelData.detail : "")
-                    width: ListView.view.width
-                    wrapMode: Text.Wrap
-                }
-            }
-            RowLayout {
-                FormButton {
-                    text: "Abbrechen"
-                    visible: exporting
-
-                    onClicked: send("exportCancel")
-                }
-                Item {
-                    Layout.fillWidth: true
-                }
-                FormButton {
-                    text: "Im Dateimanager zeigen"
-                    visible: !!exportResult && !exporting
-
-                    onClicked: desktop.reveal(exportResult)
-                }
-                FormButton {
-                    enabled: !exporting && batchDialog.selected.length > 0 && batchDialog.selected.length <= 10000
-                    text: "Ziel wählen …"
-
-                    onClicked: {
-                        let path = desktop.chooseFolder("Stapelexport: Zielordner");
-                        if (path) {
-                            exporting = true;
-                            send("batchExport", {
-                                path: path,
-                                ids: batchDialog.selected,
-                                stems: batchKind.currentIndex === 1,
-                                rename: batchConflict.currentIndex === 1,
-                                seconds: batchDuration.currentValue,
-                                pal: batchPAL.currentIndex === 0,
-                                interpolation: batchInterpolation.checked,
-                                separation: batchSeparation.value
-                            });
-                        }
-                    }
-                }
-            }
-        }
+        height: Math.min(640, window.height - 40)
     }
-    Dialog {
+    VideoExportDialog {
         id: videoDialog
 
-        function options() {
-            let width = [640, 1280, 1920][videoSize.currentIndex];
-            return {
-                width: width,
-                height: width * 9 / 16,
-                fps: videoFPS.currentValue,
-                compact: videoQuality.currentIndex === 1,
-                seconds: videoDuration.currentValue,
-                light: videoAppearance.currentIndex === 1,
-                horizon: videoLookahead.currentValue
-            };
-        }
-
-        anchors.centerIn: parent
-        font.pixelSize: 13
+        secondary: window.secondary
+        send: window.send
+        fontScale: window.fontScale
+        session: exportSession
+        fileDialogs: desktop
+        darkTheme: window.dark
+        playbackState: window.s
         height: Math.min(720, window.height - 40)
-        modal: true
-        standardButtons: Dialog.Close
-        title: "Notenregen als Video"
-        width: 640
-
-        onClosed: {
-            previewPlayer.stop();
-            if (videoPreparing)
-                send("exportCancel");
-        }
-        onOpened: {
-            videoPreviewPath = "";
-            exportResult = "";
-            exportProgress = 0;
-            send("prepareExport", {
-                video: true
-            });
-        }
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 14
-
-            ScrollView {
-                id: videoScroll
-
-                Layout.fillHeight: true
-                Layout.fillWidth: true
-                clip: true
-                contentWidth: availableWidth
-
-                ColumnLayout {
-                    spacing: 14
-                    width: videoScroll.availableWidth
-
-                    Label {
-                        text: "Notenregen als Video"
-
-                        font {
-                            bold: true
-                            pixelSize: 20 * window.fontScale
-                        }
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        font.bold: true
-                        text: exportTitle
-                        wrapMode: Text.Wrap
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        color: secondary
-                        text: "Titel und Klang sind beim Öffnen festgehalten. Der Export beginnt am Songanfang; die normale Wiedergabe kann weiterlaufen."
-                        wrapMode: Text.Wrap
-                    }
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 240
-                        color: "black"
-
-                        VideoOutput {
-                            id: previewOutput
-
-                            anchors.fill: parent
-                            fillMode: VideoOutput.PreserveAspectFit
-                        }
-                        Label {
-                            anchors.centerIn: parent
-                            color: "white"
-                            text: videoPreparing ? "Vorschau wird vorbereitet…" : "Vorschau vorbereiten"
-                            visible: videoPreparing || !videoPreviewPath
-                        }
-                    }
-                    MediaPlayer {
-                        id: previewPlayer
-
-                        source: videoPreviewPath ? desktop.fileURL(videoPreviewPath) : ""
-                        videoOutput: previewOutput
-
-                        audioOutput: AudioOutput {
-                            muted: true
-                        }
-
-                        onMediaStatusChanged: {
-                            if (mediaStatus === MediaPlayer.LoadedMedia) {
-                                play();
-                                previewPause.restart();
-                            }
-                        }
-                    }
-                    Timer {
-                        id: previewPause
-
-                        interval: 120
-
-                        onTriggered: {
-                            previewPlayer.pause();
-                            previewPlayer.position = 0;
-                        }
-                    }
-                    RowLayout {
-                        FormButton {
-                            enabled: !exporting && !videoPreparing
-                            text: "Vorschau vorbereiten"
-
-                            onClicked: {
-                                videoPreviewPath = "";
-                                send("videoPreview", videoDialog.options());
-                            }
-                        }
-                        FormButton {
-                            enabled: !!videoPreviewPath && !videoPreparing
-                            text: previewPlayer.playbackState === MediaPlayer.PlayingState ? "Pause" : "5-s-Vorschau abspielen"
-
-                            onClicked: {
-                                if (previewPlayer.playbackState === MediaPlayer.PlayingState)
-                                    previewPlayer.pause();
-                                else
-                                    previewPlayer.play();
-                            }
-                        }
-                    }
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: 2
-                        enabled: !exporting && !videoPreparing
-                        rowSpacing: 10
-
-                        Label {
-                            text: "Auflösung"
-                        }
-                        FormCombo {
-                            id: videoSize
-
-                            Layout.fillWidth: true
-                            currentIndex: 1
-                            model: ["640 × 360 · klein", "1280 × 720 · HD", "1920 × 1080 · Full HD"]
-                        }
-                        Label {
-                            text: "Bildrate"
-                        }
-                        FormCombo {
-                            id: videoFPS
-
-                            Layout.fillWidth: true
-                            currentIndex: 2
-                            model: [24, 25, 30, 60]
-                        }
-                        Label {
-                            text: "Bildqualität"
-                        }
-                        FormCombo {
-                            id: videoQuality
-
-                            Layout.fillWidth: true
-                            model: ["Hoch · größere Datei", "Kompakt · kleinere Datei"]
-                        }
-                        Label {
-                            text: "Darstellung"
-                        }
-                        FormCombo {
-                            id: videoAppearance
-
-                            Layout.fillWidth: true
-                            currentIndex: dark ? 0 : 1
-                            model: ["Dunkel", "Hell"]
-                        }
-                        Label {
-                            text: "Vorlauf"
-                        }
-                        FormCombo {
-                            id: videoLookahead
-
-                            Layout.fillWidth: true
-                            currentIndex: 1
-                            model: [2, 4, 8]
-                        }
-                        Label {
-                            text: "Dauer begrenzen"
-                        }
-                        FormCombo {
-                            id: videoDuration
-
-                            Layout.fillWidth: true
-                            currentIndex: 3
-                            model: [60, 180, 300, 600, 1800, 3600]
-                        }
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        color: secondary
-                        text: "MOV mit H.264-Bild und verlustfreiem Float32-Stereo bei 48 kHz. Mute/Solo, Clock, Interpolation und Separation werden übernommen. Mixerlautstärke, externer LED-Filter und manuelle Tempoänderungen bleiben außerhalb des Exports."
-                        wrapMode: Text.Wrap
-                    }
-                }
-            }
-            ProgressBar {
-                Layout.fillWidth: true
-                value: exportProgress
-                visible: exporting || videoPreparing
-            }
-            RowLayout {
-                FormButton {
-                    enabled: !exporting && !videoPreparing
-                    text: "Video exportieren…"
-
-                    onClicked: {
-                        let path = desktop.saveFile("Notenregen exportieren", "Notenregen.mov", "QuickTime (*.mov)");
-                        if (path) {
-                            exporting = true;
-                            send("videoExport", Object.assign({
-                                path: path
-                            }, videoDialog.options()));
-                        }
-                    }
-                }
-                FormButton {
-                    enabled: exporting || videoPreparing
-                    text: "Abbrechen"
-
-                    onClicked: send("exportCancel")
-                }
-                FormButton {
-                    text: "Im Dateimanager zeigen"
-                    visible: !!exportResult && !exporting
-
-                    onClicked: desktop.reveal(exportResult)
-                }
-            }
-        }
     }
-    Dialog {
+    CollectionTransferDialog {
         id: collection
 
-        anchors.centerIn: parent
-        font.pixelSize: 13
-        height: 420
-        modal: true
-        standardButtons: Dialog.Close
-        title: "Sammlung übertragen"
-        width: 650
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 16
-
-            Label {
-                Layout.fillWidth: true
-                text: "Playlists, Favoriten, Songstellen und Klangwerte werden übertragen. Musikdateien, Lautstärke, Timer und Warteschlange bleiben lokal."
-                wrapMode: Text.Wrap
-            }
-            FormButton {
-                text: "Sammlung exportieren…"
-
-                onClicked: {
-                    let path = desktop.saveFile("Sammlung exportieren", "Sammlung.savagecollection", "Savage-Sammlung (*.savagecollection)");
-                    if (path)
-                        send("collectionExport", {
-                            path: path
-                        });
-                }
-            }
-            FormButton {
-                text: "Sammlung importieren…"
-
-                onClicked: desktop.importCollection()
-            }
-            Label {
-                Layout.fillWidth: true
-                color: secondary
-                text: "Vor dem Import werden lokale Titelzuordnung und Konfliktentscheidungen geprüft."
-                wrapMode: Text.Wrap
-            }
-        }
+        secondary: window.secondary
+        send: window.send
+        saveFile: (title, name, filter) => desktop.saveFile(title, name, filter)
+        importCollection: () => desktop.importCollection()
     }
-    Dialog {
+    CollectionImportDialog {
         id: exchangeDialog
 
-        anchors.centerIn: parent
-        font.pixelSize: 13
-        height: Math.min(680, window.height - 60)
-        modal: true
-        standardButtons: Dialog.Cancel
-        title: "Sammlungsimport prüfen"
+        send: window.send
+        library: window.library
+        exchange: window.exchange
         width: Math.min(950, window.width - 60)
-
-        onRejected: send("collectionCancel")
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 12
-
-            Label {
-                font.bold: true
-                text: (exchange.playlists || 0) + " Playlists · " + (exchange.markers || 0) + " Songstellen"
-            }
-            Label {
-                Layout.fillWidth: true
-                text: "Titel zuordnen oder ausdrücklich überspringen. Vorhandene Musik wird nicht verändert."
-                wrapMode: Text.Wrap
-            }
-            ScrollView {
-                id: exchangeScroll
-
-                Layout.fillHeight: true
-                Layout.fillWidth: true
-                clip: true
-                contentWidth: availableWidth
-
-                ColumnLayout {
-                    spacing: 10
-                    width: exchangeScroll.availableWidth
-
-                    Repeater {
-                        model: exchange.tracks || []
-
-                        RowLayout {
-                            required property var modelData
-
-                            Layout.fillWidth: true
-
-                            Label {
-                                Layout.fillWidth: true
-                                elide: Text.ElideMiddle
-                                text: modelData.name + (modelData.relativePath ? "\n" + modelData.relativePath : "")
-                            }
-                            FormCombo {
-                                Layout.preferredWidth: 400
-                                currentIndex: Math.max(0, model.findIndex(t => t.id === modelData.mapped))
-                                model: [
-                                    {
-                                        id: "",
-                                        name: "Bitte zuordnen…"
-                                    },
-                                    {
-                                        id: "__skip__",
-                                        name: "Überspringen"
-                                    }
-                                ].concat(library.tracks || [])
-                                textRole: "name"
-                                valueRole: "id"
-
-                                onActivated: send("collectionMap", {
-                                    track: modelData.id,
-                                    text: currentValue
-                                })
-                            }
-                        }
-                    }
-                    Repeater {
-                        model: exchange.conflicts || []
-
-                        RowLayout {
-                            required property var modelData
-
-                            Layout.fillWidth: true
-
-                            Label {
-                                Layout.fillWidth: true
-                                elide: Text.ElideMiddle
-                                text: modelData.name
-                            }
-                            FormCombo {
-                                property var choices: modelData.allowed
-
-                                currentIndex: choices.indexOf(modelData.selected) + 1
-                                model: ["Konflikt entscheiden…"].concat(choices.map(c => ({
-                                            keepLocal: "Lokal behalten",
-                                            useIncoming: "Import übernehmen",
-                                            keepBoth: "Beide behalten"
-                                        })[c]))
-
-                                onActivated: {
-                                    if (currentIndex > 0)
-                                        send("collectionResolve", {
-                                            text: modelData.key,
-                                            choice: choices[currentIndex - 1]
-                                        });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            FormButton {
-                enabled: exchange.ready || false
-                text: "Geprüfte Sammlung importieren"
-
-                onClicked: send("collectionApply")
-            }
-        }
+        height: Math.min(680, window.height - 60)
     }
     Dialog {
         id: syncDialog
@@ -4511,344 +2191,35 @@ ApplicationWindow {
             width: parent.width
         }
     }
-    Dialog {
+    AboutDialog {
         id: aboutDialog
 
-        anchors.centerIn: parent
-        font.pixelSize: 13
-        modal: true
-        standardButtons: Dialog.Close
-        title: "Über Savage Mod Player"
-        width: 600
-
-        Rectangle {
-            border.color: "#e5503a"
-            border.width: 2
-            color: "black"
-            height: 240
-            width: parent.width
-
-            Column {
-                anchors.centerIn: parent
-                spacing: 16
-
-                Text {
-                    color: "#e5503a"
-                    text: "Software Failure. Press left mouse button to continue."
-
-                    font {
-                        family: "monospace"
-                        pixelSize: 12
-                    }
-                }
-                Text {
-                    color: "#e5503a"
-                    text: "Guru Meditation #53415641.47454D4F"
-
-                    font {
-                        family: "monospace"
-                        pixelSize: 14
-                    }
-                }
-                Text {
-                    color: "#e5503a"
-                    text: "Savage Mod Player " + desktopVersion + " · Daniel Müller\nEigenständige Swift-Replay-Engine · WTFPL"
-
-                    font {
-                        family: "monospace"
-                        pixelSize: 12
-                    }
-                }
-            }
-        }
+        version: desktopVersion
     }
-    Window {
+    NoteRainWindow {
         id: noteWindow
 
-        property real keyboardWindowWidth: 1100
+        backdrop: window.backdrop
+        accent: window.accent
+        secondary: window.secondary
+        darkTheme: window.dark
+        playerPalette: window.palette
+        moduleInfo: window.m
+        hasModule: window.hasModule
+        mutedChannels: window.stableMutes
+        notes: desktop.notes
+        playbackState: window.s
+        preferences: window.prefs
+        send: window.send
+        option: window.option
+        sectionStart: window.sectionStart
+        sectionEnd: window.sectionEnd
+        validSection: window.validSection
+        addressText: window.addressText
 
-        color: backdrop
-        height: 760
-        minimumHeight: 440
-        minimumWidth: songRange.currentIndex === 1 ? 420 : 720
-        objectName: "noteRainWindow"
-        title: "Notenregen — Savage Mod Player"
-        visible: false
-        width: 1100
-
-        onClosing: send("notes", {
-            enabled: false
-        })
-        onVisibleChanged: if (visible && songRange.currentIndex === 1)
-            Qt.callLater(function () {
-                rainCanvas.fixedKeyWidth = rainCanvas.fullKeyWidth();
-                noteWindow.width = Math.max(420, rainCanvas.fixedKeyWidth * rainCanvas.geometry().whites.length + 60);
-            })
-
-        Pane {
-            anchors.fill: parent
-            background: null
-            padding: 0
-            palette: window.palette
-
-            ColumnLayout {
-                anchors.fill: parent
-                spacing: 0
-
-                GridLayout {
-                    Layout.fillWidth: true
-                    Layout.margins: 18
-                    columnSpacing: 14
-                    columns: noteWindow.width >= 620 ? 2 : 1
-                    rowSpacing: 12
-
-                    Column {
-                        Layout.fillWidth: true
-                        spacing: 4
-
-                        Text {
-                            color: secondary
-                            text: "NOTENREGEN"
-
-                            font {
-                                bold: true
-                                family: "monospace"
-                                pixelSize: 12
-                            }
-                        }
-                        Text {
-                            color: primary
-                            elide: Text.ElideRight
-                            text: m.title || ""
-                            width: parent.width
-
-                            font {
-                                bold: true
-                                pixelSize: 18
-                            }
-                        }
-                    }
-                    RowLayout {
-                        spacing: 8
-
-                        FormCombo {
-                            id: songRange
-
-                            Layout.preferredWidth: 172
-                            currentIndex: prefs.noteRainZoomToSong ? 1 : 0
-                            model: ["Klaviatur", "Tonumfang"]
-
-                            onActivated: {
-                                option("noteRainZoomToSong", currentIndex === 1);
-                                if (currentIndex === 1) {
-                                    noteWindow.keyboardWindowWidth = noteWindow.width;
-                                    rainCanvas.fixedKeyWidth = rainCanvas.fullKeyWidth();
-                                    noteWindow.width = Math.max(420, rainCanvas.fixedKeyWidth * rainCanvas.geometry().whites.length + 60);
-                                } else {
-                                    rainCanvas.fixedKeyWidth = 0;
-                                    noteWindow.width = noteWindow.keyboardWindowWidth;
-                                }
-                            }
-                        }
-                        FormCombo {
-                            id: horizon
-
-                            Layout.preferredWidth: 70
-                            currentIndex: Math.max(0, model.indexOf(prefs.noteRainHorizon || 4))
-                            displayText: currentValue + " s"
-                            model: [2, 4, 8]
-
-                            onActivated: option("noteRainHorizon", currentValue)
-                        }
-                        PlayerButton {
-                            dark: window.dark
-                            enabled: hasModule
-                            hint: s.playing && !s.paused ? "Pause" : "Abspielen"
-                            iconName: s.playing && !s.paused ? "pause" : "play"
-
-                            onClicked: send("play")
-                        }
-                        PlayerButton {
-                            dark: window.dark
-                            enabled: s.playing || false
-                            hint: "Stopp"
-                            iconName: "stop"
-
-                            onClicked: send("stop")
-                        }
-                    }
-                }
-                Rectangle {
-                    Layout.fillWidth: true
-                    color: Qt.alpha(secondary, .2)
-                    height: 1
-                }
-                Item {
-                    Layout.fillHeight: true
-                    Layout.fillWidth: true
-
-                    NoteRain {
-                        id: rainCanvas
-
-                        accent: window.accent
-                        anchors.fill: parent
-                        dark: window.dark
-                        data: desktop.notes
-                        horizon: horizon.currentValue || 4
-                        muted: stableMutes
-                        solo: s.solo || []
-                        songKeys: m.songKeyRange || []
-                        zoomToSong: songRange.currentIndex === 1
-
-                        onRangeChanged: if (noteWindow.visible && zoomToSong && fixedKeyWidth > 0)
-                            noteWindow.width = Math.max(420, fixedKeyWidth * geometry().whites.length + 60)
-                    }
-                    Rectangle {
-                        anchors.centerIn: parent
-                        color: Qt.alpha(backdrop, .96)
-                        height: messageColumn.implicitHeight + 48
-                        radius: 10
-                        visible: !!(!hasModule || !s.playing || desktop.notes.overflow || desktop.notes.preparing && !(desktop.notes.notes || []).length)
-                        width: Math.min(parent.width - 48, 480)
-
-                        ColumnLayout {
-                            id: messageColumn
-
-                            anchors.centerIn: parent
-                            spacing: 8
-                            width: parent.width - 48
-
-                            Label {
-                                Layout.fillWidth: true
-                                horizontalAlignment: Text.AlignHCenter
-                                text: !hasModule ? "Keine Musik geladen" : !s.playing ? "Bereit für den nächsten Anschlag" : desktop.notes.overflow ? "Vorschau neu starten" : "Notenvorschau wird berechnet …"
-                                wrapMode: Text.Wrap
-
-                                font {
-                                    bold: true
-                                    pixelSize: 18
-                                }
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                color: secondary
-                                horizontalAlignment: Text.AlignHCenter
-                                text: !hasModule ? "Öffne ein MOD-, S3M-, XM- oder IT-Modul im Player." : !s.playing ? "Starte die Wiedergabe. Die kommenden Noten fallen zur Klaviatur." : desktop.notes.overflow ? "Starte die Wiedergabe erneut, um die Notenvorschau zu synchronisieren." : ""
-                                visible: !!text
-                                wrapMode: Text.Wrap
-                            }
-                        }
-                    }
-                }
-                Rectangle {
-                    Layout.fillWidth: true
-                    color: Qt.alpha(secondary, .2)
-                    height: 1
-                }
-                ColumnLayout {
-                    Layout.bottomMargin: 12
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 18
-                    Layout.rightMargin: 18
-                    Layout.topMargin: 12
-                    spacing: 10
-
-                    RowLayout {
-                        Label {
-                            color: secondary
-                            text: validSection ? "Auswahl   " + addressText(sectionStart) + " – " + addressText(sectionEnd) : "Keine Bereichsauswahl"
-                        }
-                        Item {
-                            Layout.fillWidth: true
-                        }
-                        Label {
-                            color: secondary
-                            text: "Position:Zeile   " + addressText({
-                                position: s.position || 0,
-                                row: s.row || 0
-                            })
-                        }
-                    }
-                    PlayerButton {
-                        dark: window.dark
-                        text: "Songstellen…"
-
-                        onClicked: {
-                            window.show();
-                            markers.open();
-                        }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        Flickable {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 18
-                            clip: true
-                            contentWidth: legend.width
-
-                            Row {
-                                id: legend
-
-                                spacing: 14
-
-                                Repeater {
-                                    model: m.displayChannels || []
-
-                                    Row {
-                                        required property int modelData
-
-                                        opacity: stableMutes[modelData] || (s.solo || []).some(v => v) && !s.solo[modelData] ? .3 : 1
-                                        spacing: 5
-
-                                        Rectangle {
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            color: rainCanvas.channelColor(modelData)
-                                            height: 8
-                                            radius: 4
-                                            width: 8
-                                        }
-                                        Text {
-                                            color: primary
-                                            text: "K" + (modelData + 1)
-
-                                            font {
-                                                family: "monospace"
-                                                pixelSize: 11
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Label {
-                            color: secondary
-                            text: rainCanvas.noteName(rainCanvas.keyRange[0]) + "–" + rainCanvas.noteName(rainCanvas.keyRange[1]) + " · " + (rainCanvas.keyRange[1] - rainCanvas.keyRange[0] + 1) + " Tasten"
-
-                            font {
-                                family: "monospace"
-                                pixelSize: 11
-                            }
-                        }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        Label {
-                            font.bold: true
-                            text: !hasModule ? "Kein Modul" : !s.playing ? "Gestoppt" : s.paused ? "Pausiert" : desktop.notes.preparing ? "Vorschau wird ergänzt …" : "Spielt"
-                        }
-                        Item {
-                            Layout.fillWidth: true
-                        }
-                        Label {
-                            color: secondary
-                            font.pixelSize: 11
-                            text: "Balken: Stimmenlaufzeit · Farbe: Kanal"
-                        }
-                    }
-                }
-            }
+        onMarkersRequested: {
+            window.show();
+            markers.open();
         }
     }
 }

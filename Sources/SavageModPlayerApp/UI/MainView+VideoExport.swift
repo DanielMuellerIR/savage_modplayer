@@ -3,9 +3,9 @@ import SavageModPlayerCore
 
 extension MainView {
     func openVideoExporter() {
-        guard videoExportRequest == nil, !isExporting, !stemExport.isRunning,
-              !showExportDialog, collectionContext == nil, batchExportRequest == nil,
-              !showSavedPlaylists, !showQueue, !showLibraryFilters,
+        guard videoExportRequest == nil, !wavExport.blocksVideoExport,
+              collectionContext == nil, batchExportRequest == nil,
+              librarySheet == nil,
               let mod = coordinator.activeMod else { return }
         let audio = ChannelStemExportOptions(sampleRate: 48_000, maximumSeconds: 600,
             stereoSeparation: coordinator.stereoSeparation, useInterpolation: coordinator.useInterpolation,

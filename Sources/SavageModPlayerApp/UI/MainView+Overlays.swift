@@ -59,7 +59,7 @@ extension MainView {
                 .cornerRadius(6)
                 
                 Button("SCHLIESSEN") {
-                    showAboutModal = false
+                    helpOverlay = nil
                 }
                 .font(.system(.body))
                 .foregroundColor(.black)
@@ -122,7 +122,7 @@ extension MainView {
                 .padding()
                 
                 Button("SCHLIESSEN") {
-                    showKeyboardHUD = false
+                    helpOverlay = nil
                 }
                 .font(.system(.body))
                 .foregroundColor(.white)

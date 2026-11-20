@@ -20,6 +20,19 @@ enum LoopMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum LibrarySheet: String, Identifiable {
+    case savedPlaylists
+    case queue
+    case filters
+
+    var id: String { rawValue }
+}
+
+enum HelpOverlay {
+    case about
+    case keyboard
+}
+
 struct MainView: View {
     @EnvironmentObject var songMarkers: SongMarkersModel
     @EnvironmentObject var playbackSettings: TrackPlaybackSettingsModel
@@ -27,7 +40,7 @@ struct MainView: View {
     @StateObject var catalog = LibraryCatalogModel(
         metadataURL: MainView.catalogURL("metadata.json", environment: "SAVAGE_METADATA_STORE"),
         preferencesURL: MainView.catalogURL("library-preferences.json", environment: "SAVAGE_LIBRARY_PREFERENCES_STORE"))
-    @State var showLibraryFilters = false
+    @State var librarySheet: LibrarySheet?
     @State var filteredPlaylistURLs: [URL] = []
     @State var activeTrackSourceID: String?
     @ObservedObject var coordinator: ModPlayerCoordinator
@@ -79,7 +92,6 @@ struct MainView: View {
     @State var savedPlaylistDocument = SavedPlaylistDocument()
     @State var savedPlaylistsWritable = false
     @State var playlistStorageError: String?
-    @State var showSavedPlaylists = false
     @State var collectionContext: CollectionExchangeContext?
     @State var collectionSync: CollectionSyncModel?
     @State var collectionSyncContext: CollectionSyncContext?
@@ -87,8 +99,7 @@ struct MainView: View {
     @State var pendingCollectionURLs: [URL] = []
     struct PendingAudioRequest { let urls: [URL]; let autoPlay: Bool; let epoch: UUID }
     @State var pendingAudioRequest: PendingAudioRequest?
-    @State var collectingPlaylistRequest: UUID?
-    var isCollectingPlaylist: Bool { collectingPlaylistRequest == playlistRequestID }
+    var isCollectingPlaylist: Bool { playbackActions.isCollectingPlaylist }
     @State var playlistNotice: String?
     @State var playbackSelection: [URL]?
     @State var playlistPlayback = PlaylistPlaybackNavigation()
@@ -100,7 +111,6 @@ struct MainView: View {
         get { playlistPlayback.resumeURL }
         nonmutating set { playlistPlayback.resumeURL = newValue }
     }
-    @State var showQueue = false
     var playlistRequestID: UUID { playbackActions.fileRequestID }
     @State var loadedModuleID = UUID()
     var currentPlaylistIndex: Int {
@@ -142,20 +152,10 @@ struct MainView: View {
     @State var didLoadInitialContent = false
     
     // Keyboard HUD & About Overlay Modals
-    @State var showKeyboardHUD = false
-    @State var showAboutModal = false
+    @State var helpOverlay: HelpOverlay?
     
     // WAV Export Panel
-    @State var isExporting = false
-    @State var showExportDialog = false
-    @State var exportSecondsLimit: Double = 180.0
-    @State var exportStatusMessage: String? = nil
-    @State var exportChannelStems = false
-    @State var exportFolderName = ""
-    @State var exportModule: Mod?
-    @State var exportTitle = ""
-    @State var exportRenderOptions = ChannelStemExportOptions()
-    @StateObject var stemExport = ChannelStemExportModel()
+    @StateObject var wavExport = WAVExportModel()
     @State var batchExportRequest: BatchWAVExportRequest?
     @State var videoExportRequest: NoteRainVideoExportRequest?
     
@@ -488,10 +488,9 @@ struct MainView: View {
             .onDisappear {
                 playbackSettings.flush()
                 removeKeyMonitor()
-                stemExport.cancel()
+                wavExport.windowDisappeared()
                 collectionSync?.deactivate()
             }
-            .sheet(isPresented: $showSavedPlaylists) { savedPlaylistsSheet }
             .sheet(item: $collectionContext) { context in
                 CollectionExchangeView(context: context).frame(width: 660, height: 680)
                     .preferredColorScheme(theme == .workbench ? .light : .dark)
@@ -521,10 +520,14 @@ struct MainView: View {
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("menuCollectionSync")).receive(on: DispatchQueue.main)) { _ in
                 openCollectionSync()
             }
-            .sheet(isPresented: $showQueue) { queueSheet }
-            .sheet(isPresented: $showLibraryFilters) {
-                LibraryFiltersView(catalog: catalog)
-                    .preferredColorScheme(theme == .workbench ? .light : .dark)
+            .sheet(item: $librarySheet) { sheet in
+                switch sheet {
+                case .savedPlaylists: savedPlaylistsSheet
+                case .queue: queueSheet
+                case .filters:
+                    LibraryFiltersView(catalog: catalog)
+                        .preferredColorScheme(theme == .workbench ? .light : .dark)
+                }
             }
             .sheet(item: $batchExportRequest) { request in
                 BatchWAVExportView(request: request)
@@ -594,18 +597,20 @@ struct MainView: View {
             }
             
             // Retro Amiga Failure Guru Meditation popup Modal
-            if showAboutModal {
+            if helpOverlay == .about {
                 guruMeditationAboutView
             }
             
             // Floating Keyboard HUD sheet overlay
-            if showKeyboardHUD {
+            if helpOverlay == .keyboard {
                 keyboardHUDView
             }
             
             // WAV offline exporter dialog
-            if showExportDialog || isExporting || stemExport.isRunning || exportStatusMessage != nil || stemExport.message != nil {
-                wavExporterDialog
+            if wavExport.showsOverlay {
+                WAVExportOverlay(model: wavExport, theme: theme) {
+                    wavExport.chooseDestination(coordinator: coordinator)
+                }
             }
             
             // Blur Drag and Drop indicator card

@@ -16,15 +16,9 @@ extension MainView {
                 return event
             }
             // Escape beendet den Exportdialog auch im fokussierten Ordnernamen.
-            if showExportDialog || isExporting || stemExport.isRunning || exportStatusMessage != nil || stemExport.message != nil {
+            if wavExport.showsOverlay {
                 if event.keyCode == 53 {
-                    if stemExport.isRunning { stemExport.cancel() }
-                    else if !isExporting {
-                        showExportDialog = false
-                        exportModule = nil
-                        exportStatusMessage = nil
-                        stemExport.clear()
-                    }
+                    wavExport.handleEscape()
                     return nil
                 }
                 return event
@@ -45,10 +39,8 @@ extension MainView {
                 prevTrack()
                 return nil
             case 53: // ESC
-                if showAboutModal || showKeyboardHUD || showExportDialog {
-                    showAboutModal = false
-                    showKeyboardHUD = false
-                    showExportDialog = false
+                if helpOverlay != nil {
+                    helpOverlay = nil
                     return nil
                 }
                 return event

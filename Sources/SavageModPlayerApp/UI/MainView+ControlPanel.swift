@@ -167,7 +167,7 @@ extension MainView {
             // Right block: Volume Fader + WAV + Keyboard + Info
             HStack(spacing: 12) {
                 // Keyboard short cuts HUD helper
-                Button(action: { showKeyboardHUD = true }) {
+                Button(action: { helpOverlay = .keyboard }) {
                     Image(systemName: "keyboard")
                         .foregroundColor(.spaceTextSecondary)
                 }
@@ -175,7 +175,7 @@ extension MainView {
                 .help("Tastenkürzel anzeigen (Leertaste, Pfeile, ESC …).")
 
                 // Info Guru modal button
-                Button(action: { showAboutModal = true }) {
+                Button(action: { helpOverlay = .about }) {
                     Image(systemName: "info.circle")
                         .foregroundColor(.spaceTextSecondary)
                 }
@@ -184,9 +184,9 @@ extension MainView {
 
                 if coordinator.activeMod != nil {
                     // Exporter wav button
-                    Button(action: { openWavExporter() }) {
+                    Button(action: { wavExport.open(coordinator: coordinator) }) {
                         Image(systemName: "square.and.arrow.up")
-                            .foregroundColor(isExporting || stemExport.isRunning ? .green : .spaceTextSecondary)
+                            .foregroundColor(wavExport.isRendering ? .green : .spaceTextSecondary)
                     }
                     .buttonStyle(PlainButtonStyle())
                     .help("Stereo-Mix oder gespielte Kanalspuren als WAV exportieren.")

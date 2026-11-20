@@ -195,7 +195,7 @@ extension MainView {
     var playlistSidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Button { showSavedPlaylists = true } label: {
+                Button { librarySheet = .savedPlaylists } label: {
                     Text("Playlists…").frame(minHeight: 28).padding(.horizontal, 4)
                 }
                     .accessibilityIdentifier("saved-playlists")
@@ -203,7 +203,7 @@ extension MainView {
                     Image(systemName: "arrow.up.arrow.down").frame(minWidth: 28, minHeight: 28)
                 }.help("Sammlung übertragen").accessibilityLabel("Sammlung übertragen").accessibilityIdentifier("collection-transfer")
                 Spacer()
-                Button { showQueue = true } label: {
+                Button { librarySheet = .queue } label: {
                     Text("Als Nächstes (\(trackQueue.items.count))").frame(minHeight: 28).padding(.horizontal, 4)
                 }
                     .accessibilityIdentifier("track-queue")
@@ -255,7 +255,7 @@ extension MainView {
             .cornerRadius(theme == .workbench ? 0 : 6)
             .padding([.horizontal, .top], 8)
             HStack {
-                Button("Anzeige und Filter…") { showLibraryFilters = true }
+                Button("Anzeige und Filter…") { librarySheet = .filters }
                     .accessibilityIdentifier("library-filters")
                 Spacer()
                 if catalog.query.usesFlatList {

@@ -9,7 +9,15 @@ qt_add_executable(savage-mod-player main.cpp VideoRenderer.cpp MediaControls.cpp
 target_compile_definitions(savage-mod-player PRIVATE SAVAGE_VERSION="${SAVAGE_VERSION}")
 target_link_libraries(savage-mod-player PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::DBus Qt6::Network)
 qt_add_resources(savage-mod-player interface PREFIX "/" FILES
-    Main.qml PlayerButton.qml PlayerIcon.qml PlayerCheckBox.qml PlayerSlider.qml ChannelTag.qml MarqueeLabel.qml ScopeView.qml TrackerView.qml NoteRain.qml SampleWaveform.qml InstrumentDetails.qml FormButton.qml FormCombo.qml CompactDashboard.qml)
+    Main.qml
+    AboutDialog.qml BatchExportDialog.qml CollectionImportDialog.qml CollectionTransferDialog.qml
+    LibraryFiltersDialog.qml MarkerDialog.qml ModuleInspectorDialog.qml SampleInspectorDialog.qml
+    SavedPlaylistsDialog.qml SettingsDialog.qml SleepTimerDialog.qml TrackQueueDialog.qml
+    TrackSettingsDialog.qml UpdateDialog.qml VideoExportDialog.qml WAVExportDialog.qml
+    NoteRainWindow.qml
+    PlayerButton.qml PlayerIcon.qml PlayerCheckBox.qml PlayerSlider.qml ChannelTag.qml
+    MarqueeLabel.qml ScopeView.qml TrackerView.qml NoteRain.qml SampleWaveform.qml
+    InstrumentDetails.qml FormButton.qml FormCombo.qml CompactDashboard.qml)
 install(TARGETS savage-mod-player RUNTIME DESTINATION bin)
 qt_add_resources(savage-mod-player applicationIcon PREFIX "/" BASE "../../src" FILES "../../src/AppIcon.png")
 

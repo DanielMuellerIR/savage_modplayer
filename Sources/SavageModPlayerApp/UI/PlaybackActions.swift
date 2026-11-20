@@ -5,7 +5,9 @@ import SavageModPlayerCore
 @MainActor
 final class PlaybackActions: ObservableObject {
     // Beide Fenster teilen den Auftrag auch bei geschlossenem Hauptfenster.
-    var fileRequestID = UUID()
+    private(set) var fileRequestID = UUID()
+    @Published private(set) var isCollectingPlaylist = false
+    private var playlistScan: Task<Void, Never>?
     private var dropRequestID = UUID()
     var hasHandledCollectionLaunch = false
 
@@ -40,7 +42,30 @@ final class PlaybackActions: ObservableObject {
     @discardableResult
     func beginFileRequest() -> UUID {
         fileRequestID = UUID()
+        playlistScan?.cancel()
+        playlistScan = nil
+        isCollectingPlaylist = false
         return fileRequestID
+    }
+
+    func collectPlaylist<Result: Sendable>(
+        scan: @escaping @Sendable () -> Result,
+        accept: @escaping @MainActor (Result) -> Void
+    ) {
+        let revision = beginFileRequest()
+        isCollectingPlaylist = true
+        let worker = Task.detached(priority: .userInitiated, operation: scan)
+        playlistScan = Task { [weak self] in
+            let result = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard let self, fileRequestID == revision else { return }
+            playlistScan = nil
+            isCollectingPlaylist = false
+            accept(result)
+        }
     }
 
     func prepareManualPlayback(coordinator: ModPlayerCoordinator) {

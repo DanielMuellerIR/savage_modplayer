@@ -1,3 +1,5 @@
+Savage Mod Player 1.6.62 trennt die Linux-Dialoge und das Notenregen-Fenster vom Hauptfenster. Unter macOS nutzen Playlist-Scans eine gemeinsame Auftragssteuerung und der WAV-Export verwaltet seinen Dialogzustand selbst. Bedienung und Dateiformate bleiben gleich.
+
 Savage Mod Player 1.6.61 verarbeitet Linux-Desktop-Befehle in Eingabereihenfolge. Beim Schließen der Eingabe bleibt die letzte angenommene Einstellung gespeichert. Ausstehende Scanergebnisse werden verworfen. Eine neue Auswahl kann einen laufenden Scan weiterhin ablösen. macOS-Regressionstests decken verspätete Datei-Drops und die Rückkehr aus der Warteschlange ab.
 
 Savage Mod Player 1.6.60 verbessert die Medientasten-Anbindung des Linux-Desktops. MPRIS verwendet einen stabilen Playernamen, meldet verfügbare Transportaktionen beim Laden des ersten Titels und prüft Registrierungsfehler. Play/Pause, Play, Pause, Stopp und nächster/vorheriger Titel nutzen den bestehenden Wiedergabekoordinator; unabhängige Instanzen bleiben getrennt steuerbar.
